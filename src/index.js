@@ -1,4 +1,13 @@
-// こんなもん？
+/**
+ * fisce.js<br>
+ * npm github test.<br>
+ * GitHub repository: {@link https://github.com/inaridarkfox4231/fisce}
+ * @module fisce
+ * @copyright 2025
+ * @author fisce
+ * @license ISC
+ * @version 1.0.0
+ */
 
 (function (global, factory) {
   typeof exports === "object" && typeof module !== "undefined"
