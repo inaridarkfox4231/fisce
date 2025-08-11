@@ -1,6 +1,16 @@
 # fisce
 自作ライブラリのテスト
 
+jsdelivr:
+
+```
+https://cdn.jsdelivr.net/npm/fisce.js@1.0.1/src/index.min.js
+```
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.0.1/src/index.min.js"></script>
+```
+
 ## ver 1.0
 
 ### 1.0.0  
