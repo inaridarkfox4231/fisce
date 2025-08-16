@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.0.1
+ * @version 1.0.2
  */
 
 (function (global, factory) {
@@ -46,9 +46,12 @@
         // nameとvalueの既定値は不要でしょう。混乱の原因になる。
         const {name, value, info = ""} = data;
         this.type = 'E_Type';
-        this.name = name;
-        this.value = value;
+        this.variable_name = name;
+        this.variable_value = value;
         this.info = info;
+      }
+      show(){
+        console.error(`種類：${this.type}, 変数名：${this.variable_name}, 変数の値：${this.variable_value}, 詳細：${this.info}`);
       }
     }
 
@@ -484,7 +487,12 @@
           }
         }
       }catch(e){
-        console.error(`${e.type}, ${e.name}, ${e.value}, ${e.info}`);
+        if (typeof e.show === 'function'){
+          e.show();
+        }else{
+          console.error(`${e.name}|${e.message}`);
+        }
+        //console.error(`${e.type}, ${e.name}, ${e.value}, ${e.info}`);
         // 明示的に指定した値に不具合がある場合はキャンバスを作らない。
         // idがstring onlyは厳しいかもしれないが...まあ型変換してください。ふつうあそこ文字列しか入れないし。
         return null;
@@ -513,8 +521,9 @@
     // 関数は後からでも設定できる
     class SketchLooper{
       constructor(params = {}){
-        const {loop = () => {}} = params;
+        const {loop = () => {}, safe = false} = params;
         this.loopFunction = loop;
+        this.safe = safe; // 関数内でErrorが発生したら処理を止める
         this.isLooping = false;
         this.properFrameCount = 0; // 0ベースのカウンタ。ループが実行された場合にそのループ内で処理を実行後に増加させる
         this.animationID = -1; // キャンセル用
@@ -528,8 +537,21 @@
             this.elapsedMilliSeconds = timeStump - this.lastTimeStump;
             this.lastTimeStump = timeStump;
           }
-          // 第一引数はカウンタ、第二引数にstumpを渡す
-          this.loopFunction(this.properFrameCount, timeStump);
+          // Errorが出力された場合にループを止める実験
+          try{
+            // 第一引数はカウンタ、第二引数にstumpを渡す
+            this.loopFunction(this.properFrameCount, timeStump);
+          }catch(e){
+            // safe:trueの場合、エラーを出してから処理を止める。
+            if(this.safe){
+              if(typeof e.show === 'function'){
+                e.show();
+              }else{
+                console.error(`${e.name}|${e.message}`);
+              }
+              this.pause();
+            }
+          }
           this.properFrameCount++;
 
           // ループ実行中の場合は継続。loopFunction内部でpauseしてもここで実行されてしまうと無意味。
@@ -5981,10 +6003,13 @@
     applications.getBoundingBoxOfContours = getBoundingBoxOfContours;
     applications.alignmentContours = alignmentContours;
 
+    // Text関連
     applications.parseData = parseData;
     applications.parseCmdToText = parseCmdToText;
     applications.getSVGContours = getSVGContours;
     applications.getTextContours = getTextContours;
+
+    // context2D関連
 
     return applications;
   })();

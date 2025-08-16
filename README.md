@@ -37,3 +37,9 @@ foxMathToolsを導入。とりあえずfractとclamp. clampはcssに倣ってmin
 
 Noise3D,Noise4Dを導入。p5の模倣だが、それなりに実用性はあると思う。  
 RandomSystemの導入。seedも設定できる。二つの数に対して間の値を取るなどのことができる。  
+
+### 1.0.2  
+E_Typeのプロパティ名をvariable_nameとvariable_valueに変更（nameだとかぶるため）。  
+showメソッドを用意してエラー出力をオブジェクトにやらせるようにする  
+さらにSketchLooperでエラーを出した場合にループを止めるように仕様変更（取り消し可能）  
+デフォルトはfalseとする。falseの場合エラーが出ても何にも起きない。コンソール出力がキャンセルされる。  
