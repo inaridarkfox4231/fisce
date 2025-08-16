@@ -1,6 +1,6 @@
 {
   "name": "fisce.js",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "my javascript library",
   "main": "src/index.js",
   "scripts": {
