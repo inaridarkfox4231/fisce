@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.0.1/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.0.2/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.0.1/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.0.2/src/index.min.js"></script>
 ```
 
 ## ver 1.0
@@ -43,3 +43,10 @@ E_Typeのプロパティ名をvariable_nameとvariable_valueに変更（nameだ�
 showメソッドを用意してエラー出力をオブジェクトにやらせるようにする  
 さらにSketchLooperでエラーを出した場合にループを止めるように仕様変更（取り消し可能）  
 デフォルトはfalseとする。falseの場合エラーが出ても何にも起きない。コンソール出力がキャンセルされる。  
+
+### 1.0.3
+エラーを出さないのはまずいので、safe:falseでもエラーは出るようにする。その代わり回数制限を設けて120回でループを止めさせる。  
+止めたらカウントをリセットする。無限エラーは負荷がかかるので。  
+目的はコンソールをエラーまみれにすることではないので。  
+
+コンテキスト関連（こっちが本題）
