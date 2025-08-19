@@ -521,9 +521,11 @@
     // 関数は後からでも設定できる
     class SketchLooper{
       constructor(params = {}){
-        const {loop = () => {}, safe = false} = params;
+        const {loop = () => {}, safe = false, errorCountLimit = 120} = params;
         this.loopFunction = loop;
         this.safe = safe; // 関数内でErrorが発生したら処理を止める
+        this.errorCount = 0;
+        this.errorCountLimit = errorCountLimit; // 120回まで。
         this.isLooping = false;
         this.properFrameCount = 0; // 0ベースのカウンタ。ループが実行された場合にそのループ内で処理を実行後に増加させる
         this.animationID = -1; // キャンセル用
@@ -542,14 +544,16 @@
             // 第一引数はカウンタ、第二引数にstumpを渡す
             this.loopFunction(this.properFrameCount, timeStump);
           }catch(e){
+            this.errorCount++;
             // safe:trueの場合、エラーを出してから処理を止める。
-            if(this.safe){
-              if(typeof e.show === 'function'){
-                e.show();
-              }else{
-                console.error(`${e.name}|${e.message}`);
-              }
+            if(typeof e.show === 'function'){
+              e.show();
+            }else{
+              console.error(`${e.name}|${e.message}`);
+            }
+            if(this.safe || this.errorCount === this.errorCountLimit){
               this.pause();
+              this.errorCount = 0;
             }
           }
           this.properFrameCount++;
@@ -2205,12 +2209,14 @@
     function _getFilenameData(name){
       if(typeof name !== 'string'){
         // TODO: エラーの理由
+        console.error("ファイル名が文字列でないため処理できません");
         return null;
       }
 
       const splitted = name.split(".");
       if(splitted.length === 0){
         // TODO: エラーの理由
+        console.error("空文字である可能性があります");
         return null;
       }
 
@@ -2220,16 +2226,17 @@
       }
 
       switch(splitted[1]){
-        case 'png':
+        case 'png', 'PNG':
           return {mime:'image/png', filename:`${properName}.png`};
-        case 'jpg':
+        case 'jpg', 'JPG':
           return {mime:'image/jpeg', filename:`${properName}.jpg`};
-        case 'jpeg':
+        case 'jpeg', 'JPEG':
           return {mime:'image/jpeg', filename:`${properName}.jpeg`};
-        case 'avif':
+        case 'avif', 'AVIF':
           return {mime:'image/avif', filename:`${properName}.avif`};
       }
       // TODO: エラーの理由
+      console.error("拡張子が対応していません");
       return null;
     }
 
