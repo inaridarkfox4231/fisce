@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.0.2
+ * @version 1.0.4
  */
 
 (function (global, factory) {
@@ -2226,13 +2226,17 @@
       }
 
       switch(splitted[1]){
-        case 'png', 'PNG':
+        case "png":
+        case "PNG":
           return {mime:'image/png', filename:`${properName}.png`};
-        case 'jpg', 'JPG':
+        case "jpg":
+        case "JPG":
           return {mime:'image/jpeg', filename:`${properName}.jpg`};
-        case 'jpeg', 'JPEG':
+        case "jpeg":
+        case "JPEG":
           return {mime:'image/jpeg', filename:`${properName}.jpeg`};
-        case 'avif', 'AVIF':
+        case "avif":
+        case "AVIF":
           return {mime:'image/avif', filename:`${properName}.avif`};
       }
       // TODO: エラーの理由
