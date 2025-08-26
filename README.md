@@ -54,3 +54,8 @@ png,jpg,jpegは対応しているがPNG,JPG,JPEGは対応していない、な�
 
 ### 1.0.4
 saveCanvasのswitch-case分岐を項目別ではなく列挙で書いてしまう凡ミスがあったので修正  
+
+### 1.0.5
+createOffscreenを導入。WebWorkerは未定。  
+CameraControllerとTRS3ControllerにおいてwheelAction(e)にe.preventDefaultを付与  
+これにより画面が一緒に動くのを防ぐ  

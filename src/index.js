@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.0.4
+ * @version 1.0.5
  */
 
 (function (global, factory) {
@@ -516,6 +516,29 @@
       return cvs;
     }
 
+    // 必要かわかんないけどOffscreenCanvasを作る関数
+    // DOMとして使わないならこっちの方がいいかも？
+    function createOffscreen(w, h){
+      try{
+        if(w === undefined || h === undefined){
+          throw new Error('w, hのいずれかが未定義です');
+        }
+        if(typeof(w) !== 'number'){
+          throw new E_Type({name:'w', value:w, info:'wはnumber型を指定してください'});
+        }else if(typeof(h) !== 'number'){
+          throw new E_Type({name:'h', value:h, info:'hはnumber型を指定してください'});
+        }
+      }catch(e){
+        if (typeof e.show === 'function'){
+          e.show();
+        }else{
+          console.error(`${e.name}|${e.message}`);
+        }
+        return null;
+      }
+      return new OffscreenCanvas(w, h);
+    }
+
     // SketchLooper
     // loopだけ（今のところ）
     // 関数は後からでも設定できる
@@ -600,6 +623,7 @@
     utils.configElement = configElement;
     utils.createElement = createElement;
     utils.createCanvas = createCanvas;
+    utils.createOffscreen = createOffscreen;
     utils.SketchLooper = SketchLooper;
 
     return utils;
@@ -5021,6 +5045,8 @@
         }
       }
       wheelAction(e){
+        // 画面が一緒に動くのを防ぐ
+        e.preventDefault();
         // 拡大縮小
         this.dmp.action("scale", -e.deltaY * this.mouseScaleFactor);
       }
@@ -5466,6 +5492,8 @@
         }
       }
       wheelAction(e){
+        // 画面が一緒に動くのを防ぐ
+        e.preventDefault();
         this.dmp.action("scale", -e.deltaY * this.mouseScaleFactor);
       }
       update(){
