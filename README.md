@@ -63,3 +63,7 @@ CameraControllerとTRS3ControllerにおいてwheelAction(e)にe.preventDefault�
 ### 1.1.0
 libtessを取り扱うためのfoxTessを導入。基本的にはtriangulateだけ使えば問題ない。  
 libtessは別途scriptとして用意する必要がある。  
+
+### 1.1.1
+なぜかlibtess用の関数が重すぎるので、中止。  
+しばらくは外部メソッドとしての運用をしましょう。  
