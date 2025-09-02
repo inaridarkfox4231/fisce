@@ -59,3 +59,7 @@ saveCanvasのswitch-case分岐を項目別ではなく列挙で書いてしま�
 createOffscreenを導入。WebWorkerは未定。  
 CameraControllerとTRS3ControllerにおいてwheelAction(e)にe.preventDefaultを付与  
 これにより画面が一緒に動くのを防ぐ  
+
+### 1.1.0
+libtessを取り扱うためのfoxTessを導入。基本的にはtriangulateだけ使えば問題ない。  
+libtessは別途scriptとして用意する必要がある。  

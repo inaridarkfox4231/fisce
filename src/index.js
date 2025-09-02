@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.0.5
+ * @version 1.1.0
  */
 
 (function (global, factory) {
@@ -24,14 +24,7 @@
     FisceToyBoxのいろいろ
     Geometry関連(v,n,f,あとはoptionでc,uv,l)
 
-    板ポリ芸やライティング、shaderの改変機構、テクスチャも整備しないといけないですね。
-    テクスチャはもう関数使ってるからな。移すのは難しくないと思う。
-    VAO生成機構も基本的なものは一応すでに用意してある、には、あるけど、柔軟性考えるとな～
-    webglUtils
-    foxUtils
-    foxIA
-    fox3Dtools
-    foxApplications
+    板ポリ芸やライティング、shaderの改変機構、テクスチャ関連、VAO関連
   */
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
@@ -3227,6 +3220,174 @@
   })();
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
+  // tessellation (libtess).
+
+  const foxTess = (function(){
+    // special thanks: https://github.com/brendankenny/libtess.js
+    /*
+     Copyright 2000, Silicon Graphics, Inc. All Rights Reserved.
+     Copyright 2015, Google Inc. All Rights Reserved.
+
+     Permission is hereby granted, free of charge, to any person obtaining a copy
+     of this software and associated documentation files (the "Software"), to
+     deal in the Software without restriction, including without limitation the
+     rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+     sell copies of the Software, and to permit persons to whom the Software is
+     furnished to do so, subject to the following conditions:
+
+     The above copyright notice including the dates of first publication and
+     either this permission notice or a reference to http://oss.sgi.com/projects/FreeB/
+     shall be included in all copies or substantial portions of the Software.
+
+     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+     SILICON GRAPHICS, INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+     WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+     IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+     Original Code. The Original Code is: OpenGL Sample Implementation,
+     Version 1.2.1, released January 26, 2000, developed by Silicon Graphics,
+     Inc. The Original Code is Copyright (c) 1991-2000 Silicon Graphics, Inc.
+     Copyright in any portions created by third parties is as indicated
+     elsewhere herein. All Rights Reserved.
+    */
+    const tess = {};
+
+    let tessy, tessEnums, tessRules, tessTypes;
+
+    const tessCallbacks = {
+      vertex:(data, polyVertArray) => {},
+      begin:(type) => {},
+      error:(errno) => {},
+      combine:(coords, data, weight) => {},
+      edge:(flag) => {}
+    };
+
+    function initTessy(lib, callbacks = {}){
+      const {
+        vertexCallback = (data, polyVertArray) => {},
+        beginCallback = (type) => {},
+        errorCallback = (errno) => {},
+        combineCallback = (coords, data, weight) => {},
+        edgeCallback = (flag) => {}
+      } = callbacks;
+
+      tessy = new lib.GluTesselator();
+      tessy.loops = [];
+      tessEnums = lib.gluEnum;
+      tessRules = lib.windingRule;
+      tessTypes = lib.primitiveType;
+
+      // function called for each vertex of tesselator output
+      function cb_vertex(data, polyVertArray) {
+        vertexCallback(data, polyVertArray);
+        polyVertArray[polyVertArray.length] = data[0];
+        polyVertArray[polyVertArray.length] = data[1];
+        if(tessy.loops.length > 0){
+          tessy.loops[tessy.loops.length-1].push(data[0], data[1]);
+        }
+      }
+      function cb_begin(type) {
+        // ここで区切りがつくので、ここで区切るたびにcontourを分離すればいいみたいです。
+        beginCallback(type);
+        if(type === tessTypes.GL_LINE_LOOP){
+          tessy.loops.push([]);
+        }
+      }
+      function cb_error(errno) {
+        errorCallback(errno);
+        console.error(`error number: ${errno}`);
+      }
+      // callback for when segments intersect and must be split
+      function cb_combine(coords, data, weight) {
+        combineCallback(coords, data, weight);
+        return [coords[0], coords[1], coords[2]];
+      }
+      function cb_edge(flag) {
+        edgeCallback(flag);
+      }
+
+      tessy.gluTessCallback(tessEnums.GLU_TESS_VERTEX_DATA, cb_vertex);
+      tessy.gluTessCallback(tessEnums.GLU_TESS_BEGIN, cb_begin);
+      tessy.gluTessCallback(tessEnums.GLU_TESS_ERROR, cb_error);
+      tessy.gluTessCallback(tessEnums.GLU_TESS_COMBINE, cb_combine);
+      tessy.gluTessCallback(tessEnums.GLU_TESS_EDGE_FLAG, cb_edge);
+    }
+
+    function triangulate(contours, options = {}) {
+      const {boundaryOnly = false, rule = "odd", showPerformance = false} = options;
+      // libtess will take 3d verts and flatten to a plane for tesselation
+      // since only doing 2d tesselation here, provide z=1 normal to skip
+      // iterating over verts only to get the same answer.
+      // comment out to test normal-generation code
+      tessy.gluTessNormal(0, 0, 1);
+
+      const startTime0 = (showPerformance ? 0 : window.performance.now());
+      const triangleVerts = [];
+      tessy.gluTessBeginPolygon(triangleVerts);
+
+      for (let i = 0; i < contours.length; i++) {
+        tessy.gluTessBeginContour();
+        const contour = contours[i];
+        for (let j = 0; j < contour.length; j += 2) {
+          const coords = [contour[j], contour[j + 1], 0];
+          tessy.gluTessVertex(coords, coords);
+        }
+        tessy.gluTessEndContour();
+      }
+
+      if(showPerformance){
+        console.log(`preparation elapsed:${window.performance.now()-startTime0} milli seconds.`);
+      }
+      const startTime1 = (showPerformance ? 0 : window.performance.now());
+
+      tessy.loops.length = 0;
+
+      switch(rule){
+        case "odd": // even-odd.
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ODD); break;
+        case "nonzero": // 0でない場合（一部のフォントパスなどはこれを使う）
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_NONZERO); break;
+        case "positive": // 正のみ
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_POSITIVE); break;
+        case "negative": // 負のみ
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_NEGATIVE); break;
+        case "abs_geq_two": // 絶対値が2以上
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ABS_GEQ_TWO); break;
+        default: // デフォルトはoddで。
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ODD);
+      }
+
+      tessy.gluTessProperty(tessEnums.GLU_TESS_BOUNDARY_ONLY, boundaryOnly);
+      tessy.gluTessEndPolygon();
+
+      if(showPerformance){
+        console.log(`tessellation elapsed:${window.performance.now()-startTime1} milli seconds.`);
+      }
+
+      if(boundaryOnly){
+        const result = [];
+        for(const eachLoop of tessy.loops){
+          result.push(eachLoop.slice());
+        }
+        return result;
+      }
+
+      return triangleVerts;
+    }
+
+    tess.initTessy = initTessy;
+    tess.tessy = tessy;
+    tess.tessEnums = tessEnums;
+    tess.tessRules = tessRules;
+    tess.tessTypes = tessTypes;
+    tess.triangulate = triangulate;
+
+    return tess;
+  })();
+
+  // ------------------------------------------------------------------------------------------------------------------------------------------ //
 
   // fox3Dtools. VectaやMT4など。
   const fox3Dtools = (function(){
@@ -6060,6 +6221,7 @@
   exports.webglUtils = webglUtils;
   exports.foxUtils = foxUtils;
   exports.foxIA = foxIA;
+  exports.foxTess = foxTess;
   exports.fox3Dtools = fox3Dtools;
   exports.foxApplications = foxApplications;
 
