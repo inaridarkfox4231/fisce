@@ -70,3 +70,9 @@ libtessは別途scriptとして用意する必要がある。
 
 ### 1.1.2
 libtess重くなってなかったです。疲れてるので。凡ミス。  
+
+### 1.1.3
+libtessのcallbackを初期化時ではなく任意のタイミングで変更できるように仕様変更  
+SketchLooperのloopFunctionでthisを渡す。  
+intervalをSketchLooperに導入して実行間隔を変えられるように変更。たとえば100なら1秒10回くらい  
+OffscreenCanvasの保存のためにsaveCanvasを非同期化。ついでにsaveTextとsaveJSONも非同期化。  

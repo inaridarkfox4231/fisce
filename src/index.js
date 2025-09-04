@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.2
+ * @version 1.1.3
  */
 
 (function (global, factory) {
@@ -537,7 +537,7 @@
     // 関数は後からでも設定できる
     class SketchLooper{
       constructor(params = {}){
-        const {loop = () => {}, safe = false, errorCountLimit = 120} = params;
+        const {loop = () => {}, safe = false, errorCountLimit = 120, interval = 0} = params;
         this.loopFunction = loop;
         this.safe = safe; // 関数内でErrorが発生したら処理を止める
         this.errorCount = 0;
@@ -547,6 +547,8 @@
         this.animationID = -1; // キャンセル用
         this.lastTimeStump = null;
         this.elapsedMilliSeconds = 0;
+        this.properElapsedMilliSeconds = 0;
+        this.interval = Math.max(0, Math.floor(interval)); // 実行間隔。0の場合は本来の仕様。たとえば200とすると1秒に5回くらい。
         this.mainFunction = (function(timeStump){
           // elapsedの計算
           if(this.lastTimeStump === null){
@@ -555,10 +557,23 @@
             this.elapsedMilliSeconds = timeStump - this.lastTimeStump;
             this.lastTimeStump = timeStump;
           }
+
+          let executeFlag = false;
+          this.properElapsedMilliSeconds += this.elapsedMilliSeconds;
+          if(this.interval === 0){
+            executeFlag = true;
+          }else if(this.properElapsedMilliSeconds > this.interval){
+            this.properElapsedMilliSeconds -= this.interval;
+            if(this.properElapsedMilliSeconds > this.interval){
+              this.properElapsedMilliSeconds = 0;
+            }
+            executeFlag = true;
+          }
+
           // Errorが出力された場合にループを止める実験
           try{
-            // 第一引数はカウンタ、第二引数にstumpを渡す
-            this.loopFunction(this.properFrameCount, timeStump);
+            // 第一引数はカウンタ、第二引数にstumpを渡す。第三引数にthis？
+            if(executeFlag){ this.loopFunction(this.properFrameCount, timeStump, this); }
           }catch(e){
             this.errorCount++;
             // safe:trueの場合、エラーを出してから処理を止める。
@@ -572,7 +587,7 @@
               this.errorCount = 0;
             }
           }
-          this.properFrameCount++;
+          if(executeFlag){ this.properFrameCount++; }
 
           // ループ実行中の場合は継続。loopFunction内部でpauseしてもここで実行されてしまうと無意味。
           // なのでループの実行中かどうかはきちんと確かめる必要がある。
@@ -591,6 +606,7 @@
         window.requestAnimationFrame(this.mainFunction);
         this.isLooping = true;
         this.elaspedMilliSeconds = 0;
+        this.properElapsedMilliSeconds = 0;
         this.lastTimeStump = null;
       }
       pause(){
@@ -2273,20 +2289,37 @@
 
     // シンプルなキャンバス保存用の関数。
     // デフォルトはpngとする
-    function saveCanvas(cvs, name){
-      const data = _getFilenameData(name);
+    // 非同期関数にしました。理由はOffscreenCanvasに対応させるためです。
+    async function saveCanvas(cvs, name){
+      const data = await _getFilenameData(name);
       if(data === null){
         console.log("save failure...");
-        return;
+        return false;
       }
-      const datauri = cvs.toDataURL(data.mime);
+
+      // offscreenCanvasの場合
+      // https://developer.mozilla.org/ja/docs/Web/API/OffscreenCanvas/convertToBlob
+      let datauri;
+      if(cvs instanceof HTMLCanvasElement){
+        datauri = await cvs.toDataURL(data.mime);
+      }else if(cvs instanceof OffscreenCanvas){
+        // OffscreenCanvasのconvertToBlobはPromiseを返すので直接的なやり方ではURLを取得できません。
+        // awaitを使って非同期関数内でPromiseの結果をダイレクトに取得します。
+        const blob = await cvs.convertToBlob({type:data.mime});
+        datauri = await URL.createObjectURL(blob);
+      }else{
+        console.error("サポートされていない形式です");
+        return false;
+      }
+
       _downloadURI(data.filename, datauri);
       // saveが終わったら破棄する
       URL.revokeObjectURL(datauri);
+      return true;
     }
 
     // textデータの保存
-    function saveText(data, name){
+    async function saveText(data, name){
       // 一時的にaタグを作る
       const link = document.createElement("a");
       // encodeする
@@ -2297,9 +2330,9 @@
     }
 
     // JSONデータの保存
-    function saveJSON(obj, name){
+    async function saveJSON(obj, name){
       // JSON形式にする
-      const data = JSON.stringify(obj);
+      const data = await JSON.stringify(obj);
       // 一時的にaタグを作る
       const link = document.createElement("a");
       // encodeする
@@ -3263,14 +3296,7 @@
       edge:(flag) => {}
     };
 
-    function initTessy(lib, callbacks = {}){
-      const {
-        vertexCallback = (data, polyVertArray) => {},
-        beginCallback = (type) => {},
-        errorCallback = (errno) => {},
-        combineCallback = (coords, data, weight) => {},
-        edgeCallback = (flag) => {}
-      } = callbacks;
+    function initTessy(lib){
 
       tessy = new lib.GluTesselator();
       tessy.loops = [];
@@ -3280,7 +3306,7 @@
 
       // function called for each vertex of tesselator output
       function cb_vertex(data, polyVertArray) {
-        vertexCallback(data, polyVertArray);
+        tessCallbacks.vertex(data, polyVertArray);
         polyVertArray[polyVertArray.length] = data[0];
         polyVertArray[polyVertArray.length] = data[1];
         if(tessy.loops.length > 0){
@@ -3289,22 +3315,22 @@
       }
       function cb_begin(type) {
         // ここで区切りがつくので、ここで区切るたびにcontourを分離すればいいみたいです。
-        beginCallback(type);
+        tessCallbacks.begin(type);
         if(type === tessTypes.GL_LINE_LOOP){
           tessy.loops.push([]);
         }
       }
       function cb_error(errno) {
-        errorCallback(errno);
+        tessCallbacks.error(errno);
         console.error(`error number: ${errno}`);
       }
       // callback for when segments intersect and must be split
       function cb_combine(coords, data, weight) {
-        combineCallback(coords, data, weight);
+        tessCallbacks.combine(coords, data, weight);
         return [coords[0], coords[1], coords[2]];
       }
       function cb_edge(flag) {
-        edgeCallback(flag);
+        tessCallbacks.edge(flag);
       }
 
       tessy.gluTessCallback(tessEnums.GLU_TESS_VERTEX_DATA, cb_vertex);
@@ -3344,6 +3370,8 @@
       tessy.loops.length = 0;
 
       switch(rule){
+        case "odd": // evenodd. 奇数のみ。
+          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ODD); break;
         case "nonzero": // 0でない場合（一部のフォントパスなどはこれを使う）
           tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_NONZERO); break;
         case "positive": // 正のみ
@@ -3352,8 +3380,6 @@
           tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_NEGATIVE); break;
         case "abs_geq_two": // 絶対値が2以上
           tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ABS_GEQ_TWO); break;
-        default: // いわゆるeven-odd
-          tessy.gluTessProperty(tessEnums.GLU_TESS_WINDING_RULE, tessRules.GLU_TESS_WINDING_ODD);
       }
 
       tessy.gluTessProperty(tessEnums.GLU_TESS_BOUNDARY_ONLY, boundaryOnly);
@@ -3379,6 +3405,7 @@
     tess.tessEnums = tessEnums;
     tess.tessRules = tessRules;
     tess.tessTypes = tessTypes;
+    tess.tessCallbacks = tessCallbacks;
     tess.triangulate = triangulate;
 
     return tess;
