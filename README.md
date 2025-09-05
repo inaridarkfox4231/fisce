@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.0.2/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.3/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.0.2/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.3/src/index.min.js"></script>
 ```
 
 ## ver 1.0
@@ -60,6 +60,8 @@ createOffscreenを導入。WebWorkerは未定。
 CameraControllerとTRS3ControllerにおいてwheelAction(e)にe.preventDefaultを付与  
 これにより画面が一緒に動くのを防ぐ  
 
+## ver 1.1
+
 ### 1.1.0
 libtessを取り扱うためのfoxTessを導入。基本的にはtriangulateだけ使えば問題ない。  
 libtessは別途scriptとして用意する必要がある。  
@@ -69,7 +71,7 @@ libtessは別途scriptとして用意する必要がある。
 しばらくは外部メソッドとしての運用をしましょう。  
 
 ### 1.1.2
-libtess重くなってなかったです。疲れてるので。凡ミス。  
+libtess重くなってなかったです。疲れてるので。凡ミス。すみませんでした。  
 
 ### 1.1.3
 libtessのcallbackを初期化時ではなく任意のタイミングで変更できるように仕様変更  
