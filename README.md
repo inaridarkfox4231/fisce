@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.3/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.4/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.3/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.4/src/index.min.js"></script>
 ```
 
 ## ver 1.0
