@@ -78,3 +78,9 @@ libtessのcallbackを初期化時ではなく任意のタイミングで変更�
 SketchLooperのloopFunctionでthisを渡す。  
 intervalをSketchLooperに導入して実行間隔を変えられるように変更。たとえば100なら1秒10回くらい  
 OffscreenCanvasの保存のためにsaveCanvasを非同期化。ついでにsaveTextとsaveJSONも非同期化。  
+
+### 1.1.4
+Vecta.validateの引数2個の場合の挙動が色々とまずいので、0を補うように仕様変更。  
+divが気になるがあれは基本引数1個でしか使わないから問題ないだろう。  
+EasyCanvasSaverを導入。cvsで初期化したら任意のタイミングで名前指定して発火させるだけ。  
+foxTessのtriangulateにmergeを導入。出力においては点がマージされている。メッシュ生成に使う。  

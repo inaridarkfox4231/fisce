@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.3
+ * @version 1.1.4
  */
 
 (function (global, factory) {
@@ -3340,8 +3340,71 @@
       tessy.gluTessCallback(tessEnums.GLU_TESS_EDGE_FLAG, cb_edge);
     }
 
+    /*
+      step1: 点列を生成（id:通し番号、rep:代表）
+      step2: x,yでsort
+      step3: idからソート後の位置を取得する辞書を作る
+      step4: マージ後の点列を作ると同時にその元を代表として元の点列に登録する
+      step5: 辞書を使ってid -> ソート後の位置 -> そこにある点 -> の、代表 -> の、idという形でindex配列を生成
+      step6: v:マージ後の点列、f:indicesという形で出力。マージ後の点列のidもなんかの役には立つだろう。おわり。
+    */
+    function _mergeVerts(data){
+      const points = [];
+      for(let k=0; k < data.length; k+=2){
+        const newP = {x:data[k], y:data[k+1], id:points.length, rep:null};
+        points.push(newP);
+      }
+
+      points.sort((p, q) => {
+        if(p.x < q.x){
+          return -1;
+        }
+        if(p.x == q.x && p.y < q.y){
+          return -1;
+        }
+        return 0;
+      });
+
+      const idDict = new Array(points.length);
+      for(let k=0; k < points.length; k++){
+        idDict[points[k].id] = k;
+      }
+
+      const mergedPoints = [];
+      const registPoint = (p, flag) => {
+        if(flag){
+          const newP = {x:p.x, y:p.y, id:mergedPoints.length};
+          p.rep = newP;
+          mergedPoints.push(newP);
+          return;
+        }
+        const rep = mergedPoints[mergedPoints.length-1];
+        p.rep = rep;
+      }
+      for(let k=0; k < points.length; k++){
+        if(k === 0){
+          registPoint(points[0], true);
+        }else{
+          const cur = points[k];
+          const prev = points[k-1];
+          if(cur.x !== prev.x || cur.y !== prev.y){
+            registPoint(points[k], true);
+          }else{
+            registPoint(points[k], false);
+          }
+        }
+      }
+
+      const faceIndices = [];
+      for(let k=0; k < points.length; k++){
+        faceIndices.push(points[idDict[k]].rep.id);
+      }
+
+      return {v:mergedPoints, f:faceIndices};
+    }
+
     function triangulate(contours, options = {}) {
-      const {boundaryOnly = false, rule = "odd", showPerformance = false} = options;
+      const {boundaryOnly = false, rule = "odd", showPerformance = false, merge = false} = options;
       // libtess will take 3d verts and flatten to a plane for tesselation
       // since only doing 2d tesselation here, provide z=1 normal to skip
       // iterating over verts only to get the same answer.
@@ -3395,6 +3458,12 @@
           result.push(eachLoop.slice());
         }
         return result;
+      }
+
+      if(merge){
+        // マージする。重複点排除。boundaryの場合は不要。{v,f}
+        // vは{x,y,id}の形でマージ後の点列が入ってる。fはそれに準じる形で三角形のindexの配列、つまり面の数は不変。点が減るだけ。
+        return _mergeVerts(triangleVerts);
       }
 
       return triangleVerts;
@@ -3609,10 +3678,16 @@
           return Vecta.validate(args[0], args[1], args[2], false);
         }else if(args.length === 2){
           // 長さ2の場合はベクトルか数か配列。数の場合は全部一緒。
+          // ただし数が2個の場合は3つ目を0としfalseで確定させる
           if(args[0] instanceof Vecta){
             return {x:args[0].x, y:args[0].y, z:args[0].z, im: args[1]};
           }else if(typeof(args[0]) === 'number'){
-            return {x:args[0], y:args[0], z:args[0], im:args[1]};
+            if(typeof(args[1]) === 'number'){
+              // いわゆる2次元対応。この手のミスが目立ってきたので。
+              return {x:args[0], y:args[1], z:0, im:false};
+            }else{
+              return {x:args[0], y:args[0], z:args[0], im:args[1]};
+            }
           }else if(Array.isArray(args[0])){
             return {x:args[0][0], y:args[0][1], z:args[0][2], im:args[1]};
           }
@@ -5118,8 +5193,8 @@
   const foxApplications = (function(){
     const applications = {};
 
-    const {Damper, Tree} = foxUtils;
-    const {Interaction} = foxIA;
+    const {Damper, Tree, saveCanvas} = foxUtils;
+    const {Interaction, Inspector} = foxIA;
     const {Vecta, MT3, MT4} = fox3Dtools;
 
     // isActiveを追加。カメラが動いてるときだけ更新するなどの用途がある。
@@ -6207,6 +6282,22 @@
       return allContours;
     }
 
+    // saveめんどくさい。
+    class EasyCanvasSaver{
+      constructor(cvs){
+        this.target = cvs;
+        this.active = false;
+        this.interaction = new Inspector(cvs, {dblclick:true});
+        this.interaction.add("dblclick", (function(){ this.active = true; }).bind(this));
+        this.interaction.add("dbltap", (function(){ this.active = true; }).bind(this));
+      }
+      execute(name){
+        if(!this.active){ return; }
+        saveCanvas(this.target, name);
+        this.active = false;
+      }
+    }
+
     applications.CameraController = CameraController;
     applications.WeightedVertice = WeightedVertice;
     applications.TransformTree = TransformTree;
@@ -6234,6 +6325,9 @@
     applications.getTextContours = getTextContours;
 
     // context2D関連
+
+    // 簡易ツール
+    applications.EasyCanvasSaver = EasyCanvasSaver;
 
     return applications;
   })();
