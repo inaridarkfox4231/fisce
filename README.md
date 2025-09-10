@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.4/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.5/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.4/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.5/src/index.min.js"></script>
 ```
 
 ## ver 1.0
@@ -84,3 +84,7 @@ Vecta.validateの引数2個の場合の挙動が色々とまずいので、0を�
 divが気になるがあれは基本引数1個でしか使わないから問題ないだろう。  
 EasyCanvasSaverを導入。cvsで初期化したら任意のタイミングで名前指定して発火させるだけ。  
 foxTessのtriangulateにmergeを導入。出力においては点がマージされている。メッシュ生成に使う。  
+
+### 1.1.5
+evenlySpacingに点の個数に基づいたpartitionを導入。autoは変えない。even/oddはパリティになるように調整する。  
+smoothingとsmoothingAllを追加。内容はevenly->quad->evenlyというもの。autoなら点の数が使われる。  

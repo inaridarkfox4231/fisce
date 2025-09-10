@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.4
+ * @version 1.1.5
  */
 
 (function (global, factory) {
@@ -5804,7 +5804,7 @@
     // showDetail:trueの場合、戻り値は{minL,maxL}が計算された値で返る。
     // falseの場合はどっちもlが返る。要するに雑ということ。
     function evenlySpacing(points, options = {}){
-      const {partition, minLength = 1, closed = false, showDetail = false} = options;
+      const {partitionType = "custom", partition, minLength = 1, closed = false, showDetail = false} = options;
 
       // closedの場合はおしりに頭を付ける
       // そして最後におしりを外す
@@ -5817,12 +5817,27 @@
       let l = 0;
       for(let i=0; i<q.length-1; i++){ totalLength += q[i].dist(q[i+1]); }
 
-      if(partition !== undefined){
-        // partitionが定義されている場合はそれでNを決めてlはそれとtotalLengthで決める
-        N = Math.max(1, partition);
+      if(partitionType !== 'custom'){
+        // partitionTypeにcustom以外の値が指定されている場合、auto,even,oddに応じてNとlを決める。
+        const pointCount = points.length;
+        N = (closed ? pointCount : pointCount-1);
+        switch(partitionType){
+          case "auto": break;
+          case "even":
+            if(N % 2 === 1){ N++; } break;
+          case "odd":
+            if(N % 2 === 0){ N++; } break;
+          default:
+            console.error("use auto/even/odd/custom type.");
+            return null;
+        }
+        l = totalLength/N;
+      }else if(partition !== undefined){
+        // 'custom'で、かつpartitionが定義されている場合は、それでNを決めてlはそれとtotalLengthで決める
+        N = Math.max(1, Math.floor(partition));
         l = totalLength/N;
       }else{
-        // 未定義の場合、minLengthを使う。これでNを決めてそこからlを決める。
+        // partitionも未定義の場合、minLengthを使う。デフォルトは1. これでNを決めてそこからlを決める。
         N = Math.floor(totalLength/minLength) + 1;
         l = totalLength/N;
       }
@@ -5963,6 +5978,42 @@
     function quadBezierizeAll(contours, options = {}){
       for(const contour of contours){
         quadBezierize(contour, options);
+      }
+    }
+
+    // smoothing.
+    // customの場合はminLengthを使う。それ以外の場合は点の個数を使う。
+    // auto,even,oddの場合は、間隔の個数が偶数や奇数になるように点の数に基づいて指定する。
+    // factorはcustomの場合はminLengthをそれで割る。autoなどの場合は掛ける。closedは共通。以上。
+    function smoothing(points, options = {}){
+      const {partitionType = 'custom', minLength = 1, closed = false, detail = 4, factor = 0.5, showDetail = false} = options;
+
+      if(partitionType !== 'custom'){
+        const pointCount = points.length;
+        let properPartition = (closed ? pointCount : pointCount-1);
+        switch(partitionType){
+          case 'auto': break;
+          case 'even': if(properPartition % 2 === 1){ properPartition++; } break;
+          case 'odd': if(properPartition % 2 === 0){ properPartition++; } break;
+          default:
+            console.error("use auto/even/odd/custom type.");
+            return false;
+        }
+        evenlySpacing(points, {partition:properPartition*factor, closed, showDetail});
+        quadBezierize(points, {detail, closed});
+        evenlySpacing(points, {partition:properPartition, closed, showDetail});
+      }else{
+        evenlySpacing(points, {minLength:minLength/factor, closed, showDetail});
+        quadBezierize(points, {detail, closed});
+        evenlySpacing(points, {minLength:minLength, closed, showDetail});
+      }
+      return true;
+    }
+
+    // smoothingAll.
+    function smoothingAll(contours, options = {}){
+      for(const contour of contours){
+        smoothing(contour, options);
       }
     }
 
@@ -6313,6 +6364,8 @@
     applications.evenlySpacingAll = evenlySpacingAll;
     applications.quadBezierize = quadBezierize;
     applications.quadBezierizeAll = quadBezierizeAll;
+    applications.smoothing = smoothing;
+    applications.smoothingAll = smoothingAll;
     applications.mergePoints = mergePoints;
     applications.mergePointsAll = mergePointsAll;
     applications.getBoundingBoxOfContours = getBoundingBoxOfContours;
