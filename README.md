@@ -88,3 +88,12 @@ foxTessのtriangulateにmergeを導入。出力においては点がマージさ
 ### 1.1.5
 evenlySpacingに点の個数に基づいたpartitionを導入。autoは変えない。even/oddはパリティになるように調整する。  
 smoothingとsmoothingAllを追加。内容はevenly->quad->evenlyというもの。autoなら点の数が使われる。  
+
+### 1.1.6
+EasyCanvasSaverを改変。fire関数で発火させられるようにする。またdblclickでsaveされるのを使わない選択肢を  
+用意することで柔軟性を増す（デフォルトはdblclickで発火）。  
+clampを配列にも適用できるように仕様変更。色の為に。  
+foxColorを導入。coulourとcoulour3はそれぞれ長さ3,4の色配列を返す。WebGLの色指定用。  
+tessyにsizeを導入。長さ3以上でも使えるようにした。利用するにはtriangulate時にsize指定（デフォルト2）、  
+加えてtessCallbacks.combineをいじる必要がある。補助関数tessLerpを用意。data用意時にsize長さずつ用意する。  
+mergeに関しては残りの部分を配列の形ですべてzに放り込む。なのでsize=3であっても[0]でアクセスする必要がある。  
