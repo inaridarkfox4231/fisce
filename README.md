@@ -93,7 +93,17 @@ smoothingとsmoothingAllを追加。内容はevenly->quad->evenlyというもの
 EasyCanvasSaverを改変。fire関数で発火させられるようにする。またdblclickでsaveされるのを使わない選択肢を  
 用意することで柔軟性を増す（デフォルトはdblclickで発火）。  
 clampを配列にも適用できるように仕様変更。色の為に。  
-foxColorを導入。coulourとcoulour3はそれぞれ長さ3,4の色配列を返す。WebGLの色指定用。  
+foxColorを導入。coulourとcoulour3はそれぞれ長さ4,3の色配列を返す。WebGLの色指定用。  
 tessyにsizeを導入。長さ3以上でも使えるようにした。利用するにはtriangulate時にsize指定（デフォルト2）、  
 加えてtessCallbacks.combineをいじる必要がある。補助関数tessLerpを用意。data用意時にsize長さずつ用意する。  
 mergeに関しては残りの部分を配列の形ですべてzに放り込む。なのでsize=3であっても[0]でアクセスする必要がある。  
+
+### 1.1.7
+createShaderProgramのエラー処理を強化。失敗したら文字列が返るようにする。  
+これでスマホでもデバッグ出来るかもしれない。  
+uniformXでuniformMatrix[234]fvの処理にあたり配列のFloat32化をとりやめ。そのまま使えばいい。  
+Vecta.rotateを2次元対応させた。数が1つなら0,0,1周りの回転となる。  
+addやsubに関連するVecta.validateのimmutable指定も2次元対応。これで数が2つの場合もtrueを使える。  
+getWebGLError. ドローコールの後で実行してエラーをキャッチする。コンソールに出ないエラーを取得できる。  
+たとえばattributeの範囲外指定エラーをスマホとかで取得するのに使えそう。Firefox系でも起きるけどね。  
+infoとcodeに分かれておりinfoに文字列が入ってる。  

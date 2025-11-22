@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.6
+ * @version 1.1.7
  */
 
 (function (global, factory) {
@@ -48,7 +48,32 @@
       }
     }
 
+    // WebGLのgetErrorのラッパ関数。単にErrorだと分かりにくいのでgetWebGLErrorとする。
+    // 結局これしか取得できないので、このまま供用してしまおう。メッセージ出ないんですよ...
+    // codeとinfoに分かれているのはcodeを見て0ならスルー、0でないならそこで切る、といったことができると嬉しいので。
+    function getWebGLError(gl){
+      const errCode = gl.getError();
+      switch(errCode){
+        case gl.NO_ERROR:
+          return {code:gl.NO_ERROR, info: "NO_ERROR: エラーはありません"};
+        case gl.INVALID_ENUM:
+          return {code:gl.INVALID_ENUM, info: "INVALID_ENUM: 不正な値が設定されました"};
+        case gl.INVALID_VALUE:
+          return {code:gl.INVALID_VALUE, info: "INVALID_VALUE: 値の範囲が不正です"};
+        case gl.INVALID_OPERATION:
+          return {code:gl.INVALID_OPERATION, info:"INVALID_OPERATION: その処理は許可されていません"};
+        case gl.INVALID_FRAMEBUFFER_OPERATION:
+          return {code:gl.INVALID_FRAMEBUFFER_OPERATION, info: "INVALID_FRAMEBUFFER_OPERATION: framebufferの設定に問題がある可能性があります"};
+        case gl.OUT_OF_MEMORY:
+          return {code:gl.OUT_OF_MEMORY, info: "OUT_OF_MEMORY: メモリ不足です"};
+        case gl.CONTEXT_LOST_WEBGL:
+          return {code:gl.CONTEXT_LOST_WEBGL, info: "CONTEXT_LOST_WEBGL: コンテキストが破棄されました"};
+      }
+      return ""; // empty string
+    }
+
     errors.E_Type = E_Type;
+    errors.getWebGLError = getWebGLError;
 
     return errors;
   })();
@@ -1009,19 +1034,34 @@
   const webglUtils = (function(){
     const utils = {};
 
+    // 生成に失敗したら文字列が返って原因が分かるようにする
     function createShaderProgram(gl, params = {}){
+      // glがレンダリングコンテキストかどうか調べる。
+      if(!(gl instanceof WebGL2RenderingContext)){
+        const errorMessage = `コンテキストの指定が不正です\nWebGL2RenderingContextを指定してください`;
+        console.error(errorMessage);
+        return errorMessage;
+      }
 
       // nameを付けることでどのshaderがやばいか識別するとかできると良いかと
       const {vs, fs, name = "", layout = {}, outVaryings = [], separate = true} = params;
+
+      // vsとfsが文字列かどうか調べる
+      if(typeof vs !== 'string' || typeof fs !== 'string'){
+        const errorMessage = `${name}:シェーダーソースの指定が不正です\n文字列を指定してください`;
+        console.error(errorMessage);
+        return errorMessage;
+      }
 
       const vsShader = gl.createShader(gl.VERTEX_SHADER);
       gl.shaderSource(vsShader, vs);
       gl.compileShader(vsShader);
 
       if(!gl.getShaderParameter(vsShader, gl.COMPILE_STATUS)){
-        console.log(`${name}:vertex shaderの作成に失敗しました。`);
-        console.error(gl.getShaderInfoLog(vsShader));
-        return null;
+        console.log(`${name}:vertex shaderの作成に失敗しました`);
+        const infoLog = gl.getShaderInfoLog(vsShader);
+        console.error(infoLog);
+        return infoLog;
       }
 
       const fsShader = gl.createShader(gl.FRAGMENT_SHADER);
@@ -1030,8 +1070,9 @@
 
       if(!gl.getShaderParameter(fsShader, gl.COMPILE_STATUS)){
         console.log(`${name}:fragment shaderの作成に失敗しました。`);
-        console.error(gl.getShaderInfoLog(fsShader));
-        return null;
+        const infoLog = gl.getShaderInfoLog(fsShader);
+        console.error(infoLog);
+        return infoLog;
       }
 
       const program = gl.createProgram();
@@ -1049,14 +1090,17 @@
 
       if(!gl.getProgramParameter(program, gl.LINK_STATUS)){
         console.log(`${name}:programのlinkに失敗しました。`);
-        console.error(gl.getProgramInfoLog(program));
-        return null;
+        const infoLog = gl.getProgramInfoLog(program);
+        console.error(infoLog);
+        return infoLog;
       }
 
       // uniform情報を作成時に登録してしまおう
       program.uniforms = getActiveUniforms(gl, program);
       // attribute情報も登録してしまおう。
       program.attributes = getActiveAttributes(gl, program);
+
+      console.log(`${name} program created successfully.`);
 
       return program;
     }
@@ -1146,7 +1190,10 @@
         case "4iv": gl.uniform4iv(location, ...args); break;
       }
       if(type === "matrix2fv"||type==="matrix3fv"||type==="matrix4fv"){
-        const v = (args[0] instanceof Float32Array ? args[0] : new Float32Array(args[0]));
+        const v = args[0]; // 通常配列でいいならそうするかなぁ
+        // つまりわざわざFloat32にする処理をCPUでやるのかそれともGPUにお任せするのかということ
+        // どうでもいいか。やめちゃおう。おそらくバイト列だと駄目、その程度の意味だと思う。
+        //const v = (args[0] instanceof Float32Array ? args[0] : new Float32Array(args[0]));
         switch(type){
           case "matrix2fv": gl.uniformMatrix2fv(location, false, v); break;
           case "matrix3fv": gl.uniformMatrix3fv(location, false, v); break;
@@ -3979,7 +4026,16 @@
         // axisの周りにangleだけ回転。axisは成分指定可能（列挙のみ）
         // axisがゼロベクトルの場合は(0,0,1)とする
         // 素直にロドリゲス掛けるだけです。GLSLとか意味不明なこと考えなくていいです。
-        const res = Vecta.validateForScalar(...arguments);
+        const args = [...arguments];
+        if(args.length === 1 && typeof(args[0]) === 'number'){
+          // 引数が1つの場合は軸を0,0,1としそれを角度として扱う。変化させる。
+          this.rotate(0, 0, 1, args[0], false);
+          return this;
+        }else if(args.length === 2 && typeof(args[0]) === 'number'){
+          // 引数が2つの場合は軸を0,0,1としそれらを角度、immutableとして扱う。
+          return this.rotate(0, 0, 1, args[0], args[1]);
+        }
+        const res = Vecta.validateForScalar(...args);
         if(res.x*res.x + res.y*res.y + res.z*res.z < Number.EPSILON){
           res.x = 0; res.y = 0; res.z = 0;
         }
@@ -4063,6 +4119,10 @@
         if(args.length === 1){
           return Vecta.validate(args[0], false);
         } else if(args.length === 3){
+          // 2次元対応するか。数、数、booleanの場合は3つ目を0にする
+          if(typeof(args[0]) === 'number' && typeof(args[1]) === 'number' && typeof(args[2]) === 'boolean'){
+            return Vecta.validate(args[0], args[1], 0, args[2]);
+          }
           return Vecta.validate(args[0], args[1], args[2], false);
         }else if(args.length === 2){
           // 長さ2の場合はベクトルか数か配列。数の場合は全部一緒。
