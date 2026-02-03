@@ -114,3 +114,12 @@ addやsubに関連するVecta.validateのimmutable指定も2次元対応。こ�
 getWebGLError. ドローコールの後で実行してエラーをキャッチする。コンソールに出ないエラーを取得できる。  
 たとえばattributeの範囲外指定エラーをスマホとかで取得するのに使えそう。Firefox系でも起きるけどね。  
 infoとcodeに分かれておりinfoに文字列が入ってる。  
+
+### 1.1.8
+QuarternionのgetFromAAとMT4のgetRotationMatrixで引数のベクトルが勝手にnormalizeされちゃうのを回避する  
+Interactionでoncontextmenuのpreventの対象をdocumentからcanvasに変更（混在スケッチに対応するため）  
+getTextAlignとgetTextBoundingRect. measureTextのラッパ。結局これが使いづらいので。  
+なお改行は非対応。絵文字にも対応できるのが強い。  
+CameraControllerにおいて平行移動がアスペクト比を考慮していなかったので修正  
+具体的には短い方が1となるようにする。これにより長い方に動かしてもすっとんでいかなくなる。  
+なおp5の方はやってません。誰か気付いた人がやるでしょう。  

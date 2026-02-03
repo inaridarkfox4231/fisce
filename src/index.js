@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.7
+ * @version 1.1.8
  */
 
 (function (global, factory) {
@@ -2757,6 +2757,46 @@
       link.remove();
     }
 
+    // bdは欲しいがalignmentは不要という場合に使う
+    function getTextBoundingRect(ctx, txt, x, y){
+      const m = ctx.measureText(txt);
+      const AL = m.actualBoundingBoxLeft;
+      const AR = m.actualBoundingBoxRight;
+      const AT = m.actualBoundingBoxAscent;
+      const AB = m.actualBoundingBoxDescent;
+      return {x:x-AL, y:y-AT, w:AL+AR, h:AT+AB};
+    }
+
+    // alignmentにbdが活用される必要は無い。両者は独立していていい。互いに連携する必要は無いだろう。
+
+    // (x,y)をleft,center,rightまたはtop,center,bottomのどこに揃えたいかを取得するもの
+    // たとえば(x,y)を入力値としleft,topを指定するとx,yがleft,topになるようなx,yが出力される。
+    function getTextAlign(ctx, txt, x, y, xAlign='center', yAlign='center'){
+      const m = ctx.measureText(txt);
+      const AL = m.actualBoundingBoxLeft;
+      const AR = m.actualBoundingBoxRight;
+      const AT = m.actualBoundingBoxAscent;
+      const AB = m.actualBoundingBoxDescent;
+      const result = {};
+      switch(xAlign){
+        case 'left':
+          result.x = x+AL; break;
+        case 'center':
+          result.x = x+(AL-AR)/2; break;
+        case 'right':
+          result.x = x-AR; break;
+      }
+      switch(yAlign){
+        case 'top':
+          result.y = y+AT; break;
+        case 'center':
+          result.y = y+(AT-AB)/2; break;
+        case 'bottom':
+          result.y = y-AB; break;
+      }
+      return result;
+    }
+
     utils.Damper = Damper;
 
     utils.ArrayWrapper = ArrayWrapper;
@@ -2796,6 +2836,10 @@
     utils.saveCanvas = saveCanvas;
     utils.saveText = saveText;
     utils.saveJSON = saveJSON;
+
+    // text関連のユーティリティ
+    utils.getTextBoundingRect = getTextBoundingRect;
+    utils.getTextAlign = getTextAlign;
 
     return utils;
   })();
@@ -2918,7 +2962,9 @@
         // 一応デフォルトtrueのオプションにするか...（あんま意味ないが）
         const {preventOnContextMenu = true} = options;
         if(preventOnContextMenu){
-          document.oncontextmenu = (e) => { e.preventDefault(); }
+          // スケッチと文章が混在する場合に外側のメニューまで禁止するのはまずいので。
+          //document.oncontextmenu = (e) => { e.preventDefault(); }
+          canvas.oncontextmenu = (e) => { e.preventDefault(); }
         }
         // touchのデフォルトアクションを殺す
         //canvas.style["touch-action"] = "none";
@@ -4288,7 +4334,8 @@
           axis = new Vecta(arguments[0], arguments[1], arguments[2]);
           angle = arguments[3];
         }
-        axis.normalize();
+        // 元のベクトルが変化しないようにする
+        axis = axis.copy().normalize();
         const s = Math.sin(angle/2);
         this.set(Math.cos(angle/2), s*axis.x, s*axis.y, s*axis.z);
         return this;
@@ -4908,7 +4955,8 @@
           axis = new Vecta(arguments[0], arguments[1], arguments[2]);
           angle = arguments[3];
         }
-        axis.normalize();
+        // 元のベクトルが変化しないようにする
+        axis = axis.copy().normalize();
         // axisはベクトル。angleは角度。
         const C = Math.cos(angle);
         const OC = 1-Math.cos(angle);
@@ -5688,7 +5736,14 @@
           const tx = t.getValue("translationX");
           const ty = t.getValue("translationY");
           //this.cam.move(-tx, ty, 0);
-          this.cam.moveNDC(-tx, ty);
+          // aspect比が変わっても平行移動がおかしくならないようにする
+          const aspectFactor = (this.cam.aspect !== undefined ? this.cam.aspect : this.cam.width/this.cam.height);
+          if(aspectFactor > 1){
+            this.cam.moveNDC(-tx/aspectFactor, ty);
+          }else{
+            this.cam.moveNDC(-tx, ty*aspectFactor);
+          }
+          //this.cam.moveNDC(-tx, ty);
         });
       }
       axisRotation(rx, ry){
