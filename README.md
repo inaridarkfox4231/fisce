@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.7/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.9/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.7/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.9/src/index.min.js"></script>
 ```
 
 memo  
@@ -122,4 +122,20 @@ getTextAlignとgetTextBoundingRect. measureTextのラッパ。結局これが使
 なお改行は非対応。絵文字にも対応できるのが強い。  
 CameraControllerにおいて平行移動がアスペクト比を考慮していなかったので修正  
 具体的には短い方が1となるようにする。これにより長い方に動かしてもすっとんでいかなくなる。  
-なおp5の方はやってません。誰か気付いた人がやるでしょう。  
+
+### 1.1.9
+MT4のメソッドにクォータニオンもしくは成分列挙で行列を取得する関数を追加  
+インスタンス：localRotationQ, globalRotationQ, setRotationQ  
+静的：getRotationMatrixQ, getRotationQ  
+ただし単位クォータニオン限定とする。要するにgltfのための関数。あっちもw,x,y,zの並び。  
+assert(Vecta,Quarternion,MT4)の第4引数にdirectConsole(=false)を追加  
+trueの場合そのままconsole出力される  
+createGltfとGltfクラスの実装（準備中）
+TimeArrowのgetElapsedDiscreteでmoduloが1の場合に割り算しない処理になっていたが困るので、  
+デフォルトを0とし、0の場合に割り算しないことにした。  
+フレーム数が1の場合のアニメーション（いわゆるポーズ）の場合にバグるのを防ぐため。   
+Counterの方もそうしましょう。そうしましょ。  
+createGltf, Gltf, BoneTreeを実装。  
+今現在出来ること：通常描画、頂点色描画、テクスチャ描画、シェイプキー（ウェイト）アニメーション、  
+スキンメッシュアニメーション。複数のメッシュの描画も可能。できないことはトランスフォームアニメーション、マテリアルなど。  
+まあとりあえずこれで充分でしょう。  
