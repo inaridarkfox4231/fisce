@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.9/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.10/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.9/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.10/src/index.min.js"></script>
 ```
 
 memo  
@@ -139,3 +139,18 @@ createGltf, Gltf, BoneTreeを実装。
 今現在出来ること：通常描画、頂点色描画、テクスチャ描画、シェイプキー（ウェイト）アニメーション、  
 スキンメッシュアニメーション。複数のメッシュの描画も可能。できないことはトランスフォームアニメーション、マテリアルなど。  
 まあとりあえずこれで充分でしょう。  
+
+### 1.1.10
+createBufをcreateBufferに改名。createWeightAnimationsをvaoを引数にbind関数を用いてattributeで表現するように変更。  
+createWeightAnimationsとcreateSkinMeshAnimationsのoptionにincludeDataを加えてtrueの場合に頂点とか行列データを出せるように  
+そんでテクスチャに入れたりできると嬉しい。  
+createTransformAnimationsを追加。これでアニメーションは一通り再生できるようになった。  
+encodeMeshesとencodeMaterialsを追加。それに基づいてcreateVAOとcreateWeightAnimationsを書き直し。  
+以降はlocation必須となる。locationが用意されたattrのみが使われる。つまり何でもあり。セマンティクス指定必須。  
+MT4にaddScalarを追加、さらにinitの引数にスカラーを設定するとそのスカラーの行列になる（ゼロ行列で初期化できる）。  
+デフォルトは1です！！なので引数が無い場合は単位行列になります。  
+ついでにコンストラクタに配列を許す（足りない部分は0埋め）。加えてスカラー倍（mult）を追加。  
+createTransformAnimationsにupdateの他にupdateFloatを追加。小数でやると補間される。  
+アニメーションで内部的に「% frames」とすることで整数をそのまま渡せるように仕様変更。  
+createWeightAnimationsにdoubleのoptionを導入して補間ができるように仕様変更  
+VectaとQuarternionも配列引数で生成できるように仕様変更  

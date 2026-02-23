@@ -6,7 +6,7 @@
  * @copyright 2025
  * @author fisce
  * @license ISC
- * @version 1.1.9
+ * @version 1.1.10
  */
 
 (function (global, factory) {
@@ -3975,9 +3975,16 @@
     // ベクトル。3次元でいいと思う。必要最低限の機能だけ用意する。
     class Vecta{
       constructor(a=0,b=0,c=0){
-        this.x = a;
-        this.y = b;
-        this.z = c;
+        if(Array.isArray(a)){
+          // aが配列の場合だけ可能にするか。足りない部分は0埋めしましょう。
+          this.x = (a[0] !== undefined ? a[0] : 0);
+          this.y = (a[1] !== undefined ? a[1] : 0);
+          this.z = (a[2] !== undefined ? a[2] : 0);
+        }else{
+          this.x = a;
+          this.y = b;
+          this.z = c;
+        }
       }
       set(){
         // 列挙、単数、ベクトル、配列が可能。値をセットする。
@@ -4311,10 +4318,18 @@
     // https://qiita.com/inaba_darkfox/items/53230babef4e163ede3d
     class Quarternion{
       constructor(w = 1, x = 0, y = 0, z = 0){
-        this.w = w;
-        this.x = x;
-        this.y = y;
-        this.z = z;
+        if(Array.isArray(w)){
+          // wが配列の場合だけ、用意するか。1,0,0,0をデフォとして用意する。不要かもだけど。
+          this.w = (w[0] !== undefined ? w[0] : 1);
+          this.x = (w[1] !== undefined ? w[1] : 0);
+          this.y = (w[2] !== undefined ? w[2] : 0);
+          this.z = (w[3] !== undefined ? w[3] : 0);
+        }else{
+          this.w = w;
+          this.x = x;
+          this.y = y;
+          this.z = z;
+        }
       }
       set(w, x, y, z){
         // クォータニオンか配列の場合は列挙の場合に帰着させる
@@ -4637,9 +4652,11 @@
           }
         }else{
           // 4x4の場合も含めて「その他」
+          // args[0]が配列の場合はそれを採用する形。残りは0とする。
+          const data = (Array.isArray(args[0]) ? args[0] : args);
           for(let i=0; i<16; i++){
-            if(i<args.length){
-              this.m[i] = args[i];
+            if(i<data.length){
+              this.m[i] = data[i];
             }else{
               this.m[i] = 0;
             }
@@ -4698,9 +4715,14 @@
         for(let i=0; i<16; i++){ a[i] = this.m[i]; }
         return a;
       }
-      init(){
-        // 単位行列で初期化
-        this.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+      init(defaultScalar = 1){
+        // スカラー行列で初期化（デフォルトは1です）
+        this.set([
+          defaultScalar,0,0,0,
+          0,defaultScalar,0,0,
+          0,0,defaultScalar,0,
+          0,0,0,defaultScalar
+        ]);
         return this;
       }
       add(n, immutable = false){
@@ -4714,6 +4736,17 @@
         }
         return this;
       }
+      addScalar(n, k, immutable = false){
+        // スカラー倍を足す
+        if(immutable){
+          return this.copy().addScalar(n, k, false);
+        }
+        const target = (Array.isArray(n) ? n : n.m);
+        for(let i=0; i<16; i++){
+          this.m[i] += k * target[i];
+        }
+        return this;
+      }
       sub(n, immutable = false){
         // 差
         if(immutable){
@@ -4722,6 +4755,16 @@
         const target = (Array.isArray(n) ? n : n.m);
         for(let i=0; i<16; i++){
           this.m[i] -= target[i];
+        }
+        return this;
+      }
+      mult(k, immutable = true){
+        // 単純なスカラー倍。まあ使わないかもだが。
+        if(immutable){
+          return this.copy().mult(k, false);
+        }
+        for(let i=0; i<16; i++){
+          this.m[i] *= k;
         }
         return this;
       }
@@ -6963,6 +7006,11 @@
         this.encodeBufferViews();
         this.nodes = [];
         this.encodeNodes();
+        this.materials = [];
+        this.encodeMaterials();
+        this.meshes = [];
+        this.rootTrees = []; // rootMeshのtree集合
+        this.encodeMeshes();
         this.skins = [];
         this.encodeSkins();
         this.animations = {
@@ -6972,8 +7020,6 @@
         // textureは外的にloadTexturesを呼び出して設定する
         this.textures = [];
         // 例：const gltf = new Gltf(...); await gltf.loadTextures();
-        //this.textureURLs = [];
-        //this.setTextureURLs();
       }
       encodeBuffers(){
         // ここは何をしているかというと、結局ArrayBuffer自体に読み書き機能が無いので、
@@ -7060,6 +7106,124 @@
         }
         // 確認用
         //console.log(this.nodes);
+      }
+      encodeMaterials(){
+        // materialの翻訳
+        const materials = this.gltf.materials;
+        if(materials === undefined) return;
+        for(let i=0; i<materials.length; i++){
+          const material = materials[i];
+          const {normalTexture = {}, pbrMetallicRoughness = {}, emissiveFactor = [0,0,0], emissiveTexture = {}} = material;
+          const {
+            baseColorFactor = [1,1,1], baseColorTexture = {},
+            metallicFactor = 0, roughnessFactor = 0, metallicRoughnessTexture = {}
+          } = pbrMetallicRoughness;
+          const {index:nIndex = -1, texCoord:nTexCoord = 0} = normalTexture;
+          const {index:eIndex = -1, texCoord:eTexCoord = 0} = emissiveTexture;
+          const {index:cIndex = -1, texCoord:cTexCoord = 0} = baseColorTexture;
+          const {index:mrIndex = -1, texCoord:mrTexCoord = 0} = metallicRoughnessTexture;
+          this.materials.push({
+            normalTexture:{index:nIndex, texCoord:nTexCoord},
+            emissiveFactor, emissiveTexture:{index:eIndex, texCoord:eTexCoord},
+            pbr:{
+              baseColorFactor, baseColorTexture:{index:cIndex, texCoord:cTexCoord},
+              metallicFactor, roughnessFactor,
+              metallicRoughnessTexture:{index:mrIndex, texCoord:mrTexCoord}
+            }
+          });
+        }
+        // 確認用
+        //console.log(this.materials);
+      }
+      encodeMeshes(){
+        // meshesの翻訳。各mesh: {primitives:[], index, nodeIndex, node, tree:BoneTree何か}
+        // node, nodeIndex, treeはあとで設定する。
+        const meshes = this.gltf.meshes;
+        const acc = this.gltf.accessors;
+        const sizeDict = {
+          "SCALAR":1, "VEC2":2, "VEC3":3, "VEC4":4, "MAT2":4, "MAT3":9, "MAT4":16
+        }
+        const createAttr = (accData) => {
+          return {
+            data:this.bufferViews[accData.bufferView],
+            type:accData.componentType,
+            count:accData.count,
+            size:sizeDict[accData.type],
+            normalized:(accData.normalized !== undefined ? accData.normalized : false)
+          }
+        }
+
+        for(let i=0; i<meshes.length; i++){
+          const mesh = meshes[i];
+          const {name, primitives, weights} = mesh;
+          // BoneTreeはIBMを今回使わないのでデフォルトで生成
+          const eachMesh = {name:name, primitives:[], index:i, tree:new BoneTree(), children:[], parent:-1};
+          // weightsはある場合、ただの配列。primitive関係なく一様に適用される。
+          eachMesh.weights = (weights !== undefined ? weights : []);
+          // 先にprimitiveを翻訳する。
+          for(let k=0; k<primitives.length; k++){
+            const primitive = primitives[k];
+            const {attributes, indices, material, targets} = primitive;
+            const eachPrimitive = {attributes:{}, targets:[]};
+            eachPrimitive.material = (material !== undefined ? this.materials[material] : null);
+            for(const name of Object.keys(attributes)){
+              const attr = attributes[name];
+              eachPrimitive.attributes[name] = createAttr(acc[attr]);
+            }
+            eachPrimitive.indices = {
+              data:this.bufferViews[acc[indices].bufferView],
+              type:acc[indices].componentType,
+              count:acc[indices].count
+            }
+            if(targets !== undefined){
+              for(let l=0; l<targets.length; l++){
+                const target = targets[l];
+                const eachTarget = {};
+                for(const name of Object.keys(target)){
+                  const attr = target[name];
+                  eachTarget[name] = createAttr(acc[attr]);
+                }
+                eachPrimitive.targets.push(eachTarget);
+              }
+            }
+            eachMesh.primitives.push(eachPrimitive);
+          }
+          this.meshes.push(eachMesh);
+        }
+        // nodeを設定する。
+        for(const node of this.nodes){
+          if(node.mesh < 0) continue;
+          const mesh = this.meshes[node.mesh];
+          mesh.nodeIndex = node.index;
+          mesh.node = node;
+          mesh.skin = node.skin; // -1か0以上かで翻訳済み
+          const defaultLocal = Gltf.createNodeMatrix(node);
+          mesh.tree.local = defaultLocal;
+        }
+        // 親子関係を構築する（mesh間の）
+        for(const mesh of this.meshes){
+          const node = mesh.node;
+          const children = node.children;
+          for(const child of children){
+            const childNode = this.nodes[child];
+            if(childNode.mesh < 0) continue;
+            const childMesh = this.meshes[childNode.mesh];
+            // treeの間に親子関係を構築する
+            mesh.tree.addChild(childMesh.tree);
+            // meshの間の親子関係を構築しておく（rootを探るのに使う）
+            mesh.children.push(childMesh.index);
+            childMesh.parent = mesh.index;
+          }
+        }
+        // 親のmeshを探してtreeを取得しrootTreesに放り込んでいく
+        // parentが-1のやつすべてなので簡単です
+        // ...
+        for(const mesh of this.meshes){
+          if(mesh.parent < 0){ this.rootTrees.push(mesh.tree); }
+        }
+
+        // 確認用
+        //console.log(this.meshes);
       }
       encodeSkins(){
         // 関連するskinに番号を付与する。animationサイドにskin属性を付けたいので。
@@ -7285,232 +7449,234 @@
         return {data:result, frames};
       }
       createVAO(gl, options = {}){
-        // いずれglで作るように書き換えるけれど。JOINTS_0はuvec4でWEIGHTS_0は通常のfloat vec4.
-        // materialを分けるとprimitiveが分割されるようで、それも反映したいわけです。
+        // meshesの翻訳データに基づいて新しく作る
+        // いずれweightAnimationsの方も書き換える
+        // locationですが、指定したものだけ用意する形にする。指定してなければ何にも起きない
+        // こっちで新たにlocationのセマンティクスに基づいたオブジェクトを用意してそれに従って作る
+        // webgpuでは全部こっちで用意するんで、まあいいですよね。
+        // これであれ、何気にCOLOR_1とかTEXCOORD_1とかも使えるようになるわね。
+        // createVAOとの違いはlocationを明示するところだけ。あと全部一緒...のはず。
         const {meshId = 0, primitiveId = 0, location = {}} = options;
-        const {
-          POSITION : POSITION_LOC = 0, NORMAL : NORMAL_LOC = 1,
-          COLOR_0 : COLOR_0_LOC = 2, TEXCOORD_0 : TEXCOORD_0_LOC = 3,
-          JOINTS_0 : JOINTS_0_LOC = 4, WEIGHTS_0 : WEIGHTS_0_LOC = 5
-        } = location;
-        // idごとにVAOを生成。v,n,c,uvで0,1,2,3を使用。n,c,uvはオプション。
 
-        // 単独メッシュなので、idを用意して、そのメッシュだけ用意する形。
-        const primitive = this.gltf.meshes[meshId].primitives[primitiveId];
-        const accessors = this.gltf.accessors;
-        const {POSITION, NORMAL, COLOR_0, TEXCOORD_0, JOINTS_0, WEIGHTS_0} = primitive.attributes;
-        const {indices} = primitive;
+        // POSITIONとかいろいろ入ってる。indexBuffer関連はINDICESを使おう。
+        const attributeNames = Object.keys(location);
 
-        // 頂点
-        const v = this.bufferViews[accessors[POSITION].bufferView];
-        const vBuf = Gltf.createBuf(gl, v);
-        const vType = accessors[POSITION].componentType;
-        // インデックス
-        const f = this.bufferViews[accessors[indices].bufferView];
-        const indexBuf = Gltf.createBuf(gl, f, gl.ELEMENT_ARRAY_BUFFER);
-        const indexCount = accessors[indices].count;
-        const indexType = accessors[indices].componentType;
+        const primitive = this.meshes[meshId].primitives[primitiveId];
+        const {attributes, indices} = primitive;
+        const validAttributes = {};
 
-        // 法線（オプション）
-        const hasNormal = (NORMAL !== undefined);
-        const n = (hasNormal ? this.bufferViews[accessors[NORMAL].bufferView] : []);
-        const nBuf = (hasNormal ? Gltf.createBuf(gl, n) : null);
-        const nType = (hasNormal ? accessors[NORMAL].componentType : -1);
+        for(const name of attributeNames){
+          if(attributes[name] === undefined) continue;
+          const attr = attributes[name];
+          validAttributes[name] = {
+            location:location[name], size:attr.size, type:attr.type, normalized:attr.normalized,
+            data:attr.data, count:attr.count,
+            isInteger:(!attr.normalized && (attr.type === 5125 || attr.type === 5213 || attr.type === 5121)),
+            buffer:Gltf.createBuffer(gl, attr.data)
+          };
+        }
 
-        // 色（オプション）
-        const hasColor = (COLOR_0 !== undefined);
-        const c = (hasColor ? this.bufferViews[accessors[COLOR_0].bufferView] : []);
-        const colorBuf = (hasColor ? Gltf.createBuf(gl, c) : null);
-        const colorType = (hasColor ? accessors[COLOR_0].componentType : -1);
+        const indexBuffer = Gltf.createBuffer(gl, indices.data, {target:gl.ELEMENT_ARRAY_BUFFER});
 
-        // UV（オプション）
-        const hasUv = (TEXCOORD_0 !== undefined);
-        const uv = (hasUv ? this.bufferViews[accessors[TEXCOORD_0].bufferView] : []);
-        const uvBuf = (hasUv ? Gltf.createBuf(gl, uv) : null);
-        const uvType = (hasUv ? accessors[TEXCOORD_0].componentType : -1);
-
-        // ジョイント（オプション）
-        const hasJoints = (JOINTS_0 !== undefined);
-        const joints = (hasJoints ? this.bufferViews[accessors[JOINTS_0].bufferView] : []);
-        const jointsBuf = (hasJoints ? Gltf.createBuf(gl, joints) : null);
-        const jointsType = (hasJoints ? accessors[JOINTS_0].componentType : -1); // 5121だっけ。
-
-        // ウェイト（オプション）
-        const hasWeights = (WEIGHTS_0 !== undefined);
-        const weights = (hasWeights ? this.bufferViews[accessors[WEIGHTS_0].bufferView] : []);
-        const weightsBuf = (hasWeights ? Gltf.createBuf(gl, weights) : null);
-        const weightsType = (hasWeights ? accessors[WEIGHTS_0].componentType : -1); // 5126のようです
-
-        // 登録処理
+        // prepare vao.
         const vao = gl.createVertexArray();
         gl.bindVertexArray(vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, vBuf);
-        gl.vertexAttribPointer(POSITION_LOC, 3, vType, false, 0, 0);
-        gl.enableVertexAttribArray(POSITION_LOC);
-        if(hasNormal){
-          gl.bindBuffer(gl.ARRAY_BUFFER, nBuf);
-          gl.vertexAttribPointer(NORMAL_LOC, 3, nType, false, 0, 0);
-          gl.enableVertexAttribArray(NORMAL_LOC);
-        }
-        if(hasColor){
-          gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
-          gl.vertexAttribPointer(COLOR_0_LOC, 4, colorType, true, 0, 0);
-          gl.enableVertexAttribArray(COLOR_0_LOC);
-        }
-        if(hasUv){
-          gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-          gl.vertexAttribPointer(TEXCOORD_0_LOC, 2, uvType, false, 0, 0);
-          gl.enableVertexAttribArray(TEXCOORD_0_LOC);
-        }
-        if(hasJoints){
-          gl.bindBuffer(gl.ARRAY_BUFFER, jointsBuf);
-          gl.vertexAttribIPointer(JOINTS_0_LOC, 4, jointsType, 0, 0); // normalizeは無し
-          gl.enableVertexAttribArray(JOINTS_0_LOC);
-        }
-        if(hasWeights){
-          gl.bindBuffer(gl.ARRAY_BUFFER, weightsBuf);
-          gl.vertexAttribPointer(WEIGHTS_0_LOC, 4, weightsType, false, 0, 0); // normalizeは無し
-          gl.enableVertexAttribArray(WEIGHTS_0_LOC);
+
+        // attributes.
+        for(const name of Object.keys(validAttributes)){
+          const attr = validAttributes[name];
+          gl.bindBuffer(gl.ARRAY_BUFFER, attr.buffer);
+          if(attr.isInteger){
+            gl.vertexAttribIPointer(attr.location, attr.size, attr.type, 0, 0);
+          }else{
+            gl.vertexAttribPointer(attr.location, attr.size, attr.type, attr.normalized, 0, 0)
+          }
+          gl.enableVertexAttribArray(attr.location);
         }
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuf);
+
+        // indexBuffer.
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+
         gl.bindVertexArray(null);
 
-        vao.type = indexType;
-        vao.count = indexCount;
+        vao.count = indices.count;
+        vao.type = indices.type;
         return vao;
       }
+      createTransformAnimations(gl, options = {}){
+        // meshのtreeのglobalを取得できるようにするか。アクセスできるようにしよう。
+        // modelでいいっすね
+        // 流れとしては「update(frame)で更新」→「更新しつくしたうえでcomputeMeshGlobal()」
+        // →「該当するmeshのmodel行列を取り出してセットする」
+        const animations = this.animations.transform;
+        const {meshId = 0, includeData = false} = options;
+        const mesh = this.meshes[meshId];
+        const transformAnimations = [];
+
+        for(const animation of animations){
+          if(animation.mesh !== meshId) continue;
+          const {data, frames} = animation;
+          // dataとframes. dataはMT4の配列でnodeのそれを上書きして構築するのがもう終わってる。
+          // だからlocalに設定するだけ。
+          // なお、個別にlocalを更新した後でmeshのglobalを一括して更新するんで、
+          // それはGltfの関数として個別に用意するといいと思う。computeMeshGlobal()とかする。
+          // 整数版
+          const update = (frame) => {
+            mesh.tree.local.set(data[frame % frames]);
+          }
+          // 1.1.10～frameに非整数を許して、補間出来るようにする。
+          // 小数版
+          const updateFloat = (frame) => {
+            const currentFrame = Math.floor(frame);
+            const fraction = frame - currentFrame;
+            const nextFrame = currentFrame + 1;
+            // ゼロ行列で初期化する。そのあとaddScalarで補間する。
+            mesh.tree.local.init(0).addScalar(data[currentFrame % frames], 1-fraction).addScalar(data[nextFrame % frames], fraction);
+          }
+          const result = {update, updateFloat, frames};
+          if(includeData){
+            result.data = data;
+          }
+          transformAnimations.push(result);
+        }
+
+        return {animations:transformAnimations, model:mesh.tree.global};
+      }
+      computeMeshGlobal(){
+        // rootTreesのtreeそれぞれに対してcomputeGlobalを実行する
+        for(const root of this.rootTrees){
+          BoneTree.computeGlobal(root);
+        }
+        // これで動くのかしら。まあ別にこれはできなくてもいいか。できたほうがいい？？
+      }
       createWeightAnimations(gl, options = {}){
-        // shapeKeyAnimationはmeshごとなのでprimitiveに分けられていてもまとめて適用されるのだろう
-        // meshIdを用意してそのメッシュに対するアニメーションをまとめて出力すればいいと思う
-        // ...
-        // って思ったけどプリミティブに分割されてる場合、アニメーションも分割されるでしょうね。めんど...
-        // 結局両方とも指定すべきなんだろう。そんで、meshIdを見てそれに該当するところだけ取り出す...と。
-        // それがprimitiveごとに用意されれば問題ないだろ。
-        // meshesを翻訳すればprimitiveの個数もわかる。めでたし。
-        const {meshId = 0, primitiveId = 0, location = {}} = options;
-        const {
-          POSITION : POSITION_LOC = 0, NORMAL : NORMAL_LOC = 1,
-          COLOR_0 : COLOR_0_LOC = 2, TEXCOORD_0 : TEXCOORD_0_LOC = 3
-        } = location;
-
-        // step1: Float32でv.n, Uint16でfを用意する。あればcとuvも用意する。
-        const primitive = this.gltf.meshes[meshId].primitives[primitiveId];
-        const accessors = this.gltf.accessors;
-        const {POSITION, NORMAL, COLOR_0, TEXCOORD_0} = primitive.attributes;
-        const {indices} = primitive;
-
-        // 頂点
-        const v = this.bufferViews[accessors[POSITION].bufferView];
-        const vType = accessors[POSITION].componentType;
-
-        // インデックス
-        const f = this.bufferViews[accessors[indices].bufferView];
-        const indexBuf = Gltf.createBuf(gl, f, gl.ELEMENT_ARRAY_BUFFER);
-        const indexCount = accessors[indices].count;
-        const indexType = accessors[indices].componentType;
-
-        // 法線（オプション）
-        const hasNormal = (NORMAL !== undefined);
-        const n = (hasNormal ? this.bufferViews[accessors[NORMAL].bufferView] : []);
-        const nType = (hasNormal ? accessors[NORMAL].componentType : -1);
-
-        // 色（オプション）
-        const hasColor = (COLOR_0 !== undefined);
-        const c = (hasColor ? this.bufferViews[accessors[COLOR_0].bufferView] : []);
-        const colorBuf = (hasColor ? Gltf.createBuf(gl, c) : null);
-        const colorType = (hasColor ? accessors[COLOR_0].componentType : -1);
-
-        // UV（オプション）
-        const hasUv = (TEXCOORD_0 !== undefined);
-        const uv = (hasUv ? this.bufferViews[accessors[TEXCOORD_0].bufferView] : []);
-        const uvBuf = (hasUv ? Gltf.createBuf(gl, uv) : null);
-        const uvType = (hasUv ? accessors[TEXCOORD_0].componentType : -1);
-
-        // step2: targetsの情報を元に、ウェイトごとのvとnを用意して配列にぶち込む。これは差分である。
-        // 重み付き平均を取ってフレームごとの差分が計算される。
+        // encodeMeshesを受けて作り直し。locationが指定されていない場合は機能しない。
+        // targetのセマンティクスをそのまま使う形で運用する。
+        // doubleってやるとattributeの枠を2つ分使って補間が可能になる
+        // loopのときとそうでないときの場合分けはCPUでやってください
+        const {meshId = 0, primitiveId = 0, location = {}, includeData = false, double = false} = options;
+        const primitive = this.meshes[meshId].primitives[primitiveId];
         const {targets} = primitive;
         const weightNum = targets.length;
-        const vDiff = [];
-        const nDiff = [];
-        for(let k=0; k<weightNum; k++){
-          vDiff.push(this.bufferViews[accessors[targets[k].POSITION].bufferView]);
-          if(hasNormal){ nDiff.push(this.bufferViews[accessors[targets[k].NORMAL].bufferView]); }
-        }
-        const VERTEX_NUM = vDiff[0].length; // 頂点数
 
-        // step3: 下準備はここまで。アニメーションを作る。outputはアニメーションごとに違うんで、
-        // ここからは個別の処理。アウトプットはすべてフレーム数分あるので問題ないです。
+        // POSITIONとNORMALだが、POSITIONのみの場合もある。
+        const attributeNames = Object.keys(location);
+        const validAttributes = {};
+
+        // POSITIONだけか、又はNORMALも。dataだけ配列で置き換える。バッファは今は作らない。
+        for(const name of attributeNames){
+          if(targets[0][name] === undefined) continue;
+          const attr0 = targets[0][name];
+          const eachTargets = {
+            name:name,
+            location:location[name], size:attr0.size, type:attr0.type,
+            normalized:attr0.normalized, count:attr0.count
+          };
+          const data = [];
+          for(let i=0; i<targets.length; i++){
+            data.push(targets[i][name].data);
+          }
+          eachTargets.data = data;
+          validAttributes[name] = eachTargets;
+        }
 
         const animations = this.animations.weight;
-        // 各々、mesh, data, framesが入ってる。
-        // mesh===meshIdでなければスルーしよう。そんでdataは長さがframesの配列で
-        // それぞれはweight配列である。
-
         const weightAnimations = [];
 
         for(let i=0, len=animations.length; i<len; i++){
           const animation = animations[i];
-
           if(animation.mesh !== meshId) continue;
+
           const outputData = animation.data;
           const frames = animation.frames;
 
-          const result = {vaos:[], frames};
-          // vaoを作る。フレームごとに差分の重み付き平均を取り、最後にデフォルトを足して完成。
-          // ついでに色とuvもあれば追加。2と3で使う。以上。大して難しくないね。
-          for(let k=0; k<frames; k++){
-            const finalV = new Float32Array(VERTEX_NUM);
-            const finalN = new Float32Array(VERTEX_NUM);
-            finalV.fill(0);
-            finalN.fill(0);
-            for(let l=0; l<weightNum; l++){
-              const w = outputData[k][l];
-              if(w===0){continue;}
-              for(let m=0; m<VERTEX_NUM; m++){
-                finalV[m] += w * vDiff[l][m];
-                if(hasNormal){ finalN[m] += w * nDiff[l][m]; }
+          // ここにvとnか、もしくはvだけを入れる。更新処理もこれに従って構築する。
+          // フレームごとのvやnのデータの配列を最終的に出力する形。
+          const morphAttributes = [];
+          for(const name of attributeNames){
+            const attr = validAttributes[name];
+
+            const morphAttr = {};
+            const morphData = [];
+            const data = attr.data;
+            const WEIGHT_NUM = data.length;
+            const VERTEX_NUM = data[0].length;
+            for(let k=0; k<frames; k++){
+              const lerpedData = new Array(VERTEX_NUM);
+              lerpedData.fill(0);
+              for(let l=0; l<WEIGHT_NUM; l++){
+                const w = outputData[k][l];
+                if(w===0){continue;}
+                for(let m=0; m<VERTEX_NUM; m++){
+                  lerpedData[m] += w * data[l][m];
+                }
+              }
+              morphData.push(new Float32Array(lerpedData));
+            }
+            morphAttr.attr = attr;
+            morphAttr.name = attr.name;
+            morphAttr.data = morphData;
+            const BYTE_LENGTH = morphData[0].length*4;
+            morphAttr.buffer = Gltf.createBuffer(gl, BYTE_LENGTH, {usage:gl.DYNAMIC_DRAW});
+            if(double){
+              // double
+              // bufferを追加で用意する。
+              morphAttr.shiftedBuffer = Gltf.createBuffer(gl, BYTE_LENGTH, {usage:gl.DYNAMIC_DRAW});
+            }
+            morphAttributes.push(morphAttr);
+          }
+
+          // あとはbindとupdateを作るだけ。bindはvaoにbufferを割り当てる。updateはbufferにデータを供給する。
+
+          // バッファの紐付け（アニメーション変更時）
+          const bind = (vao) => {
+            gl.bindVertexArray(vao);
+            for(const morphAttr of morphAttributes){
+              const {attr, buffer} = morphAttr;
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+              gl.vertexAttribPointer(attr.location, attr.size, attr.type, attr.normalized, 0, 0);
+              gl.enableVertexAttribArray(attr.location);
+              if(double){
+                // double
+                // locationは2つずつずらす。
+                const {shiftedBuffer} = morphAttr;
+                gl.bindBuffer(gl.ARRAY_BUFFER, shiftedBuffer);
+                gl.vertexAttribPointer(attr.location + 2, attr.size, attr.type, attr.normalized, 0, 0);
+                gl.enableVertexAttribArray(attr.location + 2);
               }
             }
-            for(let m=0; m<VERTEX_NUM; m++){
-              finalV[m] += v[m];
-              if(hasNormal){ finalN[m] += n[m]; }
-            }
-
-            // vとnのバッファを作って登録
-            const vBuf = Gltf.createBuf(gl, finalV);
-            const nBuf = (hasNormal ? Gltf.createBuf(gl, finalN) : null);
-
-            const vao = gl.createVertexArray();
-            gl.bindVertexArray(vao);
-            gl.bindBuffer(gl.ARRAY_BUFFER, vBuf);
-            gl.vertexAttribPointer(POSITION_LOC, 3, vType, false, 0, 0);
-            gl.enableVertexAttribArray(POSITION_LOC);
-            if(hasNormal){
-              gl.bindBuffer(gl.ARRAY_BUFFER, nBuf);
-              gl.vertexAttribPointer(NORMAL_LOC, 3, nType, false, 0, 0);
-              gl.enableVertexAttribArray(NORMAL_LOC);
-            }
-            if(hasColor){
-              gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
-              gl.vertexAttribPointer(COLOR_0_LOC, 4, colorType, true, 0, 0);
-              gl.enableVertexAttribArray(COLOR_0_LOC);
-            }
-            if(hasUv){
-              gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-              gl.vertexAttribPointer(TEXCOORD_0_LOC, 2, uvType, false, 0, 0);
-              gl.enableVertexAttribArray(TEXCOORD_0_LOC);
+            gl.bindVertexArray(null);
+          }
+          // データの供給（随時）
+          const update = (frame) => {
+            for(const morphAttr of morphAttributes){
+              const {data, buffer} = morphAttr;
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+              gl.bufferSubData(gl.ARRAY_BUFFER, 0, data[frame % frames]);
+              if(double){
+                // double
+                // 1つずらしたデータを入れる。
+                const {shiftedBuffer} = morphAttr;
+                gl.bindBuffer(gl.ARRAY_BUFFER, shiftedBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, data[(frame + 1) % frames]);
+              }
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuf);
-            gl.bindVertexArray(null);
-            vao.count = indexCount;
-            vao.type = indexType;
-            result.vaos.push(vao);
+          }
+          const result = {frames, bind, update};
+          // includeData:trueとするとanimationごとにdataが入る。
+          // 型付配列がフレーム数分入ってる。
+          if(includeData){
+            result.data = {};
+            for(const morphAttr of morphAttributes){
+              result.data[morphAttr.name] = morphAttr.data;
+            }
           }
           weightAnimations.push(result);
         }
-        return weightAnimations;
+        // なぜanimationsという形にするかというと、拡張の余地を用意しておかないとのちのち困る可能性があるから。
+        return {animations:weightAnimations};
       }
       createSkinMeshAnimations(gl, options = {}){
         const animations = this.animations.skinMesh;
@@ -7524,7 +7690,7 @@
         // skinがmeshesの情報を持ってるので流用します。対応するmeshをこのアニメーションで動かすことができます。
         // バカな例に合わせる必要はありません。
 
-        const {skinId = 0, double = false} = options;
+        const {skinId = 0, double = false, includeData = false} = options;
         const skin = this.skins[skinId];
         const {bones, root, meshes} = skin;
         const boneNum = bones.length-1;
@@ -7564,18 +7730,20 @@
             // nameはUBOで使う
             const bind = (pg, index, name) => {
               gl.bindBufferBase(gl.UNIFORM_BUFFER, index, buf);
-              const dataBufIndex = gl.getUniformBlockIndex(pg, name);
-              gl.uniformBlockBinding(pg, dataBufIndex, index);
+              //const dataBufIndex = ;
+              gl.uniformBlockBinding(pg, gl.getUniformBlockIndex(pg, name), index);
             }
 
             // frameだけ指定すると更新される形
             const update = (frame) => {
               gl.bindBuffer(gl.UNIFORM_BUFFER, buf);
-              gl.bufferSubData(gl.UNIFORM_BUFFER, 0, matrixArrays[frame]);
+              gl.bufferSubData(gl.UNIFORM_BUFFER, 0, matrixArrays[frame % frames]);
               gl.bindBuffer(gl.UNIFORM_BUFFER, null);
             }
 
-            skinMeshAnimations.push({frames, bind, update});
+            const result = {frames, bind, update};
+            if(includeData){ result.data = matrixArrays; }
+            skinMeshAnimations.push(result);
           }else{
             // doubleの場合はbindで配列を指定してprevとnextを指定できるようにする。
             // たとえば4と5で4.3の場合に0.3で補間できるようにするわけ。
@@ -7603,7 +7771,9 @@
               gl.bindBuffer(gl.UNIFORM_BUFFER, null);
             }
             // ここから先はshaderの仕事。まあ、頑張って。
-            skinMeshAnimations.push({frames, bind, update});
+            const result = {frames, bind, update};
+            if(includeData){ result.data = matrixArrays; }
+            skinMeshAnimations.push(result);
           }
         }
         // animationsだけ分けて、共通のboneNumとmeshesとは別にする。
@@ -7637,14 +7807,15 @@
       getTexture(id = 0){
         return this.textures[id];
       }
-      static createBuf(gl, data, target){
+      static createBuffer(gl, data, options = {}){
         // バッファ作成用関数
-        if(target === undefined){
-          target = gl.ARRAY_BUFFER;
-        }
+        // dataは数でもいいし、型付配列とかでもいい。
+        // いずれoptionにすべきだなぁこれ...あとWebGPU版も欲しいかも？
+        const {target = gl.ARRAY_BUFFER, usage = gl.STATIC_DRAW} = options;
+
         const buf = gl.createBuffer();
         gl.bindBuffer(target, buf);
-        gl.bufferData(target, data, gl.STATIC_DRAW);
+        gl.bufferData(target, data, usage);
         gl.bindBuffer(target, null);
         return buf;
       }
@@ -7662,20 +7833,12 @@
         return frames;
       }
       static calcOutputData(data, acc, sampler, frames){
-        //const {frames, size} = inputData;
         const {input, output} = sampler;
         const size = data[acc[output].bufferView].length / data[acc[input].bufferView].length;
-        //const inputData = data[acc[input].bufferView];
-        //const inputMin = acc[input].min[0];
-        //const inputMax = acc[input].max[0];
-        //const frames = Math.round((inputMax-inputMin)*fps) + 1;
 
         const outputData = data[acc[output].bufferView];
-        //const size = outputData.length/inputData.length; // 3とか4とかweight数とか。
         const outputArray = [];
-        //if(frames===1){console.log("outputData"); console.log(outputData)}
         for(let m=0; m<outputData.length; m+=size){
-          //if(frames===1){ console.log(`size:${size}`); console.log(outputData.slice(m, m+size)) }
           outputArray.push(new Array(...outputData.slice(m, m+size)));
         }
 
