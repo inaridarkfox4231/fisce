@@ -3,10 +3,10 @@
  * npm github test.<br>
  * GitHub repository: {@link https://github.com/inaridarkfox4231/fisce}
  * @module fisce
- * @copyright 2025
+ * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.1.10
+ * @version 1.1.11
  */
 
 (function (global, factory) {
@@ -1469,6 +1469,41 @@
       }
     }
 
+    // CrossReferenceArray.
+    class CrossReferenceArray extends Array{
+      constructor(){
+        super();
+      }
+      add(){
+        const elements = (Array.isArray(arguments[0]) ? arguments[0] : [...arguments]);
+        for(const e of elements){
+          this.push(e);
+          e.belongingArray = this; // 所属配列への参照
+        }
+      }
+      remove(element){
+        let index = this.indexOf(element, 0);
+        this.splice(index, 1); // elementを配列から排除する
+      }
+      loop(methodName, args = []){
+        if(this.length === 0){ return; }
+        // methodNameには"update"とか"display"が入る。まとめて行う処理。
+        for(let i = 0; i < this.length; i++){
+          this[i][methodName](...args);
+        }
+      }
+      loopReverse(methodName, args = []){
+        if(this.length === 0){ return; }
+        // 逆から行う。排除とかこうしないとエラーになる。もうこりごり。
+        for(let i = this.length - 1; i >= 0; i--){
+          this[i][methodName](...args);
+        }
+      }
+      clear(){
+        this.length = 0;
+      }
+    }
+
     // Tree.
     // 親はparentで子はSweepArrayで管理。要するに走査前提。ヒエラルキー前提。一応、depthも備えてある。
     // scanningのstatic関数があり、これを使って色々できる仕組み。
@@ -2130,6 +2165,230 @@
       }
       clockFactory(params = {}){
         return new Counter(params);
+      }
+    }
+
+    // Sequencer.
+    class Sequencer{
+      constructor(params = {}){
+        const {loop = false, duration = 1000, delay = 0, step = 1} = params;
+        this.waitingSpotEvents = []; // 待ち状態
+        this.finishedSpotEvents = []; // 実行済み
+        this.bandEvents = []; // おわったら弾く
+        this.elapsed = 0;
+        this.duration = duration; // 可変とする。1000でも200でも48000でも何でも。何なら途中で変更も可能。
+        this.active = false; // pauseの挙動がDiscreteとContinuousで違うのです。
+        this.loop = loop; // オートリセット
+        this.delay = delay; // 一定期間だけおいてから始まる仕組み。
+        this.step = step; // 刻み幅. 評価の際にkeyに掛ける。
+      }
+      reset(){
+        // Discrete: elapsedを0にする...delayを考慮していじるかもしれないが。
+        // Continuous: timeStumpをwindow.performance.now()にしてelapsedを0にする
+        // finishedのspotEventをすべてwaitingに移してkeyでsortする。
+        // bandEventsを空にする
+        // activeをtrueにする
+        this.waitingSpotEvents.push(...this.finishedSpotEvents);
+        this.sortSpotEvents();
+        this.finishedSpotEvents = [];
+        this.bandEvents = [];
+        this.active = true;
+      }
+      pause(){
+        // activeをfalseにする
+        // Discrete: 何もしない
+        // Continuous: pauseTimeStumpを記録する
+      }
+      start(){
+        // activeをtrueにする
+        // Discrete: 何もしない
+        // Continuous: 現在時刻とpauseTimeStumpとの差をtimeStumpに加える
+      }
+      switchActiveState(){
+        // switch active state.
+        if(this.active){
+          this.pause();
+        }else{
+          this.start();
+        }
+      }
+      clockUpdate(){
+        // Discrete: 増やすだけ
+        // Continuous: 時刻を取得してtimeStumpと比較する
+      }
+      update(){
+        if(!this.active) return;
+        // waitingSpotEventsを順に見て行ってelapsed以下のものを実行し
+        // finishedの方に移すだけ。sort済みなので頭から見て行く
+        // 戻り値の型が「BandEvent」ならbandEventsに放り込む。
+        // elapsed < keyでbreakする。もしくは配列の長さが0ならbreakする。while(length>0){ elapsed < key -> break; etc... }
+        // etcといっても実行したのち配列から外してfinishedにぶち込むだけ
+        // bandEventsをさらってactiveでなければ外す。activeならelapsedを渡して実行する。
+
+        while(this.waitingSpotEvents.length > 0){
+          if(this.elapsed < this.waitingSpotEvents[0].key * this.step) break;
+          const spotEvent = this.waitingSpotEvents.shift();
+          const returnValue = spotEvent.execute();
+          // 戻り値がbandEventなら追加
+          if(returnValue instanceof BandEvent){
+            this.bandEvents.push(returnValue);
+          }
+          this.finishedSpotEvents.push(spotEvent);
+        }
+        for(let i=this.bandEvents.length-1; i>=0; i--){
+          const bandEvent = this.bandEvents[i];
+          if(bandEvent.active){
+            // stepで割った値を送る。step指定の場合、durationもそれに従う必要がある。
+            bandEvent.execute(this.elapsed / this.step);
+          }else{
+            this.bandEvents.splice(i, 1);
+          }
+        }
+
+        // これは最後
+        this.clockUpdate();
+        // オートループ
+        if(this.elapsed >= this.duration){
+          this.active = false;
+          if(this.loop) this.reset();
+        }
+      }
+      getProgress(){
+        return this.elapsed / this.duration;
+      }
+      sortSpotEvents(){
+        this.waitingSpotEvents.sort((e0, e1) => {
+          if(e0.key < e1.key){ return -1; }
+          else if(e0.key > e1.key){ return 1; }
+          return 0;
+        });
+      }
+      addEvents(){
+        const events = (Array.isArray(arguments[0]) ? arguments[0] : [...arguments]);
+        // SpotEventの場合はぶち込む
+        // BandEventの場合はfireEventとfinishEventをspotにぶち込む
+        // sortしておわり
+        for(const e of events){
+          if(e instanceof SpotEvent){
+            this.waitingSpotEvents.push(e);
+          }else if(e instanceof BandEvent){
+            this.waitingSpotEvents.push(e.fireEvent);
+            this.waitingSpotEvents.push(e.finishEvent);
+          }
+        }
+        this.sortSpotEvents();
+      }
+      deleteSpotEvent(e){
+        Sequencer.deleteEvent(e, this.waitingSpotEvents);
+        Sequencer.deleteEvent(e, this.finishedSpotEvents);
+      }
+      deleteBandEvent(e){
+        Sequencer.deleteEvent(e, this.bandEvents);
+        this.deleteSpotEvent(e.fireEvent, this.waitingSpotEvents);
+        this.deleteSpotEvent(e.finishEvent, this.finishedSpotEvents);
+      }
+      static deleteEvent(event, array){
+        if(event.name === undefined) return;
+        for(let k=array.length-1; k>=0; k--){
+          if(event.name === array[k].name){
+            array.splice(k, 1);
+          }
+        }
+      }
+    }
+
+    class DiscreteSequencer extends Sequencer{
+      constructor(params = {}){
+        super(params);
+      }
+      reset(){
+        super.reset();
+        this.elapsed = -this.delay; // 離散の場合はdelayがたとえば30なら30フレーム経ってから始まる
+      }
+      pause(){
+        this.active = false;
+      }
+      start(){
+        this.active = true;
+      }
+      clockUpdate(){
+        this.elapsed++;
+      }
+    }
+
+    class ContinuousSequencer extends Sequencer{
+      constructor(params = {}){
+        super(params);
+        this.timeStump = 0;
+        this.pauseTimeStump = 0;
+      }
+      reset(){
+        super.reset();
+        this.timeStump = window.performance.now() + this.delay; // 連続の場合はたとえばdelayが200なら200ms経ってから。
+        this.elapsed = -this.delay;
+      }
+      pause(){
+        this.pauseTimeStump = window.performance.now();
+        this.active = false;
+      }
+      start(){
+        this.timeStump += window.performance.now() - this.pauseTimeStump;
+        this.active = true;
+      }
+      clockUpdate(){
+        this.elapsed = window.performance.now() - this.timeStump;
+      }
+    }
+
+    class SpotEvent{
+      constructor(key = 0, params = {}){
+        this.key = key;
+        const {
+          name = "", action = () => {}
+        } = params;
+        this.name = name;
+        this.action = action;
+      }
+      execute(){
+        // actionの戻り値を返す
+        return this.action();
+      }
+      static create(key, action = () => {}, name = ""){
+        return new SpotEvent(key, {action, name});
+      }
+    }
+
+    class BandEvent{
+      constructor(key = 0, params = {}){
+        this.key = key;
+        const {
+          name = "", action = () => {},
+          duration = 1, fire = () => {}, finish = () => {},
+        } = params;
+        this.name = name;
+        this.action = action;
+        this.duration = duration;
+        this.active = false;
+        // fireがこれを出力する
+        this.fireEvent = new SpotEvent(key, {name:`${name}_fire`, action:() => {
+          fire();
+          this.active = true;
+          return this;
+        }});
+        this.finishEvent = new SpotEvent(key + duration, {name:`${name}_finish`, action:() => {
+          if(!this.active) return null; // activeでなければ実行しない
+          finish();
+          this.active = false;
+          return null;
+        }});
+      }
+      execute(elapsed){
+        if(!this.active) return;
+        const progress = Math.max(0, Math.min(1, (elapsed - this.key) / this.duration));
+        return this.action(progress);
+      }
+      static create(key, duration = 1, action = () => {}, name = "", fire = () => {}, finish = () => {}){
+        return new BandEvent(key, {name, action, duration, fire, finish});
       }
     }
 
@@ -2802,13 +3061,16 @@
 
     utils.Damper = Damper;
 
+    // Array関連
     utils.ArrayWrapper = ArrayWrapper;
     utils.RandomChoiceArray = RandomChoiceArray;
     utils.RoundRobinArray = RoundRobinArray;
     utils.SweepArray = SweepArray;
     utils.BooleanArray = BooleanArray;
-    utils.Tree = Tree;
+    utils.CrossReferenceArray = CrossReferenceArray;
 
+    // Tree関連
+    utils.Tree = Tree;
     utils.Vertice = Vertice;
     utils.Edge = Edge;
 
@@ -2825,6 +3087,13 @@
     utils.Schedule = Schedule;
     utils.ScheduledTimeArrow = ScheduledTimeArrow;
     utils.ScheduledCounter = ScheduledCounter;
+
+    // Sequencer関連
+    utils.Sequencer = Sequencer;
+    utils.ContinuousSequencer = ContinuousSequencer;
+    utils.DiscreteSequencer = DiscreteSequencer;
+    utils.SpotEvent = SpotEvent;
+    utils.BandEvent = BandEvent;
 
     // Easing.
     utils.Easing = Easing;
@@ -3714,6 +3983,405 @@
     ia.Soldier = Soldier; // 追加(20241020)
 
     return ia;
+  })();
+
+  // ------------------------------------------------------------------------------------------------------------------------------------------ //
+
+  // foxAudio.
+  const foxAudio = (function(){
+    const audio = {};
+
+    class AudioPlayer{
+      constructor(){
+        this.initializeFinished = false;
+        this.actx = undefined;
+        this.noiseBuffers = {};
+        this.periodicWaves = {};
+        this.audioBuffers = {};
+        this.frequencyFunctions = {};
+        this.analyser = null;
+        this.dataArray = null;
+        this.arrayType = "uint"; // "uint"/"float"
+      }
+      async initialize(callback = (async function(){})){
+        if(this.actx !== undefined){ return; }
+        this.actx = new AudioContext();
+        // 長さ1秒のデフォルトを用意しておく
+        this.createWhiteNoiseBuffer();
+        this.createPinkNoiseBuffer();
+        this.createBrownNoiseBuffer();
+        await callback();
+        // 最初のインタラクションで初期化だけしたい場合のためにフラグを設ける
+        this.initializeFinished = true;
+      }
+      initAnalyser(options = {}){
+        // fftSizeは2^5～2^15の2ベキ
+        const {
+          fftSize = 2048, arrayType = "uint"
+        } = options;
+        this.analyser = this.actx.createAnalyser();
+        const bufferSize = fftSize/2;
+        // "uint"または"float"を指定できる。
+        this.arrayType = arrayType;
+        // 型付配列を用意する
+        switch(arrayType){
+          case "uint":
+            this.dataArray = new Uint8Array(bufferSize); break;
+          case "float":
+            this.dataArray = new Float32Array(bufferSize); break;
+          default:
+            this.dataArray = null;
+        }
+      }
+      getAnalyseData(analyseType = "time"){
+        // 準備出来ていないならばnullを返す
+        if(this.analyser === null || this.dataArray === null){
+          return null;
+        }
+        // analyseTypeは"time"/"freq"を指定できる。
+        // 基本的にはこれを毎フレーム実行してデータを取得する。
+        switch(`${this.arrayType}_${analyseType}`){
+          case "uint_time":
+            this.analyser.getByteTimeDomainData(this.dataArray); break;
+          case "float_time":
+            this.analyser.getFloatTimeDomainData(this.dataArray); break;
+          case "uint_freq":
+            this.analyser.getByteFrequencyData(this.dataArray); break;
+          case "float_freq":
+            this.analyser.getFloatFrequencyData(this.dataArray); break;
+          default:
+            return null;
+        }
+        return this.dataArray;
+      }
+      createWhiteNoiseBuffer(duration = 1, name = "white_1"){
+        const {actx} = this;
+
+        const bufferSize = Math.round(actx.sampleRate * duration);
+        const noiseBuffer = new AudioBuffer({
+          length: bufferSize,
+          sampleRate: actx.sampleRate,
+        });
+        // ホワイトノイズ
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        this.noiseBuffers[name] = {buffer:noiseBuffer, duration:duration};
+        this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
+      }
+      createPinkNoiseBuffer(duration = 1, name = "pink_1"){
+        // p5から移植してみる
+        // https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5579
+        const {actx} = this;
+
+        const bufferSize = Math.round(actx.sampleRate * duration);
+        const noiseBuffer = new AudioBuffer({
+          length: bufferSize,
+          sampleRate: actx.sampleRate,
+        });
+        const data = noiseBuffer.getChannelData(0);
+        let b0, b1, b2, b3, b4, b5, b6;
+        b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
+
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.969 * b2 + white * 0.153852;
+          b3 = 0.8665 * b3 + white * 0.3104856;
+          b4 = 0.55 * b4 + white * 0.5329522;
+          b5 = -0.7616 * b5 - white * 0.016898;
+          data[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+          data[i] *= 0.11;
+
+          b6 = white * 0.115926;
+        }
+
+        this.noiseBuffers[name] = {buffer:noiseBuffer, duration:duration};
+        this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
+      }
+      createBrownNoiseBuffer(duration = 1, name = "brown_1"){
+        // p5から移植してみる
+        // https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5604
+        const {actx} = this;
+
+        const bufferSize = Math.round(actx.sampleRate * duration);
+        const noiseBuffer = new AudioBuffer({
+          length: bufferSize,
+          sampleRate: actx.sampleRate,
+        });
+        const data = noiseBuffer.getChannelData(0);
+        let lastOut = 0.0;
+
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          data[i] = (lastOut + 0.02 * white) / 1.02;
+          lastOut = data[i];
+          data[i] *= 3.5;
+        }
+
+        this.noiseBuffers[name] = {buffer:noiseBuffer, duration:duration};
+        this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
+      }
+      playSimpleNoise(name = "white_1", useFilter = true, volume = 1,  type = "bandpass", frequency = 2000, gain = 0, q = 1){
+        // 簡易版
+        this.playNoise({
+          name:name,
+          volume:volume, useFilter:useFilter,
+          type, frequency, gain, q
+        });
+      }
+      playNoise(params = {}){
+        const {actx} = this;
+        const {name = "white_1"} = params;
+
+        const noiseBuffer = this.noiseBuffers[name];
+        const {buffer, duration} = noiseBuffer;
+
+        // filterFunction
+        // frequencyなどはAudioParamなので工夫次第でいろんなことができるわけです
+        // いろいろね
+        // 第二引数にactxを取れるようにしましょ。
+        const {
+          volume = 1, useFilter = true,
+          type = "bandpass", frequency = 2000, gain = 0, q = 1,
+          filterFunction = AudioPlayer.defaultFilterFunction,
+          gainFunction = AudioPlayer.defaultADSR,
+          useAnalyser = false
+        } = params;
+
+        const source = new AudioBufferSourceNode(actx, {buffer: buffer });
+        const gainNode = actx.createGain();
+
+        if(useFilter){
+          const biquadFilterNode = new BiquadFilterNode(this.actx);
+
+          filterFunction(actx, biquadFilterNode, type, frequency, gain, q);
+
+          source.connect(biquadFilterNode);
+          biquadFilterNode.connect(gainNode);
+        }else{
+          source.connect(gainNode);
+        }
+
+        // gainFunctionをいじるのは簡易版はやめましょ
+        gainFunction(actx, gainNode.gain, volume, duration);
+
+        // 最終接続
+        if(this.analyser !== null && useAnalyser){
+          gainNode.connect(this.analyser);
+          this.analyser.connect(actx.destination);
+        }else{
+          gainNode.connect(actx.destination);
+        }
+        //connectFunction(actx, gainNode);
+
+        source.start();
+      }
+      registPeriodicWave(name = "wave", realPart = [0,1], imagPart = [0,1]){
+        const wave = new PeriodicWave(this.actx, {
+          real: realPart,
+          imag: imagPart,
+        });
+        this.periodicWaves[name] = wave;
+      }
+      async registPeriodicWaveFromJSON(name, url){
+        // getJSONの移植
+        const response = await fetch(url);
+        if(!response.ok){
+          throw new Error(`response.status: ${response.status}`);
+        }
+        // jsonへの変換
+        const json = await response.json();
+        this.registPeriodicWave(name, json.real, json.imag);
+      }
+      registFrequencyFunction(name = "default", func = (actx, freq) => {}){
+        // まあ何でもありっていう。
+        this.frequencyFunction[name] = func;
+      }
+      registDoppler(name = "doppler", intervals = [], stops = []){
+        // Doppler関数を登録するだけ。
+        this.frequencyFunctions[name] = AudioPlayer.createDoppler(intervals, stops);
+      }
+      playSimpleOscillator(frequency = 440, type = "square", volume = 1, duration = 1, name = "", frequencyFunction = AudioPlayer.defaultFrequencyFunction){
+        this.playOscillator({
+          frequency, type, volume, duration, name, frequencyFunction
+        });
+      }
+      playOscillator(params = {}){
+        // frequency, type, volume, duration, customの場合はname. いずれ登録関数を作る。ファイル名から登録できるようにする。
+        // 一応frequencyFunctionとか用意するのもいいかと思います。ん～...actxを入れる？
+        const {actx} = this;
+        // ""の場合はまあ、customではないということ。
+        const {name = ""} = params;
+
+        const {
+          frequency = 440, type = "square", volume = 1, duration = 1,
+          frequencyFunction = AudioPlayer.defaultFrequencyFunction,
+          gainFunction = AudioPlayer.defaultADSR,
+          useAnalyser = false, convolverBuffer = ""
+        } = params;
+        const properFrequency = (typeof(frequency) === 'string' ? AudioPlayer.frequencyDict[frequency] : frequency);
+        const oscillatorOptions = {
+          frequency:properFrequency,
+          type:type
+        }
+
+        if(type === "custom"){
+          if(name === "" || this.periodicWaves[name] === undefined){
+            return;
+          }
+          oscillatorOptions.periodicWave = this.periodicWaves[name];
+        }
+        const osc = new OscillatorNode(actx, oscillatorOptions);
+
+        const gainNode = actx.createGain();
+
+        if(convolverBuffer !== ""){
+          const convolverNode = actx.createConvolver();
+          convolverNode.buffer = this.audioBuffers[convolverBuffer];
+          osc.connect(convolverNode);
+          convolverNode.connect(gainNode);
+        }else{
+          osc.connect(gainNode);
+        }
+
+        // 振動数をいじる場合。関数群から出せるようにする
+        if(typeof frequencyFunction === 'string'){
+          this.frequencyFunctions[frequencyFunction](actx, osc.frequency);
+        }else if(typeof frequencyFunction === 'function'){
+          frequencyFunction(actx, osc.frequency);
+        }
+
+        // gainFunctionをいじるのは簡易版はやめましょ
+        gainFunction(actx, gainNode.gain, volume, duration);
+        // 最終接続
+        const compressor = actx.createDynamicsCompressor();
+        gainNode.connect(compressor);
+
+        if(this.analyser !== null && useAnalyser){
+          compressor.connect(this.analyser);
+          this.analyser.connect(actx.destination);
+        }else{
+          compressor.connect(actx.destination);
+        }
+        //connectFunction(actx, compressor);
+
+        osc.start();
+        osc.stop(actx.currentTime + duration);
+      }
+      async registAudioBuffer(name, url){
+        // getArrayBufferの移植
+        const response = await fetch(url);
+        if(!response.ok){
+          throw new Error(`response.status: ${response.status}`);
+        }
+        // ArrayBufferの取得。awaitが無いとエラーになる場合がある
+        const soundArrayBuffer = await response.arrayBuffer();
+        // AudioBufferにdecodeする
+        const buffer = await this.actx.decodeAudioData(soundArrayBuffer);
+        this.audioBuffers[name] = buffer;
+      }
+      playAudioBuffer(params = {}){
+        const {actx} = this;
+        const {
+          name = "", volume = 1,
+          gainFunction = AudioPlayer.defaultGainFunction,
+          useAnalyser = false, convolverBuffer = ""
+        } = params;
+
+        if (name === "" || this.audioBuffers[name] === undefined) return;
+
+        const src = new AudioBufferSourceNode(actx, {buffer: this.audioBuffers[name] });
+        // 最終接続
+
+        const gainNode = actx.createGain();
+
+        if(convolverBuffer !== ""){
+          const convolverNode = actx.createConvolver();
+          convolverNode.buffer = this.audioBuffers[convolverBuffer];
+          src.connect(convolverNode);
+          convolverNode.connect(gainNode);
+        }else{
+          src.connect(gainNode);
+        }
+
+        // 音量設定
+        gainFunction(actx, gainNode.gain, volume);
+
+        if(this.analyser !== null && useAnalyser){
+          gainNode.connect(this.analyser);
+          this.analyser.connect(actx.destination);
+        }else{
+          gainNode.connect(actx.destination);
+        }
+
+        src.start();
+      }
+    }
+
+    // 基本的なADSR
+    // sustainLevelRatio:0.2, attackRatio:0.04, sustainRatio:0.15, decayRatio:0.45.
+    // attackRatioの間にvolumeまで上げて、sustainLevelまで下げて、sustainRatioだけ保って、decayRatioで落とす。
+    // って思ったけどちょっといじって0.2->0.1としました。いいでしょ。
+    AudioPlayer.defaultADSR = (actx, gain, attackLevel = 1.0, duration = 1.0) => {
+      gain.setValueAtTime(0, actx.currentTime);
+      gain.linearRampToValueAtTime(attackLevel, actx.currentTime + duration*0.04);
+      gain.linearRampToValueAtTime(attackLevel*0.2, actx.currentTime + duration*0.4);
+      gain.linearRampToValueAtTime(attackLevel*0.08, actx.currentTime + duration*0.55);
+      gain.linearRampToValueAtTime(0, actx.currentTime + duration);
+    }
+    AudioPlayer.defaultFilterFunction = (actx, filterNode, type, frequency, gain, q) => {
+      filterNode.type = type;
+      filterNode.frequency.value = frequency;
+      filterNode.gain.value = gain;
+      filterNode.Q.value = q;
+    }
+    const notes = [
+      "A3", "B3", "C3", "D3", "E3", "F3", "G3",
+      "A4", "B4", "C4", "D4", "E4", "F4", "G4",
+      "A5", "B5", "C5", "D5", "E5", "F5", "G5",
+      "A6", "B6", "C6", "D6", "E6", "F6", "G6",
+      "A7", "B7", "C7", "D7", "E7", "F7", "G7"
+    ];
+    const noteKeys = [
+       0,  2,  3,  5,  7,  8, 10,
+      12, 14, 15, 17, 19, 20, 22,
+      24, 26, 27, 29, 31, 32, 34,
+      36, 38, 39, 41, 43, 44, 46,
+      48, 50, 51, 53, 55, 56, 58
+    ];
+    const frequencyDict = {};
+    for(let i=0; i<35; i++){
+      frequencyDict[notes[i]] = 110*Math.pow(2, noteKeys[i]/12);
+      frequencyDict[`${notes[i]}+`] = 110*Math.pow(2, (noteKeys[i]+1)/12);
+      frequencyDict[`${notes[i]}-`] = 110*Math.pow(2, (noteKeys[i]-1)/12);
+    }
+    const intervalDict = {};
+    for(let i=-36; i<=36; i++){
+      intervalDict[i] = Math.pow(2, i/12);
+    }
+    AudioPlayer.frequencyDict = frequencyDict;
+    AudioPlayer.defaultFrequencyFunction = (actx, freq) => {};
+    AudioPlayer.defaultGainFunction = (actx, gain, volume) => {
+      gain.setValueAtTime(volume, actx.currentTime);
+    };
+    // -36～36（3オクターブ）の範囲で上げたり下げたりする。12で丁度1オクターブですね。
+    AudioPlayer.createDoppler = (intervals = [], stops = []) => { return (function(actx, freq){
+      const defaultFrequency = freq.value;
+      for(let i=0; i<intervals.length; i++){
+        if(intervals[i] === undefined || stops[i] === undefined) break;
+        if(typeof intervals[i] !== 'number' || typeof stops[i] !== 'number') break;
+
+        const intervalFactor = Math.max(-36, Math.min(36, Math.floor(intervals[i])));
+        freq.linearRampToValueAtTime(defaultFrequency * intervalDict[intervals[i]], actx.currentTime + stops[i]);
+      }
+    }); };
+
+    audio.AudioPlayer = AudioPlayer;
+
+    return audio;
   })();
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
@@ -6986,22 +7654,62 @@
     // gl, url, optionsから作る。
     async function createGltf(url, options = {}){
       const gltfjson = await ResourceLoader.getJSON(url);
-      const gltfObject = new Gltf(gltfjson, options);
-      return gltfObject;
+      return new Gltf(gltfjson, options);
+    }
+
+    // createGlb.
+    // glbから作る。
+    // 「BIN 」のあとが単独のバイナリデータになっているのでそれを取得し、
+    // 前半のJSONパートと合わせて解釈する
+    async function createGlb(url, options = {}){
+      const bin = await ResourceLoader.getArrayBuffer(url);
+      const ua = new Uint8Array(bin);
+      // バイナリ文字列に変換する
+      const hexString = ua.toHex();
+      // BINの開始位置を取得する
+      //const jsonStartIndex = hexString.indexOf("4a534f4e")/2+4; // 「JSON」
+      const binaryStartIndex = hexString.indexOf("42494e00")/2+4; // 「BIN 」
+
+      // バイトデータを取得する
+      const BYTE_LENGTH = ua.length-binaryStartIndex;
+      // これが出力先
+      const ab = new ArrayBuffer(BYTE_LENGTH);
+      // Uint8Arrayを使ってデータを入力する
+      const inputter = new Uint8Array(ab);
+      for(let k=0; k<BYTE_LENGTH; k++){ inputter[k] = ua[k+binaryStartIndex]; }
+
+      const jsonPart = hexString.split("42494e00")[0]; // BINの前まで
+      const jsonStart = jsonPart.indexOf('7b')/2; // 「{」
+      const jsonEnd = jsonPart.lastIndexOf('7d')/2+1; // 「}」
+
+      // jsonのデータを取得する
+      let jsonString = "";
+      for(let i=jsonStart; i<jsonEnd; i++){ jsonString += String.fromCharCode(ua[i]); }
+      // jsonに変換
+      const jsonData = JSON.parse(jsonString);
+
+      //console.log(`jsonStartIndex:${jsonStartIndex}, binaryStartIndex:${binaryStartIndex}`);
+      const {fps} = options;
+      return new Gltf(jsonData, {fps:fps, arrayBuffer:ab});
     }
 
     // class Gltf.
     // optionsは今のところ、fpsだけ。24とか60とか。
     // 非同期のloadTexturesでimagesがあればtexturesに色々入ってgetTextureで取得
     // createVAOはoptionsを持ちここでidやlocationを指定。
+    // arrayBufferオプションがnullでない場合（glbから作る場合）は、それを採用する。そうでなければgltfから。
     class Gltf{
       constructor(gltfjson, options = {}){
         // fpsは事前に設定する
-        const {fps = 24} = options;
+        const {fps = 24, arrayBuffer = null} = options;
         this.fps = fps;
         this.gltf = gltfjson;
         this.buffers = [];
-        this.encodeBuffers();
+        if(arrayBuffer === null){
+          this.encodeBuffers();
+        }else{
+          this.buffers.push(arrayBuffer);
+        }
         this.bufferViews = [];
         this.encodeBufferViews();
         this.nodes = [];
@@ -7801,7 +8509,6 @@
           const url = `data:${mime};base64,${base64String}`;
           const texture = await ResourceLoader.getImage(url);
           this.textures.push(texture);
-          //this.textureURLs.push();
         }
       }
       getTexture(id = 0){
@@ -7908,6 +8615,7 @@
     applications.TransformTreeArray = TransformTreeArray;
     applications.BoneTree = BoneTree;
     applications.createGltf = createGltf;
+    applications.createGlb = createGlb;
     applications.Gltf = Gltf;
 
     // Transform関連
@@ -7949,6 +8657,7 @@
   exports.webglUtils = webglUtils;
   exports.foxUtils = foxUtils;
   exports.foxIA = foxIA;
+  exports.foxAudio = foxAudio;
   exports.foxTess = foxTess;
   exports.fox3Dtools = fox3Dtools;
   exports.foxApplications = foxApplications;
