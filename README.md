@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.11/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.12/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.11/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.12/src/index.min.js"></script>
 ```
 
 memo  
@@ -165,3 +165,37 @@ foxAudio
 Audio関連。一応今のところはWebAudioAPIで遊べる必要最低限の機能だけ用意しました  
 p5.Soundっぽくとかそういうことではなくて自分が使いたい機能をミニマムで揃えました  
 今できるのはNoise,Oscillator,AudioBuffer再生,エフェクトはDopplerとConvolverだけ。そんなところ。  
+
+### 1.1.12
+簡単なvibratoを実装。registVibratoで登録してfrequencyFunctionに設定する。  
+frequencyFunctionで配列を可能にした。複数適用できる。  
+cubaseがA3=440らしいのでA3=440Hzにした。以前はA5=440Hzだったので2つ上がる形。2つ下げてください。  
+ナチュラルを追加。An,Bn,...,GnはA,B,...,Gと同じ高さだが、調号の影響を回避するために用意する。  
+調号は無印に対してしか機能しないのでそこが違う。  
+defaultADSRのduration相当の部分を2倍にした。音が切れるまで大体duration*0.55しかかからないため、感覚とずれる。  
+それを補正するために2倍にする。こうすることで「つながる」ので。ひとまずこれでいってみる。  
+playOscillator関連のメソッドでgetFreqを実装してそれで振動数を取得できるように仕様変更。  
+いずれ調号とか反映できるようにする。  
+standardParseCodeで記号表記をcodeと演奏時間にできる。引数はcodeとstep.  
+たとえばAなら440Hz(A3)の、stepが250msなら250ms. +-nで臨時記号。^で1オクターブ上げる、_で下げる。  
+lで2倍、sで0.5倍、dで1.5倍（dは1つまで）。fで強さ1.5倍、pで強さ0.666倍。基本は1です。  
+{code, duration, volume}を返す。あとは好きなように。   
+BulletとGunの仕様を作りました。これを使うと勝手に生成して消える処理を作れます。楽しいね。  
+使い方？基本Gunしか使わないです。いずれ機能ごとにページ作ろうか...（自サイトの方で）  
+名付けてfisceUsersManual. いずれ、いずれね...  
+
+Sequencerの補助機能として、ScoreParserを導入。  
+使い方は別ページでまとめようと思います。ざっくりいうと楽譜を翻訳してシーケンサーを作るためのもの。  
+通常のシーケンサーとしても使えますが、楽譜としての使い方を想定しています。お手柔らかに...  
+追加仕様としてSpotEventとBandEventでkeyが使えるようになりました。  
+SpotEventのactionの引数はkeyのみ、BandEventは第一引数が引き続きprogressで第二引数がkeyです。  
+たとえば表示位置をkeyでいじってほいほい！とかできるでしょう。多分ね。  
+
+SequencerのオプションにhiddenPauseを追加。できるだけシンプルにしたかったんだけど仕方ない。  
+これがあると画面遷移の際に自動でpauseが発動する。  
+ほんとはスケジューリングすれば画面遷移で音が止まることはなく、  
+たとえばp5.Soundがこれをやっているが、  
+ぶっちゃけYoutubeとかに上げた動画やaudioタグの音声を再生しているならともかく、  
+インタラクティブアクションや見て楽しむコンテンツを音「だけ」再生し続けるメリットは皆無なので、  
+どうでもいいです。  
+フレームアニメーションは止まるんですよ。音だけ動いてても仕方ないでしょ。  
