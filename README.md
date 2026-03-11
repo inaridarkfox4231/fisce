@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.1.12/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.1.13/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.12/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.1.13/src/index.min.js"></script>
 ```
 
 memo  
@@ -199,3 +199,40 @@ SequencerのオプションにhiddenPauseを追加。できるだけシンプル
 インタラクティブアクションや見て楽しむコンテンツを音「だけ」再生し続けるメリットは皆無なので、  
 どうでもいいです。  
 フレームアニメーションは止まるんですよ。音だけ動いてても仕方ないでしょ。  
+
+### 1.1.13
+Gunの使い勝手が悪い（Bulletを隠蔽できない）のが不便なので改良。  
+registWeaponの対象は関数のみとし、引数はオブジェクトに限定せず何でもありとする。  
+さらに、用途を明示した個別の関数も用意。  
+ScoreParserにisActiveを追加。シーケンサーのアクティブ状態を取得できる。  
+getFreq()で翻訳できないときに440Hzを返すように変更  
+CrossReferenceArrayにおいてremoveでindexOfの結果が-1でも削除する仕様になってたのを修正  
+Bulletのkillで親のremoveを使わないように修正  
+SequencerのhiddenPauseをやめてhidden:"pause"に変更。さらにhidden:"reset"の場合reset,pauseの順に両方実行される  
+もともとresetも実行するつもりだったがpauseだけに、しかし選べるようにした方がいいことになった。  
+SequencerにbandEventAlwaysを追加。デフォルトfalse. これがtrueだとpause中もbandEventが実行される。  
+イベントの内容によっては不具合が生じるので注意だが、ポーズ中に描画が実行されないと具合が悪い場合があるのでそのための処置。  
+hidden, bandEventAlwaysのいずれもcreateSequencerでオプションとして利用できる。  
+AudioPlayer.isValidCodeでコード表記になってるかどうか調べる  
+ScoreParser.isValidScoreでスコア表記になってるかどうか調べる  
+こうしないと新しく文字を追加する際に困るので  
+まああり得ないことを祈るけどね...これで充分だと思ってる。  
+Bulletにpause/start/switchActiveStateを追加。それと同時にGunの方にまとめて適用する関数を追加。  
+「消えない」Bulletとかで役に立つかも。それと「group」を追加。これらのメソッドの適用対象を絞る。  
+これにより消えないBulletに消えるBulletを発射させて、それをやったりやんなかったり、そういうことができるようになる。  
+majorとminorを一通り用意。文字列で音を出す場合に、オシレータの出力振動数に変化を加えられる。  
++-nが付与されている場合は変更されない。  
+
+gainFunctionを文字列から呼び出せるようにし、reverb_curve0を追加。  
+従来のそれより割とうまくADSRを表現できてるかと思います。多分ね。  
+これでリリース出来ます。よし。  
+noiseとwaveTableのpresetを用意  
+使うにはinitializeのあとでawaitでpresetInitializeを実行する  
+ただしデフォルトではすべてfalseなので何にも用意されない。勝手に全部用意されたら困る場合もあるので。  
+noiseを使う場合はcreatePresetNoises:true, waveTableを使う場合はcreatePresetWaveTables:trueしてください。  
+ついでにshowAvailable:trueにすると使える一覧を取得できるので。  
+使う場合はtype:'custom'でname:'waveTable'名です。おわり。おわりです。  
+
+ああそうだ。  
+gainFunctionのデフォルトをreverb_curve0にする。一応ね。  
+defaultADSRは'default'に入ってるので、使う場合はgainFunction:'default'してください。今回の更新は以上です。  
