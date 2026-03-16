@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.1.13
+ * @version 1.1.14
  */
 
 (function (global, factory) {
@@ -1536,6 +1536,13 @@
         this.timeStump = 0;
         this.pauseTimeStump = 0; // pause用
         this.active = true; // pause用
+        // methodsの中を見る
+        const {methods = {}} = params;
+        // この中身は関数...のものだけフェッチして、keyが名前で、valueはthisをbindする形で登録される。
+        for(const [name, func] of Object.entries(methods)){
+          if(typeof func !== 'function') continue;
+          this[name] = () => { func(this); };
+        }
         if(this.type === 'continuous'){ this.timeStump = window.performance.now(); }
       }
       calcProgress(){
@@ -1712,36 +1719,58 @@
       }
       remove(groupName){
         if(arguments.length === 0){
-          this.loop("remove");
+          // ここもおそらくloopReverseでないと意図した挙動にならない可能性がある
+          this.loopReverse("remove");
           return;
         }
         if(typeof(groupName) === 'string'){
+          // 複数まとめて削除するときはloopReverse, これ鉄則。
           for(let k=this.length-1; k>=0; k--){
             if(this[k].group !== groupName) continue;
             this.splice(k, 1);
           }
         }else{
-          // groupNameのところに要素がある場合はCrossReferenceArrayのそれと同じ処理
+          // groupNameのところに要素がある場合はCrossReferenceArrayのそれと同じ処理とする
           const index = this.indexOf(groupName, 0);
           if(index >= 0){
             this.splice(index, 1);
           }
         }
       }
+      execute(method, groupName){
+        // bulletに設定したメソッドを適用する形。なんでもあり。
+        if(arguments.length === 0) return;
+        if(arguments.length === 1){
+          this.loopReverse(method);
+          return;
+        }
+        // 逆順で適用する
+        for(let i=this.length-1; i>=0; i--){
+          const b = this[i];
+          if(b.group !== groupName) continue;
+          if(b[method] === undefined) continue;
+          b[method]();
+        }
+      }
     }
 
-    const derivedMethodsFromBullet = ["display", "update", "pause", "start", "switchActiveState"];
+    // killも追加で。
+    const derivedMethodsFromBullet = ["display", "update", "pause", "start", "switchActiveState", "kill"];
     for(const method of derivedMethodsFromBullet){
       Gun.prototype[method] = (function(groupName){
         // この場合thisはGunのインスタンスになる。
         // 引数が無い場合は全てに適用する
         if(arguments.length === 0){
-          this.loop(method);
+          // killだけはloopReverseでないと意図した挙動にならない。
+          // 他のメソッドはリバーシブルなので全部loopReverseにしてしまえばいい。
+          this.loopReverse(method);
           return;
         }
         // 引数がある場合はグループに対して適用する
         if(typeof(groupName) === 'string'){
-          for(const b of this){
+          // こっちもリバースにしろや！！！これでkillも含めて全てに適用できる。
+          for(let i=this.length-1; i>=0; i--){
+            const b = this[i];
             if(b.group !== groupName) continue;
             b[method]();
           }
@@ -2541,6 +2570,7 @@
         const events = (Array.isArray(arguments[0]) ? arguments[0] : [...arguments]);
         // SpotEventの場合はぶち込む
         // BandEventの場合はfireEventとfinishEventをspotにぶち込む
+        // オブジェクトの場合はこっちで用意する。shape:'spot'/'band'で分ける（デフォルトは'spot'.）
         // sortしておわり
         for(const e of events){
           if(e instanceof SpotEvent){
@@ -2548,6 +2578,21 @@
           }else if(e instanceof BandEvent){
             this.waitingSpotEvents.push(e.fireEvent);
             this.waitingSpotEvents.push(e.finishEvent);
+          }else if(typeof e === 'object'){
+            const {key, shape = 'spot'} = e;
+            switch(shape){
+              case 'spot':
+                const spot_event = new SpotEvent(key, e);
+                this.waitingSpotEvents.push(spot_event);
+                break;
+              case 'band':
+                const band_event = new BandEvent(key, e);
+                this.waitingSpotEvents.push(band_event.fireEvent);
+                this.waitingSpotEvents.push(band_event.finishEvent);
+                break;
+              default:
+                continue;
+            }
           }
         }
         this.sortSpotEvents();
@@ -2686,13 +2731,60 @@
       // 無意味な改行を追加し、行コメント記号から改行エスケープまでの部分を排除する。
       const t2 = t1.concat("\\n").replaceAll(/(?<=\/\/).*?(?=\\n)/g, "");
       // セミコロンを改行にする。あとで変換しないとコメント内の;が引っかかる罠（怖い）
-      const t2_2 = t2.replaceAll(";", "\\n");
+      const t3 = t2.replaceAll(";", "\\n");
       // コメント記号の残骸と半角スペースを削除
-      const t3 = t2_2.replaceAll(/\/\*\*\//g,"").replaceAll(/\/\//g,"").replaceAll(" ", "");
+      const t4 = t3.replaceAll(/\/\*\*\//g,"").replaceAll(/\/\//g,"").replaceAll(" ", "");
+      // 改行の後に「|」が連続している場合は同じパートとみなす。空白から始めたい場合は「.」を置けばいいのでそれで。
+      // たとえば各パートが長くて一列に書きたくない場合にこれを使える。
+      const t5 = t4.replaceAll("\\n|", "|");
       // おわり。
       // \\nでsplitして配列を返す。その際、空文字列の行を排除する。
-      const array = t3.split("\\n").filter(s=>s.length > 0);
+      const array = t5.split("\\n").filter(s=>s.length > 0);
       return secondParse(array);
+    }
+
+    // 繰り返しを導入。
+    // ()内部の定義に関してはisValidScoreを使いました
+    function applyRepeatSymbol(s){
+      // ちょっとズルをします。というか()内部で指定された記号以外の記号を使うことは認められていません。
+      const result = s.replaceAll(/\([A-Za-z0-9\[\]\{\}\^_\+\-\.]*?\)\*?[0-9]{1,}/g, (part) => {
+      	const repeatString = part.match(/(?<=\().*?(?=\))/)[0];
+      	const repeatCount = Number(part.match(/(?<=\*).*(?=$)/)[0]);
+      	return repeatString.repeat(repeatCount);
+      });
+      // sample: "A44(CD)*7Ghtl(8K5)*4__)*98__(E33)*(8UI)*3^8UJL()*4W";
+      //console.log(result); // A44CDCDCDCDCDCDCDGhtl8K58K58K58K5__)*98__(E33)*8UI8UI8UI^8UJLW
+      return result;
+    }
+
+    // ユーザー定義で変数を用意し、そのあとに@で内容を続けることで、
+    // 局所的に一時変数を使う小技をやりたいので、そのための関数。
+    // あ！！しまった、@が無い場合は...そのまま返してください...ごめんなさい。
+    // @が無い場合は従来通りなのでそのまま返します。@がある場合に、ユーザー定義部分をパースします。
+    // ごめんなさいです。
+    function parseUserDefines(s){
+      // @が存在しない場合はsをvalueとして出力する
+      if(s.match(/@/) === null){
+        return {value:s, userDefines:{}};
+      }
+      // sの想定形状：a=0,b=1,c=2@helloWorld
+      const afterAtMark = s.match(/(?<=@).*?(?=$)/);
+      const value = (afterAtMark === null ? "" : afterAtMark[0]);
+      const beforeAtMark = s.match(/(?<=^).*?(?=@)/);
+      if(beforeAtMark === null){
+        return {value, userDefines:{}};
+      }
+      const allDefines = beforeAtMark[0].split(',');
+      const userDefines = {};
+      if(allDefines !== null){
+       for(const defineBlock of allDefines){
+         const left = defineBlock.match(/(?<=^).+(?=\=)/);
+         const right = defineBlock.match(/(?<=\=).+(?=$)/);
+         if(left===null||right===null)continue;
+         userDefines[left[0]] = right[0];
+        }
+      }
+      return { value, userDefines };
     }
 
     function secondParse(a){
@@ -2713,20 +2805,32 @@
           result.push({type:"beat", value:Number(target.split("=")[1])});
           continue;
         }
+        // mode定義の場合（mode: 'even'ないしは'step'のみ可能で、それ以外なら無効）
+        // 判定に「.+」を使うと定義がmode=で始まっている場合にバグる。注意。なので厳格に決めてしまう。
+        // evenとstepを定義する以外のことは、一切しない。@とかも無し。
+        if(target.match(/^mode\=step$/) !== null || target.match(/^mode\=even$/) !== null){
+          const modeDefine = target.split("=")[1];
+          result.push({type:"mode", value:modeDefine});
+          continue;
+        }
         // #lib, #endlib, #mod, #endmodの場合
+        // #libは空っぽを許さない。
         if(target.match(/(?<=^#lib).+(?=$)/) !== null){
           result.push({type:"lib", value:target.split("#lib")[1]});
           continue;
         }
-        if(target.match(/(?<=^#endlib).+(?=$)/) !== null){
+        // endlibは空っぽを許す。一応余地を残す。空っぽを許すだけ。
+        if(target.match(/(?<=^#endlib).*(?=$)/) !== null){
           result.push({type:"endlib", value:target.split("#endlib")[1]});
           continue;
         }
+        // #modは空っぽを許さない。
         if(target.match(/(?<=^#mod).+(?=$)/) !== null){
           result.push({type:"mod", value:target.split("#mod")[1]});
           continue;
         }
-        if(target.match(/(?<=^#endmod).+(?=$)/) !== null){
+        // endmodは空っぽを許す。一応余地を残す。許すだけ。
+        if(target.match(/(?<=^#endmod).*(?=$)/) !== null){
           result.push({type:"endmod", value:target.split("#endmod")[1]});
           continue;
         }
@@ -2753,15 +2857,32 @@
           for (const [key, value] of Object.entries(macroDict)) {
             s = s.replaceAll(key, value);
           }
+          // 繰り返しを適用する
+          // (AH)*3 -> AHAHAHのような、繰り返し記号のパーシングを実行する
+          s = applyRepeatSymbol(s);
+
+          // もしパートからユーザー定義部分を取り出す処理をしたいならここでやる。
+          // fifthParseの内容を改変し、末尾に{type:'info', symbolCount:シンボル数...冒頭のbeginSplitのcountからわかる}を付与。
+          // そこにユーザー定義のuserDefinesを追加する
+          // valueは文字列sとしてthird以降のパースに使う
+          const parsedUserDefines = parseUserDefines(s);
+          const content = parsedUserDefines.value;
+          const userDefines = parsedUserDefines.userDefines;
+
           // ここから先は別メソッドに依存する。nullもしくは配列を返してもらう。
           // 若干内容変更。offsetに割合が入ってる。valueに文字列が入ってる。
-          const parsed0 = thirdParse(s);
+          const parsed0 = thirdParse(content);
           if(parsed0 === null){ console.error("第一パースに失敗"); continue; }
           const parsed1 = fourthParse(parsed0);
           if(parsed1 === null){ console.error("第二パースに失敗"); continue; }
           const parsedScore = fifthParse(parsed1, varDict);
           if(parsedScore === null){ console.error("最終パースに失敗"); continue; }
           if(parsedScore.length === 0) continue;
+
+          // infoBlockにuserDefinesを付与する
+          const infoBlock = parsedScore.pop();
+          infoBlock.userDefines = userDefines;
+          parsedScore.push(infoBlock);
 
           scoreArrays.push(parsedScore);
         }
@@ -2952,7 +3073,12 @@
         }
       }
 
-      // "note"以外は不要
+      // s[0]はこっちで用意したbeginSplitで、countにシンボルカウントが入っている。
+      // すなわちシンボルの個数である。6つなら6, 8つなら8.
+      //console.log(s[0].type, s[0].count);
+      const symbolCount = s[0].count;
+
+      // "note"以外は不要...
       const result = s.filter((t) => (t.type === "note"));
       // 必要ならvarDictで翻訳する
       for(const target of result){
@@ -2960,6 +3086,8 @@
           target.value = dict[target.value];
         }
       }
+      // 末尾にinfoという形でシンボルカウントの情報を付与する
+      result.push({type:'info', symbolCount:symbolCount});
       return result;
     }
 
@@ -3015,33 +3143,92 @@
       addMod(name, modFunction = (code, step, beat) => {}){
         this.mods[name] = modFunction;
       }
-      createEventSeed(code, step, beat, mods = [], libs = []){
+      applyFunction(code, presets = {}, funcs = {}, value = ""){
+        // modないしはlibを適用するパート。funcsにthis.modsやthis.libsが入る
+        // なぜなら関数を引き出すためのproperなmodNameやlibNameが後から計算されるので。
+        // それはvalueが「a=0,b=1,c=2@name」という形をしていて、この「name」です。
+
+        // parseUserDefinesを使う。これを使うと@以降をvalue,@以前を引数定義として取得できる。
+        // 引数定義は,区切りで=で指定する。いずれも文字列である。
+        const parsedValue = parseUserDefines(value);
+        const functionName = parsedValue.value;
+        const userArguments = parsedValue.userDefines;
+
+        // 関数名でライブラリを検索
+        const func = funcs[functionName];
+        // 無ければスルー
+        if(func === undefined){ return null; }
+        //if(funcs[value] === undefined){ return null; }
+        const {step, beat, codeOffset, partIndex, blockIndex} = presets;
+        // とりあえずpresetsからデータを取り出して、以降追加していく。
+        const data = {
+          step:step, beat:beat, codeOffset:codeOffset, partIndex:partIndex, blockIndex:blockIndex
+        };
+        // Object.entriesを使ってユーザー定義の引数を登録
+        for(const [name, arg] of Object.entries(userArguments)){
+          data[name] = arg;
+        }
+        // データからいろいろ取得
+        return func(code, data);
+      }
+      createEventSeed(code, presets = {}, mods = [], libs = []){
+        // あ...そうか...
+        // modでcodeをいじってそれを解釈するから、presetそのままではダメなんだ。
+        // codeだけこっちで改変しないといけないんだ。ああ～～～～～...
+        // だからこっちでcodeだけいじる必要があるわけね。
+        // すべてオブジェクトにするのはやめよう。codeだけ分離して、それ以外を使おう。
+
         // "."の場合はnullを返す
         if(code === "."){
           return null;
         }
-        // まずcodeでeventSeedsを引き出せるか調べる。
+        // まずcodeでeventSeedsを引き出せるか調べる。引き出せるならそこで終わり。
         if(this.eventSeeds[code] !== undefined){
           return this.eventSeeds[code];
         }
         // それが無い場合、まずmods一覧を見て行き、適用できるのがあったら適用する
-        // 適用できるのは最初にヒットした1つだけ。なるべく対象を分けてください。
+        // modは適用できるだけ適用する。nullが返る場合は据え置きとし、次に行く。
+        // なお運用順は逆順。
         let properCode = code;
-        for(let i=0; i<mods.length; i++){
+        // 適用順を逆にする。これにより、最後に入れたものが優先される。
+        for(let i=mods.length-1; i>=0; i--){
+
           const modName = mods[i];
-          if(this.mods[modName] === undefined) continue;
-          const modifiedCode = this.mods[modName](code, step, beat);
-          if(modifiedCode !== null){
-            properCode = modifiedCode;
-            break;
-          }
+          // ここで渡すのはproperCodeですね...
+          // modが1回までっていう前提で書いてたからcodeって書いちゃってたわ。最悪だ。
+          const modifiedCode = this.applyFunction(properCode, presets, this.mods, modName);
+          // modifiedCodeがnullの場合は、properCodeを更新せず、次のmodに向かう。
+          if (modifiedCode === null) continue;
+          // nullでない場合に更新する。こうして最後まで適用し続ける。
+          properCode = modifiedCode;
+          //break;
         }
         // それが終わったらlibを適用していく。適用できるのは最初にヒットした1つだけ。
         let resultSeed = null;
-        for(let i=0; i<libs.length; i++){
+        // 適用順を逆にする。これにより、最後に入れたものが優先される。
+        for(let i=libs.length-1; i>=0; i--){
+
           const libName = libs[i];
-          if(this.libs[libName] === undefined) continue;
-          resultSeed = this.libs[libName](properCode, step, beat);
+          const seed = this.applyFunction(properCode, presets, this.libs, libName);
+
+          if (seed === null) continue;
+
+          if(seed instanceof SpotEventSeed || seed instanceof BandEventSeed){
+            // seedがSpotEventSeed/BandEventSeedの場合はダイレクトに設定する
+            resultSeed = seed;
+          }else if(typeof seed === 'function'){
+            // seedが関数の場合はSpotEventSeedを生成する
+            resultSeed = new SpotEventSeed(seed);
+          }else if(typeof seed === 'object'){
+            // seedがオブジェクトの場合はそれがもつshapeプロパティで分岐。
+            const {shape = 'spot', action = () => {}} = seed;
+            if(shape === 'spot'){
+              resultSeed = new SpotEventSeed(action);
+            }else if(shape === 'band'){
+              resultSeed = new BandEventSeed(action, seed);
+            }
+          }
+          //resultSeed = seed;
           if(resultSeed !== null) break;
         }
         // nullでない時に抜けてしまうのでlibが適用できるのであればnullではないその値が返る。
@@ -3058,6 +3245,7 @@
         const currentLibs = [];
         let currentStep = 0;
         let currentBeat = 0; // beatも使えるようにしよう。
+        let blockIndex = 0; // 小節番号（0ベース）
         for(let i=0; i<parsedScore.length; i++){
           const {type, value} = parsedScore[i];
           if(type === "lib"){
@@ -3067,10 +3255,14 @@
             continue;
           }
           if(type === "endlib"){
+            // 仕様変更により、最後に入れたものを排除する。引数(value)は無意味。
+            /*
             const libIndex = currentLibs.indexOf(value);
             if(libIndex >= 0){
               currentLibs.splice(libIndex, 1);
             }
+            */
+            currentLibs.pop();
             continue;
           }
           if(type === "mod"){
@@ -3080,10 +3272,14 @@
             continue;
           }
           if(type === "endmod"){
+            // 仕様変更により、最後に入れたものを排除する。引数(value)は無意味。
+            /*
             const modIndex = currentMods.indexOf(value);
             if(modIndex >= 0){
               currentMods.splice(modIndex, 1);
             }
+            */
+            currentMods.pop();
             continue;
           }
           if(type === "beat"){
@@ -3096,18 +3292,51 @@
             currentStep = value;
             continue;
           }
+          if(type === "mode"){
+            // ここではmode情報を使わないのでcurrentを保つ必要は無い
+            result.push({type:"mode", value:value});
+            continue;
+          }
           if(type === "score"){
             // まずvalueはこの時配列で、各成分は同じ小節の別パート。基本的に1つ。2つか3つの場合もある。
             // それにアタッチする。その中身は...
             // 実はoffsetが計算済みなので、あとでそれを使ってkeyを計算するんだが、要するにもう配列要素は無いです。
             // なのでseedを新しく用意してeventSeedを付与して終わりです。つまりvalueをそのまま使えばよろしい。
-            for(const eachScore of value){
+            //for(const eachScore of value){
+            for(let l=0; l<value.length; l++){
+              const eachScore = value[l];
+              // infoは使いますね...stepとbeatは上書きされる可能性がある。
+              const infoBlock = eachScore.pop();
+              // なのでそれを保持しておく。
+              const {step, beat} = infoBlock.userDefines;
+              // そしてこのパース限定での値を決定してそっちを使う。
+              // 一時的なので、小節が終わったら破棄される。
+              const temporaryStep = ((step !== undefined) && !(isNaN(Number(step))) ? Number(step) : currentStep);
+              const temporaryBeat = ((beat !== undefined) && !(isNaN(Number(beat))) ? Number(beat) : currentBeat);
+
+              //console.log(infoBlock);
+              // infoBlock以外の部分についてseedにeventSeedを設定する
               for(let k=0; k<eachScore.length; k++){
                 const target = eachScore[k];
+                // code: 対象文字列（modで改変する可能性があるので分離）
+                // step: 定義したstep, たとえば音の長さの基準
+                // beat: 定義したbeat, step*beatで小節の長さになる(evenの場合...)（discrete:フレーム数、continuous:ミリ秒数）
+                // codeOffset: パート内での割合、事前に計算したもの
+                // partIndex: パート番号
+                // blockIndex: 小節の通し番号
+                const code = target.value;
+                const presets = {
+                  step:temporaryStep, beat:temporaryBeat,
+                  codeOffset:target.offset, partIndex:l, blockIndex:blockIndex
+                };
                 // これだけ！！
-                target.seed = this.createEventSeed(target.value, currentStep, currentBeat, currentMods, currentLibs)
+                target.seed = this.createEventSeed(code, presets, currentMods, currentLibs);
+                //target.seed = this.createEventSeed(target.value, currentStep, currentBeat, currentMods, currentLibs)
               }
+              // 終わったらinfoBlockを戻す
+              eachScore.push(infoBlock);
             }
+            blockIndex++; // 小節番号を増やす
             result.push({type:"score", value:value});
           }
         }
@@ -3117,26 +3346,51 @@
       createEventArray(eventSeedArray){
         // seedArrayから作る。
         let eventId = 0;
-        let currentStep = 250;
-        let currentBeat = 4;
+        let currentStep = 250; // デフォルト。ScoreParserのデフォはcontinuousなので'250ms'.
+        let currentBeat = 4; // デフォルト。4beat. つまり1秒。
+        let currentMode = 'even'; // デフォルト。発火タイミングはstep*beatをシンボル数で均等割りする。
         let currentOffset = 0;
         const events = [];
         for(let i=0; i<eventSeedArray.length; i++){
           const {type, value} = eventSeedArray[i];
+          if(type === "step"){
+            currentStep = value;
+            continue;
+          }
           if(type === "beat"){
             currentBeat = value;
             continue;
           }
-          if(type === "step"){
-            currentStep = value;
+          if(type === "mode"){
+            currentMode = value;
             continue;
           }
           if(type === "score"){
             // valueの全ての成分は同じオフセットから計算される。小節の長さはすべてbeat*stepで計算される。
             // しかし局所offsetは既に計算されているので、key = currentOffset + beat*step*offsetで終わりです。
-            const PART_LENGTH = currentBeat * currentStep;
 
-            for(const eachScore of value){
+            let MAX_PART_LENGTH = 0;
+            //const PART_LENGTH = currentBeat * currentStep;
+
+            for(let l=0; l<value.length; l++){
+              const eachScore = value[l];
+              // infoBlockを先にはじいておく
+              // この中にuserDefines（ユーザー定義変数,stepとかbeatとか）と、
+              // symbolCount（用意したシンボルの個数）が入ってる
+              const infoBlock = eachScore.pop();
+              //console.log(infoBlock);
+              const {userDefines = {}, symbolCount} = infoBlock;
+              const {step, beat, mode} = userDefines;
+
+              const temporaryStep = ((step !== undefined) && !(isNaN(Number(step))) ? Number(step) : currentStep);
+              const temporaryBeat = ((beat !== undefined) && !(isNaN(Number(beat))) ? Number(beat) : currentBeat);
+              const temporaryMode = (mode !== undefined ? mode : currentMode); // 'even'/'step'
+
+              // temporaryModeが'even'の場合はstep*beatで計算する。'step'の場合はstep*symbolCountで計算する
+              const PART_LENGTH = (temporaryMode === 'step' ? temporaryStep * symbolCount : temporaryStep * temporaryBeat);
+              // 一番長いのに合わせる
+              MAX_PART_LENGTH = Math.max(MAX_PART_LENGTH, PART_LENGTH);
+
               // どのスコアも計算方法は同じ
               for(let k=0; k<eachScore.length; k++){
                 const target = eachScore[k];
@@ -3148,7 +3402,8 @@
               }
             }
             // おわりです。
-            currentOffset += PART_LENGTH;
+            currentOffset += MAX_PART_LENGTH;
+            //currentOffset += PART_LENGTH;
           }
         }
         return {events:events, duration:currentOffset};
@@ -3195,7 +3450,7 @@
       }
       isActive(name){
         // activeかどうかをnameで取得する関数
-        const sequencer = this.sequencer[name];
+        const sequencer = this.sequencers[name];
         if(sequencer === undefined){ return; }
         return sequencer.active;
       }
@@ -3222,7 +3477,16 @@
     for(const method of derivedMethodsFromSequencer){
       ScoreParser.prototype[method] = (function(name){
         // この場合thisはScoreParserのインスタンスになる。
+        // 引数が無い場合は全てに適用されることにしよう
+        if(arguments.length === 0){
+          for(const sequencer of Object.values(this.sequencers)){
+            sequencer[method]();
+          }
+          return;
+        }
+        // 存在しなかったら抜ける
         if(this.sequencers[name] === undefined){ return; }
+        // 存在したら適用。
         this.sequencers[name][method]();
       });
     }
@@ -5017,12 +5281,23 @@ available waveTables:
         this.noiseBuffers[name] = {buffer:noiseBuffer, duration:duration};
         this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
       }
-      playSimpleNoise(name = "white_1", useFilter = true, volume = 1,  type = "bandpass", frequency = 2000, gain = 0, q = 1){
+      createNoises(params = {}){
+        // まとめて色んな長さのバッファを用意します
+        const {white = {}, pink = {}, brown = {}} = params;
+        for(const [name, duration] of Object.entries(white)){
+          this.createWhiteNoiseBuffer(duration, name);
+        }
+        for(const [name, duration] of Object.entries(pink)){
+          this.createPinkNoiseBuffer(duration, name);
+        }
+        for(const [name, duration] of Object.entries(brown)){
+          this.createBrownNoiseBuffer(duration, name);
+        }
+      }
+      playSimpleNoise(name = "white_1", volume = 1, useFilter = false, filters = [{type:"bandpass", frequency:2000, gain:0, q:1}]){
         // 簡易版
         this.playNoise({
-          name:name,
-          volume:volume, useFilter:useFilter,
-          type, frequency, gain, q
+          name:name, volume:volume, useFilter:useFilter, filters:filters
         });
       }
       playNoise(params = {}){
@@ -5032,14 +5307,10 @@ available waveTables:
         const noiseBuffer = this.noiseBuffers[name];
         const {buffer, duration} = noiseBuffer;
 
-        // filterFunction
-        // frequencyなどはAudioParamなので工夫次第でいろんなことができるわけです
-        // いろいろね
-        // 第二引数にactxを取れるようにしましょ。
+        // filtersで複数定義できるようにする
         const {
-          volume = 1, useFilter = true,
-          type = "bandpass", frequency = 2000, gain = 0, q = 1,
-          filterFunction = AudioPlayer.defaultFilterFunction,
+          volume = 1, useFilter = false,
+          filters = [{type:"bandpass", frequency:2000, gain:0, q:1}],
           gainFunction = AudioPlayer.reverb_curve0,
           useAnalyser = false
         } = params;
@@ -5047,16 +5318,50 @@ available waveTables:
         const source = new AudioBufferSourceNode(actx, {buffer: buffer });
         const gainNode = actx.createGain();
 
-        if(useFilter){
-          const biquadFilterNode = new BiquadFilterNode(this.actx);
-
-          filterFunction(actx, biquadFilterNode, type, frequency, gain, q);
-
-          source.connect(biquadFilterNode);
-          biquadFilterNode.connect(gainNode);
+        // ここでfilter
+        let filterFlags;
+        if(typeof useFilter === 'boolean'){
+          // bool値の場合はフィルターの個数だけ同じ値を用意する
+          filterFlags = new Array(filters.length);
+          filterFlags.fill(useFilter);
+        }else if(Array.isArray(useFilter)){
+          // 配列の場合は指定する明確な意思があるので足りない部分はfalseで埋めてしまう
+          filterFlags = useFilter;
+          for(let i=filterFlags.length; i<filters.length; i++){
+            filterFlags.push(false);
+          }
         }else{
-          source.connect(gainNode);
+          // 解釈できないなら全部falseでいい
+          filterFlags = new Array(filters.length);
+          filterFlags.fill(false);
         }
+        const properFilters = [];
+        for(let i=0; i<filters.length; i++){
+          if(filterFlags[i]){
+            // trueの物だけ入れる
+            properFilters.push(filters[i]);
+          }
+        }
+        // つないでいく
+        if(properFilters.length === 0){
+          source.connect(gainNode);
+        }else{
+          let lastTargetNode = source;
+          for(let i=0; i<properFilters.length; i++){
+            const filterParameters = properFilters[i];
+            const biquadFilterNode = new BiquadFilterNode(this.actx);
+            const {type = 'bandpass', frequency = 2000, gain = 0, q = 1} = filterParameters;
+            // frequencyは文字列OKとする
+            biquadFilterNode.type = type;
+            biquadFilterNode.frequency.value = (typeof(frequency) === 'string' ? this.getFreq(frequency) : frequency);
+            biquadFilterNode.gain.value = gain;
+            biquadFilterNode.Q.value = q;
+            lastTargetNode.connect(biquadFilterNode);
+            lastTargetNode = biquadFilterNode;
+          }
+          lastTargetNode.connect(gainNode);
+        }
+        // あとは同じ
 
         // gainFunctionをいじるのは簡易版はやめましょ
         //gainFunction(actx, gainNode.gain, volume, duration);
@@ -5123,35 +5428,67 @@ available waveTables:
         // ""の場合はまあ、customではないということ。
         const {name = ""} = params;
 
+        // frequencyに配列を許す形で仕様変更。並べるだけ。フィルタ...？
         const {
           frequency = 440, type = "square", volume = 1, duration = 1,
           frequencyFunction = AudioPlayer.defaultFrequencyFunction,
           gainFunction = AudioPlayer.reverb_curve0,
-          useAnalyser = false, convolverBuffer = ""
+          useAnalyser = false, convolverBuffer = "",
+          useFilter = false
         } = params;
-        const properFrequency = (typeof(frequency) === 'string' ? this.getFreq(frequency) : frequency);
-        const oscillatorOptions = {
-          frequency:properFrequency,
-          type:type
-        }
 
-        if(type === "custom"){
-          if(name === "" || this.periodicWaves[name] === undefined){
-            return;
+        const frequencies = [];
+        if(Array.isArray(frequency)){
+          for(const f of frequency){
+            if(typeof f === 'string'){ frequencies.push(this.getFreq(f)); }else{ frequencies.push(f); }
           }
-          oscillatorOptions.periodicWave = this.periodicWaves[name];
+        }else if(typeof frequency === 'string'){
+          frequencies.push(this.getFreq(frequency));
+        }else{
+          frequencies.push(frequency);
         }
-        const osc = new OscillatorNode(actx, oscillatorOptions);
+        //const properFrequency = (typeof(frequency) === 'string' ? this.getFreq(frequency) : frequency);
+        const oscillators = [];
+        for(const f of frequencies){
+          const oscillatorOptions = {
+            frequency:f, type:type
+          };
+          if(type === "custom"){
+            if(name !== "" && this.periodicWaves[name] !== undefined){
+              oscillatorOptions.periodicWave = this.periodicWaves[name];
+            }
+          }
+          oscillators.push(new OscillatorNode(actx, oscillatorOptions));
+        }
 
         const gainNode = actx.createGain();
+
+        const biquadFilterNode = new BiquadFilterNode(this.actx);
+        // frequencyは文字列OKとする
+        biquadFilterNode.type = 'bandpass';
+        biquadFilterNode.frequency.value = 2000;
+        biquadFilterNode.gain.value = 0;
+        biquadFilterNode.Q.value = 1;
 
         if(convolverBuffer !== ""){
           const convolverNode = actx.createConvolver();
           convolverNode.buffer = this.audioBuffers[convolverBuffer];
-          osc.connect(convolverNode);
-          convolverNode.connect(gainNode);
+          for(const osc of oscillators){ osc.connect(convolverNode); }
+          if(!useFilter){
+            convolverNode.connect(gainNode);
+          }else{
+            convolverNode.connect(biquadFilterNode);
+            biquadFilterNode.connect(gainNode);
+          }
         }else{
-          osc.connect(gainNode);
+          for(const osc of oscillators){
+            if(!useFilter){
+              osc.connect(gainNode);
+            }else{
+              osc.connect(biquadFilterNode);
+              biquadFilterNode.connect(gainNode);
+            }
+          }
         }
 
         // 振動数をいじる場合。関数群から出せるようにする
@@ -5160,10 +5497,10 @@ available waveTables:
         for(const ff of frequencyFunctions){
           if(typeof ff === 'string'){
             if(this.frequencyFunctions[ff] !== undefined){
-              this.frequencyFunctions[ff](actx, osc.frequency);
+              for(const osc of oscillators){ this.frequencyFunctions[ff](actx, osc.frequency); }
             }
           }else if(typeof ff === 'function'){
-            ff(actx, osc.frequency);
+            for(const osc of oscillators){ ff(actx, osc.frequency); }
           }
         }
 
@@ -5186,10 +5523,12 @@ available waveTables:
         }else{
           compressor.connect(actx.destination);
         }
-        //connectFunction(actx, compressor);
 
-        osc.start();
-        osc.stop(actx.currentTime + duration);
+        // まとめて...
+        for(const osc of oscillators){
+          osc.start();
+          osc.stop(actx.currentTime + duration);
+        }
       }
       async registAudioBuffer(name, url){
         // getArrayBufferの移植
