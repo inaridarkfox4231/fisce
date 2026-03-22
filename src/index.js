@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.1.14
+ * @version 1.1.15
  */
 
 (function (global, factory) {
@@ -1553,7 +1553,7 @@
         if(this.type === 'discrete'){
           this.elapsed++;
         }
-    	this.progress = this.elapsed / this.life;
+    	  this.progress = this.elapsed / this.life;
       }
       update(){
         // activeでない場合は実行しない
@@ -2555,6 +2555,9 @@
           this.active = false;
           if(this.loop) this.reset();
         }
+      }
+      getElapsed(){
+        return this.elapsed;
       }
       getProgress(){
         return this.elapsed / this.duration;
@@ -5434,7 +5437,7 @@ available waveTables:
           frequencyFunction = AudioPlayer.defaultFrequencyFunction,
           gainFunction = AudioPlayer.reverb_curve0,
           useAnalyser = false, convolverBuffer = "",
-          useFilter = false
+          useFilter = false, filterParameters = {}
         } = params;
 
         const frequencies = [];
@@ -5465,10 +5468,13 @@ available waveTables:
 
         const biquadFilterNode = new BiquadFilterNode(this.actx);
         // frequencyは文字列OKとする
-        biquadFilterNode.type = 'bandpass';
-        biquadFilterNode.frequency.value = 2000;
-        biquadFilterNode.gain.value = 0;
-        biquadFilterNode.Q.value = 1;
+        const filterType = (filterParameters.type !== undefined ? filterParameters.type : "bandpass");
+        const filterFrequency = (filterParameters.frequency !== undefined ? filterParameters.frequency : 2000);
+        const {gain = 0, q = 1} = filterParameters;
+        biquadFilterNode.type = filterType;
+        biquadFilterNode.frequency.value = (typeof filterFrequency === 'string' ? this.getFreq(filterFrequency) : filterFrequency);
+        biquadFilterNode.gain.value = gain;
+        biquadFilterNode.Q.value = q;
 
         if(convolverBuffer !== ""){
           const convolverNode = actx.createConvolver();
