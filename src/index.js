@@ -182,6 +182,16 @@
         }
         return null;
       }
+      shuffle(a, immutable = false){
+        // デフォルトは「変える」。
+        // 変えない場合は新しいそれを返す。
+        const b = Array.from(a, (x, i) => { return {value:x, seed:this.rdm()}; });
+        b.sort((u, v) => u.seed - v.seed);
+        const c = b.map(u => u.value);
+        if(immutable){ return c; }
+        for(let i=0; i<a.length; i++){ a[i] = c[i]; }
+        return a;
+      }
     }
 
     // いずれutilに加えるつもり
@@ -1342,132 +1352,161 @@
       }
     }
 
-    // ArrayWrapper.
-    // 配列のラッパ。引数は配列でも列挙でも可能。
+    // ArrayWrapper
+    // 普通に作れる。fromとofは以降のメソッドに継承される。
+    // 作った後で中身をそのまま出力しないと面倒なことになるので一工夫してる。
     class ArrayWrapper extends Array{
       constructor(){
-        super();
-        const args = [...arguments];
-        if(Array.isArray(args[0])){
-          this.push(...args[0]);
-        }else{
-          for(let i=0; i<args.length; i++){
-            this.push(args[i]);
-          }
-        }
+        super(...arguments);
+      }
+      static from(){
+        // fromで配列を作った後、それを持つLoopArrayを構成すればいい。
+        const b = Array.from(...arguments);
+        const c = new this();
+        c.push(...b);
+        return c;
+      }
+      static of(){
+        // fromで配列を作った後、それを持つLoopArrayを構成すればいい。
+        // もしこれを元に作ってしまうと例の問題が発生してしまう。
+        const b = Array.of(...arguments);
+        const c = new this();
+        c.push(...b);
+        return c;
       }
     }
 
-    // RoundRobinArray.
-    // 一通り順番にさらって元に戻る。null固定はなし。なのでこういう書き方にしてはいるがresetの必要はない。
-    // とはいえ最初に戻ることには意味があるのでおいてある。
+    // indexに自由に整数を指定でき、いわゆる「mod」でindexを割り出して出力する。
+    // シンプルだが状況によっては非常に強力
+    class LoopArray extends ArrayWrapper{
+      constructor(){
+        super(...arguments);
+      }
+      get(index){
+        if(this.length === 0){ return null; }
+        const L = this.length;
+        if(index > 0){
+          return this[index % L];
+        }else if(index < 0){
+          return this[(L - (-index % L)) % L];
+        }
+        return this[0];
+      }
+      static from(){
+        return super.from(...arguments);
+      }
+      static of(){
+        return super.of(...arguments);
+      }
+    }
+
+    // resetの際にtrueを指定すると延々と値を出力し続ける
+    // loopがfalseの場合はresetしない限りnull出すだけの代物になる
+    // 区切りが分かることが重要
+    // 旧SweepArrayの役割はこれが果たせるので、廃止する。
     class RoundRobinArray extends ArrayWrapper{
       constructor(){
         super(...arguments);
+        this.loop = false;
         this.index = 0;
+        this.returnable = false; // 終了フラグ
+      }
+      reset(loop = false){
+        this.loop = loop;
+        this.index = 0;
+        if(this.length > 0){
+          this.returnable = true;
+        }
       }
       pick(){
-        if(this.index < this.length){
-          const returnValue = this[this.index];
-          this.index = (this.index + 1) % this.length;
-          return returnValue;
+        if(this.length === 0){ return null; }
+        const L = this.length;
+        if(this.index >= L){
+          return null;
         }
-        return null;
+        const v = this[this.index];
+        this.index++;
+        if(this.index >= L){
+          if(this.loop){
+            // ここはloop前提のため、引数にtrueを指定しなければならない。
+            // 止まってしまう。事前に気づけて良かった。
+            this.reset(true);
+          }else{
+            // loopでないなら終了した場合にフラグを折る
+            this.returnable = false;
+          }
+        }
+        return v;
       }
-      reset(){
-        this.index = 0;
+      isReturnable(){
+        return this.returnable;
+      }
+      static from(){
+        return super.from(...arguments);
+      }
+      static of(){
+        return super.of(...arguments);
       }
     }
 
     // RandomChoiceArray.
-    // ランダムに内容が重複なく取得されていき、取り尽くされるとnull固定になる。resetで戻せる。
+    // 通常の配列と同じように作れる。fromやtoでも作れる。
+    // resetでランダムindex配列が生成されそれに従って順繰りに取られていく
+    // resetの際にtrueを指定すると際限なくランダム値を出し続ける
     class RandomChoiceArray extends ArrayWrapper{
       constructor(){
         super(...arguments);
-        this.rest = this.length;
+        this.loop = false;
+        this.indices = [];
+        this.returnable = false; // 終了フラグ
       }
-      add(v){
-        // 性質上、restは長さなので、追加するたびにこれを変更すべき。
-        // pickとは別の処理でこれを実行する。
-        this.push(v);
-        this.rest = this.length;
-        return this;
+      reset(loop = false){
+        this.loop = loop;
+        this.indices.length = 0;
+        const L = this.length;
+        if(L === 0) return;
+        // 長さが1以上の場合にフラグを立てる
+        this.returnable = true;
+        // 雑にシャッフル。普通にやるわ。
+        const src = Array.from(".".repeat(L), (x, i) => { return {value:i, seed:Math.random()}; });
+        src.sort((a, b) => a.seed - b.seed);
+        this.indices = src.map(u => u.value);
       }
       pick(){
-        // 0,1,2,3,4のうち3が選ばれたら3と4を変えて0,1,2,4,3にして3を返す
-        if(this.rest > 0){
-          const i = Math.floor(Math.random()*this.rest*0.999);
-          let swapper = this[i];
-          this[i] = this[this.rest-1];
-          this[this.rest-1] = swapper;
-          this.rest--;
-          return swapper;
+        if(this.length === 0){ return null; }
+        if(this.indices.length === 0){
+          return null;
         }
-        return null;
+        const v = this[this.indices.pop()];
+        if(this.indices.length === 0){
+          if(this.loop){
+            // ここはloop前提のため、引数にtrueを指定しなければならない。
+            // 止まってしまう。事前に気づけて良かった。
+            this.reset(true);
+          }else{
+            // loopでないなら終了した場合にフラグを折る
+            this.returnable = false;
+          }
+        }
+        return v;
       }
-      reset(){
-        this.rest = this.length;
+      isReturnable(){
+        return this.returnable;
+      }
+      static from(){
+        return super.from(...arguments);
+      }
+      static of(){
+        return super.of(...arguments);
       }
     }
 
-    // SweepArray.
-    // 中身を頭から順繰りに出していく。終わったらnull固定になる。resetで戻せる。
-    class SweepArray extends ArrayWrapper{
-      constructor(){
-        super(...arguments);
-        this.index = 0;
-      }
-      pick(){
-        if(this.index < this.length){
-          return this[this.index++];
-        }
-        return null;
-      }
-      reset(){
-        this.index = 0;
-      }
-    }
-
-    // BooleanArray.
-    // 配列内のすべての要素に対するandやorを取れる
-    // staticを使うと他の配列に適用できる（iterableなら何でもOK）
-    class BooleanArray extends ArrayWrapper{
-      constructor(){
-        super(...arguments);
-      }
-      all(func = () => true){
-        const args = [...arguments];
-        args.shift(0);
-        for(const a of this){
-          if(!func(a, ...args)) return false;
-        }
-        return true;
-      }
-      any(func = () => true){
-        const args = [...arguments];
-        args.shift(0);
-        for(const a of this){
-          if(func(a, ...args)) return true;
-        }
-        return false;
-      }
-      static all(array, func = () => true){
-        const args = [...arguments];
-        args.shift(0).shift(0);
-        for(const a of array){
-          if(!func(a, ...args)) return false;
-        }
-        return true;
-      }
-      static any(array, func = () => true){
-        const args = [...arguments];
-        args.shift(0).shift(0);
-        for(const a of array){
-          if(func(a, ...args)) return true;
-        }
-        return false;
-      }
-    }
+    // 備考
+    // SweepArrayはRoundRobinArrayに含まれるので廃止
+    // BooleanArrayはeveryとsomeで同じことができるので廃止
+    // CrossReferenceArrayのコンストラクタについては、あれは空っぽ前提で運用する（Gunも同様）ので、
+    // 当面はArrayWrapperの枠組みで取り扱う必要は無い。
+    // addに相当するメソッドも廃止。pushでいい。restのような余計な変数も不要。
 
     // CrossReferenceArray.
     class CrossReferenceArray extends Array{
@@ -1541,7 +1580,9 @@
         // この中身は関数...のものだけフェッチして、keyが名前で、valueはthisをbindする形で登録される。
         for(const [name, func] of Object.entries(methods)){
           if(typeof func !== 'function') continue;
-          this[name] = () => { func(this); };
+          //this[name] = () => { func(this); };
+          // Bulletのカスタム関数を個別で呼び出す場合「に限り」、オブジェクト形式で引数を渡せるようにする
+          this[name] = (customParameters = {}) => { func(this, customParameters); };
         }
         if(this.type === 'continuous'){ this.timeStump = window.performance.now(); }
       }
@@ -1625,6 +1666,9 @@
     // たとえばBulletが親のGunにアクセスして自身の位置情報を元にさらなるBulletを生成したりできる。
     // 余談だが、なぜBulletを渡すこともできるかというと、コードサイドでBulletを保持してmanual modeにして
     // 勝手な都合でkillしたり出来るからである。柔軟に何でもできるように作られている。
+    // ...
+    // 仕様変更でfire系がBulletを返すようにした。理由はBulletクラスを使わなくてもBulletを扱いたい場合があるため。
+    // Bulletに直接命令を下したい場合に不便なのだ。
     class Gun extends CrossReferenceArray{
       constructor(params = {}){
         super();
@@ -1638,6 +1682,7 @@
         this.weapons[key] = weapon;
       }
       fire(){
+        // 戻り値をBulletにするように仕様変更
         const args = [...arguments];
         if(args[0] === null) return;
         const target = args[0];
@@ -1647,68 +1692,92 @@
           const weapon = this.weapons[target];
           if(weapon === undefined) return;
           args.shift();
-          this.fire(weapon, ...args);
+          return this.fire(weapon, ...args);
         }else if(typeof target === 'function'){
           // 関数が戻すのはオブジェクトか、Bulletか、その配列。
           // 引数だけ出して再帰
           // なお第二引数で生成したりできる
           if(args[1] === undefined){
             const b = target();
-            this.fire(b);
+            return this.fire(b);
           }else{
-    		  args.shift();
+    		    args.shift();
             const b = target(...args);
-            this.fire(b);
+            return this.fire(b);
           }
         }else{
           // 結局すべてここに帰着される
           // 要するに第一引数にオブジェクト配列を置いたりできる
           // いろんな書き方ができるかと思います
           if(Array.isArray(target)){
+            const bullets = [];
             for(const b of target){
               if(b === null) continue;
               if(b instanceof Bullet){
-                this.add(b);
+                //this.add(b);
+                bullets.push(b);
               }else{
-                this.add(new Bullet(b));
+                //this.add(new Bullet(b));
+                bullets.push(new Bullet(b));
               }
+              this.add(bullets);
+              return bullets;
             }
           }else{
             if(target instanceof Bullet){
-             this.add(target);
+              this.add(target);
+              return target;
             }else{
-             this.add(new Bullet(target));
+              const newBullet = new Bullet(target);
+              this.add(newBullet);
+              return newBullet;
             }
           }
         }
       }
       fireSingle(obj){
         // Bulletの設計図1つのみ。
-        this.add(new Bullet(obj));
+        const newBullet = new Bullet(obj);
+        //this.add(new Bullet(obj));
+        this.add(newBullet);
+        return newBullet;
       }
       fireMulti(data){
         // Bulletの設計図の配列。
+        const bullets = [];
         for(const obj of data){
-          this.add(new Bullet(obj));
+          bullets.push(new Bullet(obj));
+          //this.add(new Bullet(obj));
         }
+        this.add(bullets);
+        return bullets;
       }
       fireBullets(bullets){
         // Bulletの配列。事前に作っておきたい場合向け。
         this.add(bullets);
+        return bullets;
       }
       fireWeaponSingle(name){
         // 武器を使う。戻り値は設計図が1つ。
         const args = [...arguments];
         args.shift();
         const obj = this.weapons[name](...args);
-        this.add(new Bullet(obj));
+        const newBullet = new Bullet(obj);
+        this.add(newBullet);
+        return newBullet;
       }
       fireWeaponMulti(name){
         // 武器を使う。戻り値は設計図の配列。Bulletは1つも無し。
         const args = [...arguments];
         args.shift();
         const objs = this.weapons[name](...args);
-        for(const obj of objs){ this.add(new Bullet(obj)); }
+        const bullets = [];
+        for(const obj of objs){
+          //this.add(new Bullet(obj));
+          bullets.push(new Bullet(obj));
+        }
+        this.add(bullets);
+        return bullets;
       }
       fireWeaponBullets(name){
         // 武器を使う。戻り値はすべてBullet. 事前に作っておきたい場合向け。
@@ -1716,6 +1785,7 @@
         args.shift();
         const bullets = this.weapons[name](...args);
         this.add(bullets);
+        return bullets;
       }
       remove(groupName){
         if(arguments.length === 0){
@@ -1783,7 +1853,8 @@
     // scanningのstatic関数があり、これを使って色々できる仕組み。
     class Tree{
       constructor(){
-        this.childs = new SweepArray();
+        this.childs = new RoundRobinArray();
+        //this.childs = new SweepArray();
         this.parent = null;
         this.depth = 0;
       }
@@ -1862,8 +1933,10 @@
     class Vertice{
       constructor(tree = new Tree()){
         this.dirtyFlag = false;
+        //this.connected = new RandomChoiceArray();
+        //this.branches = new SweepArray();
         this.connected = new RandomChoiceArray();
-        this.branches = new SweepArray();
+        this.branches = new RoundRobinArray();
         this.tree = tree;
         // ヒエラルキー用プロパティ。
         // ヒエラルキーを作るたびにまとめて更新されるので特にリセットする必要は
@@ -1892,12 +1965,17 @@
       }
       regist(e){
         // addを使うことで追加のたびにrestが更新される。
-        this.connected.add(e);
+        //this.connected.add(e);
+        // pushでええんや。
+        this.connected.push(e);
         return this;
       }
       reset(){
         // dirtyFlagをリセットする
         this.dirtyFlag = false;
+        // connectedとbranchesもリセットする
+        this.connected.reset();
+        this.branches.reset();
         return this;
       }
       checked(){
@@ -2447,7 +2525,10 @@
     // Sequencer.
     class Sequencer{
       constructor(params = {}){
-        const {loop = false, duration = 1000, delay = 0, step = 1, hidden = "none", bandEventAlways = false} = params;
+        const {
+          loop = false, duration = 1000, delay = 0, step = 1,
+          hidden = "none", bandEventAlways = false, hiddenFunction = () => {}
+        } = params;
         this.waitingSpotEvents = []; // 待ち状態
         this.finishedSpotEvents = []; // 実行済み
         this.bandEvents = []; // おわったら弾く
@@ -2464,6 +2545,11 @@
         // resetしてからpauseしたい場合は"reset"にする。（pauseは必須）
         if(hidden !== "none"){
           document.addEventListener("visibilitychange", () => {
+            // hiddenがcustomの場合は勝手に決める。document.hiddenは隠れるときtrueを返す。
+            if(hidden === "custom"){
+              hiddenFunction(document.hidden);
+              return;
+            }
           	if(!this.active) return;
           	if(document.hidden){
               if(hidden === "reset"){ this.reset(); }
@@ -2557,6 +2643,7 @@
         }
       }
       getElapsed(){
+        // 単純にelapsedを取得するだけの関数
         return this.elapsed;
       }
       getProgress(){
@@ -2608,6 +2695,10 @@
         Sequencer.deleteEvent(e, this.bandEvents);
         this.deleteSpotEvent(e.fireEvent, this.waitingSpotEvents);
         this.deleteSpotEvent(e.finishEvent, this.finishedSpotEvents);
+      }
+      isActive(){
+        // 無いと不整合だろう。
+        return this.active;
       }
       static deleteEvent(event, array){
         if(event.name === undefined) return;
@@ -2726,9 +2817,13 @@
 
     // Score parsing.
 
-    function firstParse(s){
+    function firstParse(s, autoParse = false){
+      // 全角スペースがあったら半角スペースにする
+      const t_2 = s.replaceAll("　", " ");
+      // タブがあったら半角スペース2つ分にする
+      const t_1 = t_2.replaceAll(/\t/g, "  ");
       // まず改行記号をエスケープ変換して一行にする
-      const t0 = s.replaceAll("\n", "\\n");
+      const t0 = t_1.replaceAll("\n", "\\n");
       // スターコメントの中身を排除する
       const t1 = t0.replaceAll(/(?<=\/\*).*?(?=\*\/)/g, "");
       // 無意味な改行を追加し、行コメント記号から改行エスケープまでの部分を排除する。
@@ -2743,7 +2838,7 @@
       // おわり。
       // \\nでsplitして配列を返す。その際、空文字列の行を排除する。
       const array = t5.split("\\n").filter(s=>s.length > 0);
-      return secondParse(array);
+      return secondParse(array, autoParse);
     }
 
     // 繰り返しを導入。
@@ -2760,12 +2855,91 @@
       return result;
     }
 
+    // パース関数。文字列であることを明示したい場合は括弧を使ってください。以上。
+    function parseValue(s){
+      // 文字列の場合
+      const isSingleQuote = s.match(/(?<=^\').*(?=\'$)/);
+      if(isSingleQuote !== null){ return isSingleQuote[0]; }
+      const isDoubleQuote = s.match(/(?<=^\").*(?=\"$)/);
+      if(isDoubleQuote !== null){ return isDoubleQuote[0]; }
+      const isBackQuote = s.match(/(?<=^\`).*(?=\`$)/);
+      if(isBackQuote !== null){ return isBackQuote[0]; }
+
+      // 特殊ケース
+      if(s === "true"){ return true; }
+      if(s === "false"){ return false; }
+      if(s === "NaN"){ return NaN; }
+      if(s === "null"){ return null; }
+      if(s === "undefined"){ return undefined; }
+      if(s === "Infinity"){ return Infinity; }
+      if(s === "-Infinity"){ return -Infinity; }
+
+      // 数の場合
+      const isNumber = s.match(/^[0-9xeob\+\-\.].*$/);
+      if((isNumber !== null) && !isNaN(Number(s))){ return Number(s); }
+
+      // 配列の場合
+      const isParenthesis = s.match(/(?<=^\[).*(?=\]$)/);
+      // 配列でないなら処理は終わり
+      if(isParenthesis === null){
+        return s;
+      }else{
+        const t = isParenthesis[0];
+
+        let parenthesisCount = 0;
+        let parenthesisIsValid = true;
+
+        let ss="";
+        for(let i=0; i<t.length; i++){
+          const letter = t[i];
+          if(letter==='['){
+            parenthesisCount++;
+            ss += '[';
+            continue;
+          }
+        	if(letter===']'){
+            parenthesisCount--;
+            // 負になる可能性があるのはここだけ
+            if(parenthesisCount < 0){
+              parenthesisIsValid = false;
+              break;
+            }
+            ss += ']';
+            continue;
+          }
+        	if(letter===','){
+        		if(parenthesisCount === 0){
+              ss += ',';
+            }else{
+              ss += '@';
+            }
+            continue;
+        	}
+          ss += letter;
+        }
+
+        // parenthesisCountが0でない -> そのまま文字列出力
+        // parenthesisIsValidがfalse -> そのまま文字列出力
+        if(parenthesisCount !== 0){ return s; }
+        if(!parenthesisIsValid){ return s; }
+
+        // ,で区切った後で@を,で復元する
+        const properSplitted = ss.split(',');
+        const modified = properSplitted.map(u => u.replaceAll('@', ','));
+        return modified.map((x) => parseValue(x));
+      }
+
+      // それ以外。
+      return s;
+    }
+
     // ユーザー定義で変数を用意し、そのあとに@で内容を続けることで、
     // 局所的に一時変数を使う小技をやりたいので、そのための関数。
     // あ！！しまった、@が無い場合は...そのまま返してください...ごめんなさい。
     // @が無い場合は従来通りなのでそのまま返します。@がある場合に、ユーザー定義部分をパースします。
     // ごめんなさいです。
-    function parseUserDefines(s){
+    // autoParseがtrueの場合は引数を自動でパースしてくれる（はず）
+    function parseUserDefines(s, autoParse = false){
       // @が存在しない場合はsをvalueとして出力する
       if(s.match(/@/) === null){
         return {value:s, userDefines:{}};
@@ -2777,20 +2951,28 @@
       if(beforeAtMark === null){
         return {value, userDefines:{}};
       }
-      const allDefines = beforeAtMark[0].split(',');
+      // &の方がいい気がするけれど...
+      // 例：a=1&b=2&c=3@helloworld
+      // というわけで「&」に仕様変更。
+      const allDefines = beforeAtMark[0].split('&');
       const userDefines = {};
-      if(allDefines !== null){
-       for(const defineBlock of allDefines){
-         const left = defineBlock.match(/(?<=^).+(?=\=)/);
-         const right = defineBlock.match(/(?<=\=).+(?=$)/);
-         if(left===null||right===null)continue;
-         userDefines[left[0]] = right[0];
+      //if(allDefines !== null){
+      for(const defineBlock of allDefines){
+        const left = defineBlock.match(/(?<=^).+(?=\=)/);
+        const right = defineBlock.match(/(?<=\=).+(?=$)/);
+        if(left===null||right===null)continue;
+        // autoParseの時はこうする
+        if(autoParse){
+          userDefines[left[0]] = parseValue(right[0]);
+        }else{
+          userDefines[left[0]] = right[0];
         }
       }
+      //}
       return { value, userDefines };
     }
 
-    function secondParse(a){
+    function secondParse(a, autoParse = false){
       const result = [];
       const varDict = {};
       const macroDict = {};
@@ -2868,7 +3050,7 @@
           // fifthParseの内容を改変し、末尾に{type:'info', symbolCount:シンボル数...冒頭のbeginSplitのcountからわかる}を付与。
           // そこにユーザー定義のuserDefinesを追加する
           // valueは文字列sとしてthird以降のパースに使う
-          const parsedUserDefines = parseUserDefines(s);
+          const parsedUserDefines = parseUserDefines(s, autoParse);
           const content = parsedUserDefines.value;
           const userDefines = parsedUserDefines.userDefines;
 
@@ -3127,18 +3309,28 @@
       }
     }
 
+    // 楽譜翻訳機
     class ScoreParser{
-      constructor(){
+      constructor(options = {}){
         this.libs = {};
         this.mods = {};
         this.eventSeeds = {};
         this.sequencers = {};
+        const {autoParse = false} = options;
+        this.autoParse = autoParse;
       }
       addSpotEventSeed(name = "spot", action = NULL_FUNCTION){
         this.eventSeeds[name] = new SpotEventSeed(action);
       }
       addBandEventSeed(name = "band", action = NULL_FUNCTION, params = {}){
         this.eventSeeds[name] = new BandEventSeed(action, params);
+      }
+      addEventSeed(name = "", data){
+        // dataは関数/object.
+        // 関数の場合はpresetsからEventSeedを生成する関数（もちろん必ずしも使わなくても可）
+        // objectの場合はEventSeedの設計図。shapeで種類を指定。
+        // Spotの場合はactionのみ、Bandの場合はaction,fire,finish,duration.
+        this.eventSeeds[name] = data;
       }
       addLib(name, libFunction = (code, step, beat) => {}){
         this.libs[name] = libFunction;
@@ -3153,7 +3345,7 @@
 
         // parseUserDefinesを使う。これを使うと@以降をvalue,@以前を引数定義として取得できる。
         // 引数定義は,区切りで=で指定する。いずれも文字列である。
-        const parsedValue = parseUserDefines(value);
+        const parsedValue = parseUserDefines(value, this.autoParse);
         const functionName = parsedValue.value;
         const userArguments = parsedValue.userDefines;
 
@@ -3186,8 +3378,41 @@
           return null;
         }
         // まずcodeでeventSeedsを引き出せるか調べる。引き出せるならそこで終わり。
+        // eventSeedsにeventSeed以外のものを入れられるようにする。
         if(this.eventSeeds[code] !== undefined){
-          return this.eventSeeds[code];
+          const seed = this.eventSeeds[code];
+          if(seed instanceof SpotEventSeed || seed instanceof BandEventSeed){
+            // 従来通りEventSeedの場合
+            return seed;
+          }else if(typeof seed === 'function'){
+            // presetsからEventSeedを作る関数の場合
+            // 戻り値はEventSeedでもいいし、その設計図でもいい。
+            // 関数でもいい（presetsが関数を返す関数）。その場合はSpotEventSeedができる。
+            const recipe = seed(presets);
+            if(recipe instanceof SpotEventSeed || recipe instanceof BandEventSeed){
+              return recipe;
+            }else if(typeof recipe === 'function'){
+              return new SpotEventSeed(recipe);
+            }else if(typeof recipe === 'object'){
+              const {shape = 'spot', action = () => {}} = recipe;
+              if(shape === 'spot'){
+                return new SpotEventSeed(action);
+              }else if(shape === 'band'){
+                return new BandEventSeed(action, recipe);
+              }
+            }
+          }else if(typeof seed === 'object'){
+            // EventSeedの設計図の場合（Sequencerの時と同様にshapeで分ける）
+            const {shape = 'spot', action = () => {}} = seed;
+            if(shape === 'spot'){
+              return new SpotEventSeed(action);
+            }else if(shape === 'band'){
+              return new BandEventSeed(action, seed);
+            }
+          }
+          // 変なものが設定されている場合
+          return null;
+          //return this.eventSeeds[code];
         }
         // それが無い場合、まずmods一覧を見て行き、適用できるのがあったら適用する
         // modは適用できるだけ適用する。nullが返る場合は据え置きとし、次に行く。
@@ -3418,7 +3643,7 @@
         const {
           name = "sequencer", type = "continuous",
           loop = false, delay = 0, showInfo = {},
-          hidden = "none", bandEventAlways = false
+          hidden = "none", bandEventAlways = false, hiddenFunction = () => {}
         } = params;
         const {
           parsed : showParsed = false, eventSeeds : showEventSeeds = false, events : showEvents = false
@@ -3429,7 +3654,7 @@
         let duration = 0;
         // durationはそれぞれのスコアのMAXを取る
         for(const eachScore of scores){
-          const a0 = ScoreParser.Parse(eachScore);
+          const a0 = ScoreParser.Parse(eachScore, this.autoParse);
           if(showParsed){ console.log(a0); }
           const a1 = this.createEventSeedArray(a0);
           if(showEventSeeds){ console.log(a1); }
@@ -3441,9 +3666,9 @@
         let seq = null;
         switch(type){
           case "continuous":
-            seq = new ContinuousSequencer({loop, delay, duration, hidden, bandEventAlways}); break;
+            seq = new ContinuousSequencer({loop, delay, duration, hidden, bandEventAlways, hiddenFunction}); break;
           case "discrete":
-            seq = new DiscreteSequencer({loop, delay, duration, hidden, bandEventAlways}); break;
+            seq = new DiscreteSequencer({loop, delay, duration, hidden, bandEventAlways, hiddenFunction}); break;
         }
         if(seq === null){ return null; }
         seq.addEvents(events);
@@ -3457,9 +3682,9 @@
         if(sequencer === undefined){ return; }
         return sequencer.active;
       }
-      static Parse(score){
+      static Parse(score, autoParse = false){
         // firstParse.
-        return firstParse(score);
+        return firstParse(score, autoParse);
       }
       static isValidScore(scoreString){
         // スコア表示に適する文字の並びかどうか調べるだけ。
@@ -4165,10 +4390,11 @@
 
     // Array関連
     utils.ArrayWrapper = ArrayWrapper;
-    utils.RandomChoiceArray = RandomChoiceArray;
+    utils.LoopArray = LoopArray;
     utils.RoundRobinArray = RoundRobinArray;
-    utils.SweepArray = SweepArray;
-    utils.BooleanArray = BooleanArray;
+    utils.RandomChoiceArray = RandomChoiceArray;
+    //utils.SweepArray = SweepArray; // 廃止
+    //utils.BooleanArray = BooleanArray; // 廃止
 
     // CrossReferenceArray関連
     utils.CrossReferenceArray = CrossReferenceArray;
@@ -4204,6 +4430,8 @@
     utils.SpotEventSeed = SpotEventSeed;
     utils.BandEventSeed = BandEventSeed;
     utils.ScoreParser = ScoreParser;
+
+    utils.parseValue = parseValue; // 一応。使うかどうか知らないけど。
 
     // Easing.
     utils.Easing = Easing;
@@ -5453,12 +5681,23 @@ available waveTables:
         //const properFrequency = (typeof(frequency) === 'string' ? this.getFreq(frequency) : frequency);
         const oscillators = [];
         for(const f of frequencies){
-          const oscillatorOptions = {
-            frequency:f, type:type
-          };
-          if(type === "custom"){
+          // typeなどは後で決める
+          const oscillatorOptions = { frequency:f };
+          if(type === "sine" || type === "triangle" || type === "square" || type === "sawtooth"){
+            // 基本四種の場合
+            oscillatorOptions.type = type;
+          }else if(type === "custom"){
+            // customの場合はnameで判断（後方互換性のために残す）
             if(name !== "" && this.periodicWaves[name] !== undefined){
+              oscillatorOptions.type = 'custom';
               oscillatorOptions.periodicWave = this.periodicWaves[name];
+            }
+          }else{
+            // いずれでもない場合は、それをcustom periodicの名称とみなす。
+            // たとえばcelesteがあったとして、type:'celeste'とするだけでそれが選ばれる。
+            if(type !== "" && this.periodicWaves[type] !== undefined){
+              oscillatorOptions.type = 'custom';
+              oscillatorOptions.periodicWave = this.periodicWaves[type];
             }
           }
           oscillators.push(new OscillatorNode(actx, oscillatorOptions));
@@ -5603,20 +5842,19 @@ available waveTables:
         // fpを追加する。fで*1.5倍, pで0.66倍。強さ。
         // 調べる場所を統一して変更しやすくする
         if(!AudioPlayer.isValidCode(code)){ return null; }
-        //if(code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_]*[sl]*d?[fp]*$/) === null){ return null; }
         // A+とかA-とかAnとかAの部分を抜き出す
         const codeTop = code.match(/^[A-G]{1}[\+\-n]{0,1}/)[0];
         const cap = codeTop.match(/^[A-G]{1}/)[0];
         const symbol = codeTop.split(/[A-G]{1}/)[1];
-
+        // 意外とこういう関数が無いので...
         const cnt = (u) => (u === null ? 0 : u.length);
         // ^の数だけ上げて_の数だけ下げる。たとえばA5ならA^^と表現する。F5ならF^^ですね。逆にG2だったらG_となる。
         const level = Math.max(0, Math.min(7, 3 + cnt(code.match(/\^/g)) - cnt(code.match(/_/g))));
 
         const finalCode = cap + level.toString() + symbol;
 
-        // sの数だけ長さを0.5倍、lの数だけ長さを2倍。基準はstep. dがあれば最後に1.5倍する
-        const duration = step * Math.pow(2, -cnt(code.match(/s/g)) + cnt(code.match(/l/g))) * (1 + 0.5 * cnt(code.match(/d/g)));
+        // sの数だけ長さを0.5倍、lの数だけ長さを2倍。基準はstep. さらにdの数だけ1.5倍する
+        const duration = step * Math.pow(2, -cnt(code.match(/s/g)) + cnt(code.match(/l/g))) * Math.pow(1.5, cnt(code.match(/d/g)));
         // pの数だけ0.666倍、fの数だけ1.5倍の強さにする
         const volume = Math.pow(1.5, -cnt(code.match(/p/g)) + cnt(code.match(/f/g)));
         // まあいいや。
@@ -5625,7 +5863,9 @@ available waveTables:
       static isValidCode(code){
         // standardParseCodeに適合するかどうかを調べるだけ。
         // 適合するならtrueを返す。
-        return code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_]*[sl]*d?[fp]*$/) !== null;
+        // dの数を無制限にし、さらに^_以降は順序不問とする。
+        return code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_sldfp]*$/) !== null;
+        //return code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_]*[sl]*d?[fp]*$/) !== null;
       }
     }
 
@@ -5685,6 +5925,7 @@ available waveTables:
       84, 86, 87, 89, 91, 92, 94
     ];
     const frequencyDict = {};
+    const noteKeyDict = {};
     // ナチュラルを追加する。ナチュラルは臨時記号の一種で、無印と違って調号の影響を受けないので重要である。
     // A, An, A+, A-. AとAnは同じ音の高さだが、Aは調号により+-が付く可能性がある。
     for(let i=0; i<56; i++){
@@ -5692,12 +5933,17 @@ available waveTables:
       frequencyDict[`${notes[i]}n`] = 55*Math.pow(2, noteKeys[i]/12);
       frequencyDict[`${notes[i]}+`] = 55*Math.pow(2, (noteKeys[i]+1)/12);
       frequencyDict[`${notes[i]}-`] = 55*Math.pow(2, (noteKeys[i]-1)/12);
+      noteKeyDict[notes[i]] = noteKeys[i];
+      noteKeyDict[`${notes[i]}n`] = noteKeys[i];
+      noteKeyDict[`${notes[i]}+`] = noteKeys[i]+1;
+      noteKeyDict[`${notes[i]}-`] = noteKeys[i]-1;
     }
     const intervalDict = {};
     for(let i=-48; i<=48; i++){
       intervalDict[i] = Math.pow(2, i/12);
     }
     AudioPlayer.frequencyDict = frequencyDict;
+    AudioPlayer.noteKeyDict = noteKeyDict;
     AudioPlayer.defaultFrequencyFunction = (actx, freq) => {};
     AudioPlayer.defaultGainFunction = (actx, gain, volume) => {
       gain.setValueAtTime(volume, actx.currentTime);
