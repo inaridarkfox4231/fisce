@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.1.15
+ * @version 1.2.0
  */
 
 (function (global, factory) {
@@ -25,6 +25,11 @@
     Geometry関連(v,n,f,あとはoptionでc,uv,l)
 
     板ポリ芸やライティング、shaderの改変機構、テクスチャ関連、VAO関連
+    1.1.0～1.1.15
+    Tessellation関連を追加。0と1はバグってるので使うなら2以降で。最新は15.
+    1.2.0～
+    Sequencer関連が落ち着いたのでマイナー更新。
+    時計関連はClockだけ残して後は削除。
   */
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
@@ -1553,27 +1558,38 @@
     // mode:manualの場合、こっちで明示的にkillする必要がある。もちろんkillしないでずーっと飛び回らせる選択肢もある。
     // それ以外のパラメータを自由に設定し、メソッド内で使える。
     // 役に立つかわかんないけどpause/start/switchActiveStateを追加。何らかの使い道はあるでしょう。
+    // delayとvanishを追加。delayは正規のprogress前の処理。progressは-1～0と推移。
+    // vanishは正規のprogress後の処理。progressは1～2と推移。remove判定はlife+vanishまでとする。
     class Bullet{
       constructor(params = {}){
         this.life = 1; // 寿命
+        this.delay = 0; // ディレイを追加。
+        this.vanish = 0; // 余り。たとえば30の場合life+30で消える。
         this.type = 'discrete'; // discrete/continuous
         this.mode = 'auto'; // auto/manual
         this.group = 'default'; // groupによって処理を分けたい場合。
-        // 要はこのタイミングでしか上書きできないということ。上記4種類のみ可能。
+        // 要はこのタイミングでしか上書きできないということ。上記6種類のみ可能。
         // あと独自パラメータについても予約されてるこれらに関しては不可とする。特にバリデーションはしない。好きに。
         for(const [key, value] of Object.entries(params.construct)){
           this[key] = value; // 黒魔術
+          // delayは負の数禁止
+          if(key === 'delay'){ this[key] = Math.max(0, value); }
+          // vanishも負の数禁止
+          if(key === 'vanish'){ this[key] = Math.max(0, value); }
         }
         // progressとelapsedは上書きされると困るのでこっちで定義する。
-        this.progress = 0;
-        this.elapsed = 0;
+        this.elapsed = -this.delay;
+        this.timeStump = window.performance.now() + this.delay;
+        this.pauseTimeStump = 0; // pause用
+        // progressですが...elapsedが負の場合は逆progressとする。つまり-1～0ということ。
+        this.progress = (this.delay > 0 ? this.elapsed / this.delay : this.elapsed / this.life);
+
         const {init = () => {}, update = () => {}, display = () => {}, remove = () => {}} = params;
         init(this);
         this.updateFunction = update;
         this.displayFunction = display;
         this.removeFunction = remove;
-        this.timeStump = 0;
-        this.pauseTimeStump = 0; // pause用
+
         this.active = true; // pause用
         // methodsの中を見る
         const {methods = {}} = params;
@@ -1584,7 +1600,7 @@
           // Bulletのカスタム関数を個別で呼び出す場合「に限り」、オブジェクト形式で引数を渡せるようにする
           this[name] = (customParameters = {}) => { func(this, customParameters); };
         }
-        if(this.type === 'continuous'){ this.timeStump = window.performance.now(); }
+        //if(this.type === 'continuous'){ this.timeStump = window.performance.now(); }
       }
       calcProgress(){
         // 処理は異なる
@@ -1594,7 +1610,14 @@
         if(this.type === 'discrete'){
           this.elapsed++;
         }
-    	  this.progress = this.elapsed / this.life;
+        // delayやvanishが正の場合は特別な処理でprogressを扱いやすくする
+        if(this.delay > 0 && (this.elapsed < 0)){
+          this.progress = this.elapsed / this.delay;
+        }else if(this.vanish > 0 && (this.life < this.elapsed)){
+          this.progress = 1 + (this.elapsed - this.life) / this.vanish;
+        }else{
+          this.progress = this.elapsed / this.life;
+        }
       }
       update(){
         // activeでない場合は実行しない
@@ -1610,7 +1633,9 @@
         // activeでない場合は実行しない
         if(!this.active) return;
         if(this.mode === 'manual') return;
-        if(this.progress < 1) return;
+        //if(this.progress < 1) return;
+        // vanishの分の猶予を用意して表現に使う
+        if(this.elapsed < this.life + this.vanish) return;
         this.removeFunction(this);
         this.kill();
       }
@@ -1821,6 +1846,17 @@
           if(b[method] === undefined) continue;
           b[method]();
         }
+      }
+      getBullets(groupName = ""){
+        // 指定したグループのBulletをまとめて取得
+        if(arguments.length === 0){
+          return this;
+        }
+        return this.filter((b) => (b.group === groupName));
+      }
+      count(groupName = ""){
+        // 指定したグループのBulletの個数を取得
+        return this.getBullets(...arguments).length;
       }
     }
 
@@ -2110,436 +2146,152 @@
       return morton16(Math.min(a, b), Math.max(a, b));
     }
 
-    // TimerとCounterを同じクラスの継承で書いて、
-    // Scheduleを両方で使えるようにし、
-    // TimerでもCounterでもScheduleが作れるようにする
+    // loopのデフォルトは...ですね。falseがいいですねタブンネ。
+    // 200 -> non-loop200count, 200l -> loop200count,
+    // 200ms -> non-loop200milliseconds, 200msl -> loop200milliseconds.
     class Clock{
       constructor(params = {}){
         const {
-          delay = 0, zeroClump = true,
-          duration = Infinity, callback = () => {}
+          duration = Infinity, type = 'discrete', loop = false
         } = params;
-
-        this.delay = delay;
-        this.zeroClump = zeroClump;
         this.duration = duration;
-        this.callback = callback;
-
-        this.isPause = false;
+        this.type = type;
+        this.elapsed = 0;
+        this.timeStump = window.performance.now();
+        this.pauseTimeStump = 0;
+        this.active = true;
+        this.loop = loop;
       }
-      setParams(params = {}){
-        const {
-          delay = this.delay, zeroClump = this.zeroClump,
-          duration = this.duration, callback = this.callback
-        } = params;
-
-        this.delay = delay;
-        this.zeroClump = zeroClump;
-        this.duration = duration;
-        this.callback = callback;
-        return this;
-      }
-      getElapsed(){
-        return 0;
-      }
-      getProgress(){
-        return 0;
-      }
-      update(forceUpdate = false){
-        return false;
-      }
-      pause(){
-        return this;
-      }
-      start(){
-        return this;
-      }
-    }
-
-    class TimeArrow extends Clock{
-      constructor(params = {}){
-        super(params);
-        this.elapsedStump = window.performance.now() + this.delay;
-        const {timeScale = 1000} = params;
-        this.timeScale = timeScale;
-        this.deltaStump = window.performance.now();
-        this.pauseStump = 0;
-      }
-      setElapsed(){
-        this.elapsedStump = window.performance.now() + this.delay;
-        return this;
-      }
-      setParams(params = {}){
-        super.setParams(params);
-        const {timeScale = this.timeScale} = params;
-        this.timeScale = timeScale;
-        return this;
-      }
-      getElapsedMillis(){
-        if(this.isPause){
-          if(this.zeroClump){
-            return Math.max(0, this.pauseStump - this.elapsedStump);
-          }
-          return this.pauseStump - this.elapsedStump;
+      reset(){
+        this.elapsed = 0;
+        this.active = true;
+        this.pauseTimeStump = 0;
+        if(this.type === 'continuous'){
+          this.timeStump = window.performance.now();
         }
-        if(this.zeroClump){
-          return Math.max(0, window.performance.now() - this.elapsedStump);
-        }
-        return window.performance.now() - this.elapsedStump;
-      }
-      getElapsed(){
-        // delayがある場合に0にしたければtrueを指定する。指定しない場合は負の数。
-        return this.getElapsedMillis() / this.timeScale;
-      }
-      getElapsedDiscrete(interval = 1000, modulo = 0){
-        // これさぁ、moduloのデフォルトを0にして、0の場合にそのまま出そうぜ？
-        // 1でも使いたいんだよ。
-        const elapsed = this.getElapsedMillis();
-        const n = Math.floor(elapsed / interval);
-        if (modulo > 0) {
-          return n % modulo;
-        }
-        return n;
-      }
-      getProgress(){
-        // 進捗。durationはms指定。
-        const prg = this.getElapsedMillis() / this.duration;
-        return Math.min(1, prg);
-      }
-      update(forceUpdate = false){
-        if (this.isPause) return;
-        // thisを取る
-        const elapsedTime = this.getElapsedMillis();
-
-        if ((elapsedTime > this.duration) || forceUpdate) {
-          if(!forceUpdate){
-            // durationを超えたら更新
-            this.elapsedStump += this.duration;
-            // duration2個分とかだった場合、もう面倒なので「その時点」にしてしまおう
-            // たとえばBPMがクッソ速い場合
-            if (elapsedTime > 2*this.duration) {
-              this.elapsedStump = window.performance.now();
-            }
-          }else{
-            // forceUpdateの場合は
-            this.elapsedStump = window.performance.now();
-            // でいいですね。
-          }
-          // なんかやらせたい場合。引数はthisのみ可。
-          this.callback(this);
-          return true;
-        }
-        return false;
-      }
-      getDeltaMillis(){
-        // 当然だが毎フレーム実行するなどしないと実質機能しない（当たり前か）
-        // p5だってこれ毎フレームやってるからね
-        if(this.isPause){
-          return 0;
-        }
-        // 最後にスタンプした瞬間との差分を記録
-        const delta = window.performance.now() - this.deltaStump;
-        // 直後にスタンプを押す（差分用の）
-        this.deltaStump = window.performance.now();
-        return delta;
-      }
-      getDelta(){
-        return this.getDeltaMillis() / this.timeScale;
-      }
-      pause(){
-        if (this.isPause) return; // 重ね掛け回避
-        this.isPause = true;
-        this.pauseStump = window.performance.now();
-        return this;
-      }
-      start(){
-        if (!this.isPause) return; // 重ね掛け回避
-        this.isPause = false;
-        this.elapsedStump += window.performance.now() - this.pauseStump;
-        this.deltaStump = window.performance.now();
-        return this;
-      }
-    }
-
-    class Counter extends Clock{
-      constructor(params = {}){
-        super(params);
-        this.elapsedStump = -this.delay; // マイナス！
-      }
-      setElapsed(){
-        this.elapsedStump = -this.delay;
-        return this;
-      }
-      getElapsed(){
-        if(this.zeroClump){
-          return Math.max(0, this.elapsedStump);
-        }
-        return this.elapsedStump;
-      }
-      getElapsedDiscrete(divisor = 1, modulo = 0){
-        const elapsedCount = this.getElapsed();
-        const n = Math.floor(elapsedCount/divisor);
-        // moduloが0の場合は単純にdivisorで割った商を返す。
-        // moduloが1以上の場合は余りを取る。
-        if(modulo > 0){
-          return n % modulo;
-        }
-        return n;
-      }
-      getProgress(){
-        return this.getElapsed()/this.duration;
-      }
-      update(forceUpdate = false){
-        if (this.isPause) return;
-
-        this.elapsedStump++;
-        // forceUpdateがあると強制的に次に行く。elapsedStumpも0になる。はい。
-        if((this.elapsedStump === this.duration) || forceUpdate){
-          this.callback(this);
-          this.elapsedStump = 0;
-          return true;
-        }
-        return false;
-      }
-      pause(){
-        if (this.isPause) return; // 重ね掛け回避
-        this.isPause = true;
-        return this;
-      }
-      start(){
-        if (!this.isPause) return; // 重ね掛け回避
-        this.isPause = false;
-        return this;
-      }
-    }
-
-    // 複数のClockをまとめて扱う仕組み
-    class ClockSet{
-      constructor(data = {}){
-        this.clocks = {};
-        for(const name of Object.keys(data)){
-          this.createClock(name, data[name]);
-        }
-      }
-      createClock(name = "default", params = {}){
-        this.clocks[name] = this.clockFactory(params);
-        return this;
-      }
-      clockFactory(params = {}){
-        return new Clock(params);
-      }
-      clock(name){
-        return this.clocks[name];
-      }
-      executeAll(methodName){
-        for(const name of Object.keys(this.clocks)){
-          this.clocks[name][methodName]();
-        }
-        return this;
-      }
-    }
-
-    class TimeArrowSet extends ClockSet{
-      constructor(data = {}){
-        super(data);
-      }
-      clockFactory(params = {}){
-        return new TimeArrow(params);
-      }
-    }
-    class CounterSet extends ClockSet{
-      constructor(data = {}){
-        super(data);
-      }
-      clockFactory(params = {}){
-        return new Counter(params);
-      }
-    }
-
-    // Clockを対象とする形で一般化したい
-    class Schedule{
-      constructor(params = {}){
-        this.buildStatus(params);
-      }
-      buildStatus(params = {}){
-        const {
-          durations = [], actions = [], callbacks = [], loopers = [],
-          clockParams = {}
-        } = params;
-
-        this.clock = this.clockFactory(clockParams);
-
-        this.durations = durations.slice(); // 複製する。これの長さが基準となる。
-        const L = this.durations.length; // 全体の長さ
-
-        this.currentIndex = L; // initialize前のデフォルトはLの方がいいだろう
-
-        // loopCountは別で管理する
-        this.loopCounts = new Array(L);
-        this.loopCounts.fill(0);
-
-        // setup.
-        this.isFinished = true;
-        this.isPause = true;
-
-        this.status = new Array(L);
-
-        if(durations.length === 0) return; // あとから決める場合はここで切る
-
-        // fillをobjectで使うと全部一緒になってしまうので注意
-        for(let i=0; i<L; i++){
-          this.status[i] = {action:null, callback:null, looper:null};
-        }
-
-        const setStatus = (statusName, src, statusLength, defaultValue) => {
-          if(Array.isArray(src)){
-            for(let i=0; i<Math.min(statusLength, src.length); i++){
-              this.status[i][statusName] = src[i];
-            }
-          }else{
-            // {'3':~~, '7':~~} のような書き方を許す。その場合配列ではない。
-            for(const eachIndex of Object.keys(src)){
-              this.status[eachIndex][statusName] = src[eachIndex];
-            }
-          }
-          for(let i=0; i<statusLength; i++){
-            if(this.status[i][statusName] === null){
-              this.status[i][statusName] = defaultValue;
-            }
-          }
-        }
-        setStatus("action", actions, L, Schedule.nullFunction);
-        setStatus("callback", callbacks, L, Schedule.nullFunction);
-        setStatus("looper", loopers, L, {back:0, forward:0, count:1});
-      }
-      clockFactory(params = {}){
-        return new Clock(params);
-      }
-      initialize(){
-        this.currentIndex = 0;
-
-        this.clock.setElapsed();
-        this.clock.setParams({
-          duration:this.durations[this.currentIndex],
-          callback: () => { this.updateSchedule(); }
-        });
-
-        this.isFinished = false; // カウントだけ実行したら終わる
-        this.isPause = false;
-
-        this.loopCounts.fill(0); // すべて0で初期化
-      }
-      updateSchedule(){
-        // callbackとactionは自動的に最初に戻る
-        // callbackがtrueを返す場合はループを切る（forwardを採用する）
-
-        const {callback, looper} = this.status[this.currentIndex];
-
-        // ここで既定値を決めておけばundefinedの場合はこれらが使われる。
-        // 何が言いたいかというとforwardに0以外を指定するケースはほぼ無い。
-        // あったら困るので用意するけど。
-        const {back = 0, forward = 0, count = 1} = looper;
-        const loopBreak = callback(this.clock);
-
-        this.loopCounts[this.currentIndex]++;
-        // loopBreakの場合は強制的に抜ける
-        if((this.loopCounts[this.currentIndex] === count) || loopBreak){
-          this.loopCounts[this.currentIndex] = 0;
-
-          if(typeof forward === 'number'){
-            this.currentIndex += (1+forward);
-          }else if(typeof forward === 'function'){
-            this.currentIndex += (1+forward());
-          }else{
-            this.currentIndex++;
-          }
-
-          // もしdurationsの長さに到達したなら終了する
-          if(this.currentIndex === this.durations.length){
-            this.isFinished = true;
-            return;
-          }
-        }else{
-          // 戻る場合。たとえばback:-1なら同じ内容を繰り返す。
-          if(typeof back === 'number'){
-            this.currentIndex += (1+back);
-          }else if(typeof back === 'function'){
-            this.currentIndex += (1+back());
-          }else{
-            this.currentIndex++;
-          }
-        }
-
-        // あとはdurationを更新するだけ
-        this.clock.setParams({duration:this.durations[this.currentIndex]});
       }
       update(){
-        if(this.isPause) return;
-        if(this.isFinished) return; // finishしたらやらない。
-
-        const prg = this.clock.getProgress();
-        // actionの戻り値がtrueの場合はforceUpdateを実行する
-        const action = this.status[this.currentIndex].action;
-        const forceUpdate = action(prg);
-        this.clock.update(forceUpdate);
+        if(!this.active) return;
+        switch(this.type){
+          case 'discrete':
+            this.elapsed++;
+            break;
+          case 'continuous':
+            this.elapsed = window.performance.now() - this.timeStump;
+            break;
+        }
+        if(this.elapsed >= this.duration){
+          this.reset();
+          if(!this.loop){ this.pause(); }
+          return true;
+        }
+        return false;
       }
       pause(){
-        // 重ね掛け回避
-        if(this.isPause)return;
-        this.clock.pause();
-        this.isPause = true;
+        if(!this.active) return;
+        if(this.type === 'continuous'){
+          this.pauseTimeStump = window.performance.now();
+        }
+        this.active = false;
       }
       start(){
-        // 重ね掛け回避
-        if(!this.isPause)return;
-        this.clock.start();
-        this.isPause = false;
+        if(this.active) return;
+        if(this.type === 'continuous'){
+          this.timeStump += window.performance.now() - this.pauseTimeStump;
+        }
+        this.active = true;
       }
-      getIndex(){
-        // 詳細なシーケンス制御のためにはインデックス単位での管理が必須
-        // たとえば長さが4の場合これが4であることでシーケンスが終わっていることを表現できる
-        return this.currentIndex;
+      switchActiveState(){
+        if(this.active){
+          this.pause();
+        }else{
+          this.start();
+        }
+      }
+      getElapsed(){
+        return this.elapsed;
+      }
+      getProgress(){
+        return this.elapsed/this.duration;
+      }
+      getElapsedScaled(scale = 1000){
+        return this.getElapsed()/scale;
+      }
+      getElapsedDiscrete(scale = 1000, modulo = 0){
+        const n = Math.floor(this.getElapsed()/scale);
+        modulo = Math.max(0, Math.floor(modulo));
+        if(modulo === 0){ return n; }
+        return n % modulo;
+      }
+      getElapsedSeparate(scale = 1000, modulo = 0){
+        const x = this.getElapsedScaled(scale);
+        const n = Math.floor(x);
+        const f = x - n;
+        modulo = Math.max(0, Math.floor(modulo));
+        if(modulo === 0){ return {floor:n, fract:f}; }
+        return {floor:n % modulo, fract:f};
+      }
+      static create(s){
+        // たとえば60とすれば60フレームのdiscreteのClockが生成される。
+        if(typeof s === 'number'){
+          return Clock.create(s.toString());
+        }
+        // たとえば'-1ms'でcontinuousのInfinityになる。'-1'だとdiscreteのInfinityになる。
+        // '200ms'とか'80'と指定する。
+        if(s.match(/^[\+\-]{0,1}[0-9]+(|ms|msl|l)$/) === null){
+    		return new Clock();
+    	}
+        const t = Number(s.match(/^[\+\-]{0,1}[0-9]+/)[0]);
+        const type = (s.match(/ms/) === null ? 'discrete' : 'continuous');
+        const loop = (s.match(/l/) === null ? false : true);
+        const duration = (t < 0 ? Infinity : t);
+        return new Clock({ duration:t, type:type, loop:loop });
       }
     }
 
-    Schedule.nullFunction = () => {};
-
-    class ScheduledTimeArrow extends Schedule{
-      constructor(params = {}){
-        super(params);
-      }
-      clockFactory(params = {}){
-        return new TimeArrow(params);
-      }
-    }
-
-    class ScheduledCounter extends Schedule{
-      constructor(params = {}){
-        super(params);
-      }
-      clockFactory(params = {}){
-        return new Counter(params);
-      }
-    }
+    // それ以外は廃止。
 
     // Sequencer.
+    class SpotEvent{
+      constructor(params = {}){
+        const {
+          key = 0, name = "", action = () => {}, priority = 0
+        } = params;
+        this.key = key;
+        this.name = name;
+        this.action = action;
+        this.priority = priority;
+      }
+      execute(){
+        // actionの戻り値を返す
+        // thisを渡す。keyも含めてすべて使えるように。
+        return this.action(this);
+      }
+    }
+    // BandEventは廃止。
+
+    // Sequencer.
+    // stepはギリギリ残す...んー...んー...
     class Sequencer{
       constructor(params = {}){
         const {
-          loop = false, duration = 1000, delay = 0, step = 1,
-          hidden = "none", bandEventAlways = false, hiddenFunction = () => {}
+          type = 'discrete',
+          loop = false, duration = 1000, step = 1,
+          hidden = "none", hiddenFunction = () => {}, usePriority = false
         } = params;
+        this.type = type; // discrete/continuous
         this.waitingSpotEvents = []; // 待ち状態
         this.finishedSpotEvents = []; // 実行済み
-        this.bandEvents = []; // おわったら弾く
         this.elapsed = 0;
         this.duration = duration; // 可変とする。1000でも200でも48000でも何でも。何なら途中で変更も可能。
         this.active = false; // pauseの挙動がDiscreteとContinuousで違うのです。
         this.loop = loop; // オートリセット
-        this.delay = delay; // 一定期間だけおいてから始まる仕組み。
         this.step = step; // 刻み幅. 評価の際にkeyに掛ける。
 
-        this.bandEventAlways = bandEventAlways; // pause中にBandEventを実行したい場合にこれをtrueにする。ただしactiveなもののみ。
+        this.usePriority = usePriority;
+
+        this.timeStump = 0;
+        this.pauseTimeStump = 0;
 
         // 画面遷移の際にpauseを実行する場合にhiddenを"pause"にする。
         // resetしてからpauseしたい場合は"reset"にする。（pauseは必須）
@@ -2550,8 +2302,8 @@
               hiddenFunction(document.hidden);
               return;
             }
-          	if(!this.active) return;
-          	if(document.hidden){
+            if(!this.active) return;
+            if(document.hidden){
               if(hidden === "reset"){ this.reset(); }
               if(hidden === "reset" || hidden === "pause"){
                 this.pause();
@@ -2569,18 +2321,36 @@
         this.waitingSpotEvents.push(...this.finishedSpotEvents);
         this.sortSpotEvents();
         this.finishedSpotEvents = [];
-        this.bandEvents = [];
         this.active = true;
+        switch(this.type){
+          case 'discrete': this.elapsed = 0; break;
+          case 'continuous':
+            this.timeStump = window.performance.now(); // delay廃止
+            this.elapsed = 0;
+            break;
+        }
       }
       pause(){
+        // 重ね掛け回避。
+        if(!this.active) return;
         // activeをfalseにする
         // Discrete: 何もしない
         // Continuous: pauseTimeStumpを記録する
+        this.active = false;
+        if(this.type === 'continuous'){
+          this.pauseTimeStump = window.performance.now();
+        }
       }
       start(){
+        // 重ね掛け回避
+        if(this.active) return;
         // activeをtrueにする
         // Discrete: 何もしない
         // Continuous: 現在時刻とpauseTimeStumpとの差をtimeStumpに加える
+        this.active = true;
+        if(this.type === 'continuous'){
+          this.timeStump += window.performance.now() - this.pauseTimeStump;
+        }
       }
       switchActiveState(){
         // switch active state.
@@ -2593,49 +2363,31 @@
       clockUpdate(){
         // Discrete: 増やすだけ
         // Continuous: 時刻を取得してtimeStumpと比較する
-      }
-      updateBandEvents(){
-        for(let i=this.bandEvents.length-1; i>=0; i--){
-          const bandEvent = this.bandEvents[i];
-          if(bandEvent.active){
-            // stepで割った値を送る。step指定の場合、durationもそれに従う必要がある。
-            bandEvent.execute(this.elapsed / this.step);
-          }else{
-            this.bandEvents.splice(i, 1);
-          }
+        switch(this.type){
+          case 'discrete': this.elapsed++; break;
+          case 'continuous': this.elapsed = window.performance.now() - this.timeStump; break;
         }
       }
       update(){
-        if(!this.active){
-          // bandEventAlwaysオプションがtrueの場合、bandEventの更新だけ実行する。
-          // elapsedが動かないので止めた時の挙動をそのまま繰り返し実行する。
-          if(this.bandEventAlways){
-            this.updateBandEvents();
-          }
-          return;
-        }
+        if(!this.active) return;
         // waitingSpotEventsを順に見て行ってelapsed以下のものを実行し
         // finishedの方に移すだけ。sort済みなので頭から見て行く
-        // 戻り値の型が「BandEvent」ならbandEventsに放り込む。
         // elapsed < keyでbreakする。もしくは配列の長さが0ならbreakする。while(length>0){ elapsed < key -> break; etc... }
         // etcといっても実行したのち配列から外してfinishedにぶち込むだけ
-        // bandEventsをさらってactiveでなければ外す。activeならelapsedを渡して実行する。
 
         while(this.waitingSpotEvents.length > 0){
           if(this.elapsed < this.waitingSpotEvents[0].key * this.step) break;
-          const spotEvent = this.waitingSpotEvents.shift();
-          const returnValue = spotEvent.execute();
-          // 戻り値がbandEventなら追加
-          if(returnValue instanceof BandEvent){
-            this.bandEvents.push(returnValue);
-          }
-          this.finishedSpotEvents.push(spotEvent);
-        }
+          const event = this.waitingSpotEvents.shift();
+          event.execute();
 
-        this.updateBandEvents();
+          this.finishedSpotEvents.push(event);
+        }
 
         // これは最後
         this.clockUpdate();
+
+        // もしバックやスキップをするならタイミングはここしかない
+
         // オートループ
         if(this.elapsed >= this.duration){
           this.active = false;
@@ -2653,165 +2405,51 @@
         this.waitingSpotEvents.sort((e0, e1) => {
           if(e0.key < e1.key){ return -1; }
           else if(e0.key > e1.key){ return 1; }
+          // 同じ優先順位でusePriorityがtrueの場合はそれも考慮する
+          if(this.usePriority){
+            if(e0.priority < e1.priority){ return -1; }
+            else if(e0.priority > e1.priority){ return 1; }
+          }
           return 0;
         });
       }
       addEvents(){
-        const events = (Array.isArray(arguments[0]) ? arguments[0] : [...arguments]);
-        // SpotEventの場合はぶち込む
-        // BandEventの場合はfireEventとfinishEventをspotにぶち込む
-        // オブジェクトの場合はこっちで用意する。shape:'spot'/'band'で分ける（デフォルトは'spot'.）
-        // sortしておわり
-        for(const e of events){
-          if(e instanceof SpotEvent){
-            this.waitingSpotEvents.push(e);
-          }else if(e instanceof BandEvent){
-            this.waitingSpotEvents.push(e.fireEvent);
-            this.waitingSpotEvents.push(e.finishEvent);
-          }else if(typeof e === 'object'){
-            const {key, shape = 'spot'} = e;
-            switch(shape){
-              case 'spot':
-                const spot_event = new SpotEvent(key, e);
-                this.waitingSpotEvents.push(spot_event);
-                break;
-              case 'band':
-                const band_event = new BandEvent(key, e);
-                this.waitingSpotEvents.push(band_event.fireEvent);
-                this.waitingSpotEvents.push(band_event.finishEvent);
-                break;
-              default:
-                continue;
+        const eventObjects = (Array.isArray(arguments[0]) ? arguments[0] : [...arguments]);
+        // Eventをここに入れるケースなんてあるか？オブジェクトオンリーでよくない？
+        // どうせ使わない...イベント単体で扱う機会がない気がする。
+        // Bulletは単体でも仕事できるけどEventはSequencerの中でないと生きられないんで
+        // そうしましょ。個別に扱う機会が無いと思う
+        // ついでにelapsedに従ってwaitingに入れたりfinishedに入れたりしよう。
+        // 動的更新の実験やりたい
+        for(const data of eventObjects){
+          const {shape = 'spot', key = 0} = data;
+          const e = new SpotEvent(data);
+          if(shape === 'spot'){
+            // 動的更新を考慮してelapsedに従ってどっちに入れるか決める
+            if(key < this.elapsed){
+              this.finishedSpotEvents.push(e)
+            }else{
+              this.waitingSpotEvents.push(e);
             }
           }
         }
         this.sortSpotEvents();
       }
-      deleteSpotEvent(e){
-        Sequencer.deleteEvent(e, this.waitingSpotEvents);
-        Sequencer.deleteEvent(e, this.finishedSpotEvents);
-      }
-      deleteBandEvent(e){
-        Sequencer.deleteEvent(e, this.bandEvents);
-        this.deleteSpotEvent(e.fireEvent, this.waitingSpotEvents);
-        this.deleteSpotEvent(e.finishEvent, this.finishedSpotEvents);
+      deleteEvent(name){
+        Sequencer.deleteEventFromArray(name, this.waitingSpotEvents);
+        Sequencer.deleteEventFromArray(name, this.finishedSpotEvents);
       }
       isActive(){
         // 無いと不整合だろう。
         return this.active;
       }
-      static deleteEvent(event, array){
-        if(event.name === undefined) return;
+      static deleteEventFromArray(name = "", array = []){
+        // nameで検索し、同じ名前のそれをすべて排除。
         for(let k=array.length-1; k>=0; k--){
-          if(event.name === array[k].name){
+          if(name === array[k].name){
             array.splice(k, 1);
           }
         }
-      }
-    }
-
-    class DiscreteSequencer extends Sequencer{
-      constructor(params = {}){
-        super(params);
-      }
-      reset(){
-        super.reset();
-        this.elapsed = -this.delay; // 離散の場合はdelayがたとえば30なら30フレーム経ってから始まる
-      }
-      pause(){
-        // 重ね掛け回避
-        if(!this.active) return;
-        this.active = false;
-      }
-      start(){
-        // 重ね掛け回避
-        if(this.active) return;
-        this.active = true;
-      }
-      clockUpdate(){
-        this.elapsed++;
-      }
-    }
-
-    class ContinuousSequencer extends Sequencer{
-      constructor(params = {}){
-        super(params);
-        this.timeStump = 0;
-        this.pauseTimeStump = 0;
-      }
-      reset(){
-        super.reset();
-        this.timeStump = window.performance.now() + this.delay; // 連続の場合はたとえばdelayが200なら200ms経ってから。
-        this.elapsed = -this.delay;
-      }
-      pause(){
-        // 重ね掛け回避。これをしないと、pauseTimeStumpが狂ってしまう可能性がある
-        if(!this.active){ return; }
-        this.pauseTimeStump = window.performance.now();
-        this.active = false;
-      }
-      start(){
-        // 重ね掛け回避
-        if(this.active) return;
-        this.timeStump += window.performance.now() - this.pauseTimeStump;
-        this.active = true;
-      }
-      clockUpdate(){
-        this.elapsed = window.performance.now() - this.timeStump;
-      }
-    }
-
-    class SpotEvent{
-      constructor(key = 0, params = {}){
-        this.key = key;
-        const {
-          name = "", action = () => {}
-        } = params;
-        this.name = name;
-        this.action = action;
-      }
-      execute(){
-        // actionの戻り値を返す
-        // keyを渡す。
-        return this.action(this.key);
-      }
-      static create(key, action = () => {}, name = ""){
-        return new SpotEvent(key, {action, name});
-      }
-    }
-
-    class BandEvent{
-      constructor(key = 0, params = {}){
-        this.key = key;
-        const {
-          name = "", action = () => {},
-          duration = 1, fire = () => {}, finish = () => {},
-        } = params;
-        this.name = name;
-        this.action = action;
-        this.duration = duration;
-        this.active = false;
-        // fireがこれを出力する
-        this.fireEvent = new SpotEvent(key, {name:`${name}_fire`, action:() => {
-          fire();
-          this.active = true;
-          return this;
-        }});
-        this.finishEvent = new SpotEvent(key + duration, {name:`${name}_finish`, action:() => {
-          if(!this.active) return null; // activeでなければ実行しない
-          finish();
-          this.active = false;
-          return null;
-        }});
-      }
-      execute(elapsed){
-        if(!this.active) return;
-        const progress = Math.max(0, Math.min(1, (elapsed - this.key) / this.duration));
-        // keyを渡す
-        return this.action(progress, this.key);
-      }
-      static create(key, duration = 1, action = () => {}, name = "", fire = () => {}, finish = () => {}){
-        return new BandEvent(key, {name, action, duration, fire, finish});
       }
     }
 
@@ -3276,38 +2914,7 @@
       return result;
     }
 
-    const NULL_FUNCTION = () => {};
-
-    class EventSeed{
-      constructor(action = NULL_FUNCTION){
-        this.action = action;
-      }
-      create(){
-        return null;
-      }
-    }
-
-    class SpotEventSeed extends EventSeed{
-      constructor(action = NULL_FUNCTION){
-        super(action);
-      }
-      create(key = 0, name = "spot"){
-        return SpotEvent.create(key, this.action, name);
-      }
-    }
-
-    class BandEventSeed extends EventSeed{
-      constructor(action = NULL_FUNCTION, params = {}){
-        super(action);
-        const {duration = 1, fire = NULL_FUNCTION, finish = NULL_FUNCTION} = params;
-        this.duration = duration;
-        this.fire = fire;
-        this.finish = finish;
-      }
-      create(key = 0, name = "band"){
-        return BandEvent.create(key, this.duration, this.action, name, this.fire, this.finish);
-      }
-    }
+    // EventSeed系のクラスを廃止
 
     // 楽譜翻訳機
     class ScoreParser{
@@ -3319,17 +2926,11 @@
         const {autoParse = false} = options;
         this.autoParse = autoParse;
       }
-      addSpotEventSeed(name = "spot", action = NULL_FUNCTION){
-        this.eventSeeds[name] = new SpotEventSeed(action);
-      }
-      addBandEventSeed(name = "band", action = NULL_FUNCTION, params = {}){
-        this.eventSeeds[name] = new BandEventSeed(action, params);
-      }
       addEventSeed(name = "", data){
         // dataは関数/object.
-        // 関数の場合はpresetsからEventSeedを生成する関数（もちろん必ずしも使わなくても可）
-        // objectの場合はEventSeedの設計図。shapeで種類を指定。
-        // Spotの場合はactionのみ、Bandの場合はaction,fire,finish,duration.
+        // objectの場合はそれによりEventSeedを作る。まあparamsですね。
+        // 関数の場合はpresetsを引数に取りそれがparamsを作る。shapeはspotがデフォルトなので、
+        // SpotEventSeedを作るのであれば指定する必要は無い。
         this.eventSeeds[name] = data;
       }
       addLib(name, libFunction = (code, step, beat) => {}){
@@ -3378,41 +2979,13 @@
           return null;
         }
         // まずcodeでeventSeedsを引き出せるか調べる。引き出せるならそこで終わり。
-        // eventSeedsにeventSeed以外のものを入れられるようにする。
+        // eventSeedsの中身はobject, もしくはpresetsからobjectを生成する関数に制限する。
         if(this.eventSeeds[code] !== undefined){
           const seed = this.eventSeeds[code];
-          if(seed instanceof SpotEventSeed || seed instanceof BandEventSeed){
-            // 従来通りEventSeedの場合
-            return seed;
-          }else if(typeof seed === 'function'){
-            // presetsからEventSeedを作る関数の場合
-            // 戻り値はEventSeedでもいいし、その設計図でもいい。
-            // 関数でもいい（presetsが関数を返す関数）。その場合はSpotEventSeedができる。
-            const recipe = seed(presets);
-            if(recipe instanceof SpotEventSeed || recipe instanceof BandEventSeed){
-              return recipe;
-            }else if(typeof recipe === 'function'){
-              return new SpotEventSeed(recipe);
-            }else if(typeof recipe === 'object'){
-              const {shape = 'spot', action = () => {}} = recipe;
-              if(shape === 'spot'){
-                return new SpotEventSeed(action);
-              }else if(shape === 'band'){
-                return new BandEventSeed(action, recipe);
-              }
-            }
-          }else if(typeof seed === 'object'){
-            // EventSeedの設計図の場合（Sequencerの時と同様にshapeで分ける）
-            const {shape = 'spot', action = () => {}} = seed;
-            if(shape === 'spot'){
-              return new SpotEventSeed(action);
-            }else if(shape === 'band'){
-              return new BandEventSeed(action, seed);
-            }
-          }
-          // 変なものが設定されている場合
+          const recipe = (typeof seed === 'function' ? seed(presets) : seed);
+          return recipe;
+          // 変なものが指定されている場合
           return null;
-          //return this.eventSeeds[code];
         }
         // それが無い場合、まずmods一覧を見て行き、適用できるのがあったら適用する
         // modは適用できるだけ適用する。nullが返る場合は据え置きとし、次に行く。
@@ -3440,23 +3013,9 @@
           const seed = this.applyFunction(properCode, presets, this.libs, libName);
 
           if (seed === null) continue;
-
-          if(seed instanceof SpotEventSeed || seed instanceof BandEventSeed){
-            // seedがSpotEventSeed/BandEventSeedの場合はダイレクトに設定する
-            resultSeed = seed;
-          }else if(typeof seed === 'function'){
-            // seedが関数の場合はSpotEventSeedを生成する
-            resultSeed = new SpotEventSeed(seed);
-          }else if(typeof seed === 'object'){
-            // seedがオブジェクトの場合はそれがもつshapeプロパティで分岐。
-            const {shape = 'spot', action = () => {}} = seed;
-            if(shape === 'spot'){
-              resultSeed = new SpotEventSeed(action);
-            }else if(shape === 'band'){
-              resultSeed = new BandEventSeed(action, seed);
-            }
-          }
-          //resultSeed = seed;
+          // このseedについてはrecipe一択とする。つまりshapeがあり、EventSeedのデータがある。
+          // 今のところSpotEventSeedのみで、actionと、あればpriority. 以上。他にできない限り、shapeは不要。
+          resultSeed = seed; // ここでは保留。
           if(resultSeed !== null) break;
         }
         // nullでない時に抜けてしまうのでlibが適用できるのであればnullではないその値が返る。
@@ -3626,7 +3185,14 @@
                 if(target.seed === null) continue;
                 // offsetからキーを計算する
                 const key = currentOffset + PART_LENGTH * target.offset;
-                events.push(target.seed.create(key, eventId++));
+                // shapeで分ける。とりあえずspotしかない。
+                const {shape = 'spot'} = target.seed;
+                if(shape === 'spot'){
+                  events.push(new SpotEvent({
+                    key:key, name:`event_${eventId++}`, action:target.seed.action, priority:target.seed.priority
+                  }));
+                }
+                //events.push(target.seed.create(key, `event_${eventId++}`));
               }
             }
             // おわりです。
@@ -3639,11 +3205,10 @@
       createSequencer(score, params = {}){
         // 音楽の再生などで画面遷移の際にポーズしたい場合は
         // hiddenを"pause"にする。リセットもしたい場合は"reset".
-        // 停止中もbandEventを実行したい場合はbandEventAlwaysをtrueにする
         const {
           name = "sequencer", type = "continuous",
-          loop = false, delay = 0, showInfo = {},
-          hidden = "none", bandEventAlways = false, hiddenFunction = () => {}
+          loop = false, showInfo = {},
+          hidden = "none", hiddenFunction = () => {}, usePriority = false
         } = params;
         const {
           parsed : showParsed = false, eventSeeds : showEventSeeds = false, events : showEvents = false
@@ -3663,14 +3228,11 @@
           events.push(...eventArray.events);
           duration = Math.max(duration, eventArray.duration);
         }
-        let seq = null;
-        switch(type){
-          case "continuous":
-            seq = new ContinuousSequencer({loop, delay, duration, hidden, bandEventAlways, hiddenFunction}); break;
-          case "discrete":
-            seq = new DiscreteSequencer({loop, delay, duration, hidden, bandEventAlways, hiddenFunction}); break;
-        }
-        if(seq === null){ return null; }
+        // typeで分ける。
+        const seq = new Sequencer({
+          type, loop, duration, hidden, hiddenFunction, usePriority
+        });
+
         seq.addEvents(events);
         this.sequencers[name] = seq;
         // そのまま使いたい場合のためにseqを返す感じで。はい。OKですね。はい。...
@@ -4409,26 +3971,27 @@
     utils.morton16 = morton16; // 16bit符号なし整数の対を単整数と紐付ける。
     utils.morton16Symmetry = morton16Symmetry;
 
-    // Clock関連
+    // Clock関連. Clock以外は廃止
     utils.Clock = Clock;
-    utils.TimeArrow = TimeArrow;
-    utils.Counter = Counter;
-    utils.ClockSet = ClockSet;
-    utils.TimeArrowSet = TimeArrowSet;
-    utils.CounterSet = CounterSet;
-    utils.Schedule = Schedule;
-    utils.ScheduledTimeArrow = ScheduledTimeArrow;
-    utils.ScheduledCounter = ScheduledCounter;
+    //utils.TimeArrow = TimeArrow;
+    //utils.Counter = Counter;
+    //utils.ClockSet = ClockSet;
+  //  utils.TimeArrowSet = TimeArrowSet;
+    //utils.CounterSet = CounterSet;
+    //utils.Schedule = Schedule;
+  //  utils.ScheduledTimeArrow = ScheduledTimeArrow;
+  //  utils.ScheduledCounter = ScheduledCounter;
 
-    // Sequencer関連
+    // Sequencer関連. Sequencerはtypeで分けるように変更.
+    // さらにSpotEventSeed以外を廃止
     utils.Sequencer = Sequencer;
-    utils.ContinuousSequencer = ContinuousSequencer;
-    utils.DiscreteSequencer = DiscreteSequencer;
+    //utils.ContinuousSequencer = ContinuousSequencer;
+    //utils.DiscreteSequencer = DiscreteSequencer;
     utils.SpotEvent = SpotEvent;
-    utils.BandEvent = BandEvent;
-    utils.EventSeed = EventSeed;
-    utils.SpotEventSeed = SpotEventSeed;
-    utils.BandEventSeed = BandEventSeed;
+    //utils.BandEvent = BandEvent;
+    //utils.EventSeed = EventSeed;
+    //utils.SpotEventSeed = SpotEventSeed;
+    //utils.BandEventSeed = BandEventSeed;
     utils.ScoreParser = ScoreParser;
 
     utils.parseValue = parseValue; // 一応。使うかどうか知らないけど。
@@ -5860,12 +5423,37 @@ available waveTables:
         // まあいいや。
         return {code:finalCode, duration:duration, volume:volume};
       }
+      static parseChord(code, step, type = "square"){
+        // stepはミリ秒指定である。typeを指定する。
+        if(!AudioPlayer.isValidChord(code)){ return null; }
+        const properCode = code.replace(/(major|minor|dim|aug)[7]{0,1}/, "");
+        const codeResult = AudioPlayer.standardParseCode(properCode, step);
+        const baseFreq = AudioPlayer.frequencyDict[codeResult.code];
+        const c = code.match(/(major|minor|dim|aug)[7]{0,1}/);
+        if(c === null){
+          return {frequency:[baseFreq], duration:codeResult.duration/1000, volume:codeResult.volume, type};
+        }
+        const chordDict = {
+          "major":[4,7], "minor":[3,7], "dim":[3,6], "aug":[4,8],
+          "major7":[4,7,11], "minor7":[3,7,10], "dim7":[3,6,9], "aug7":[4,8,10]
+        };
+        const chords = chordDict[c[0]];
+        const freqArray = [baseFreq];
+        for(let i=0; i<chords.length; i++){
+          freqArray.push(baseFreq * Math.pow(2, chords[i]/12));
+        }
+        return {frequency:freqArray, duration:codeResult.duration/1000, volume:codeResult.volume, type};
+      }
       static isValidCode(code){
         // standardParseCodeに適合するかどうかを調べるだけ。
         // 適合するならtrueを返す。
         // dの数を無制限にし、さらに^_以降は順序不問とする。
         return code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_sldfp]*$/) !== null;
         //return code.match(/^[A-G]{1}[\+\-n]{0,1}[\^_]*[sl]*d?[fp]*$/) !== null;
+      }
+      static isValidChord(code){
+        // 似てるけどChordです。
+        return code.match(/^[A-G]{1}[\+\-]{0,1}(|major|minor|dim|aug)[7]{0,1}[\^_sldfp]*$/) !== null;
       }
     }
 
