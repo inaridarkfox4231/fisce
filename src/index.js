@@ -2242,10 +2242,10 @@
     		return new Clock();
     	}
         const t = Number(s.match(/^[\+\-]{0,1}[0-9]+/)[0]);
+        const duration = (t < 0 ? Infinity : t);
         const type = (s.match(/ms/) === null ? 'discrete' : 'continuous');
         const loop = (s.match(/l/) === null ? false : true);
-        const duration = (t < 0 ? Infinity : t);
-        return new Clock({ duration:t, type:type, loop:loop });
+        return new Clock({ duration, type, loop });
       }
     }
 

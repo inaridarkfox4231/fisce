@@ -392,7 +392,7 @@ RandomSystemのインスタンスメソッドとしてshuffleを導入。seedに
 parseValue供用しとこう。使うかなぁ...  
 
 ## ver 1.2
-### ver 1.2.0
+### 1.2.0
 まずClockについて  
 Clock以外のクラスはすべて廃止。Clockのみとし、機能もシンプルに「離散と連続で数を数えるだけ」とする。  
 パラメータはtype, duration, loopのみとする。typeで時間かカウントか分けて、durationで一定時間ごとにリセットして、  
@@ -456,3 +456,6 @@ lifeの前と後に余裕を作ろうとするとlifeを分割して汚い場合
 Gunは2つメソッドを追加。countはグループごとのBulletの個数をカウント。getBulletsはグループごとにBulletの集合を取得。  
 
 変更は以上です。これで1.2.0で、目立ったバグが無ければ更新はしばらくしないです。  
+
+### 1.2.1
+Clock.createでdurationにパース前の値を使ってしまって-1でInfinityにならないバグがあったので修正。  
