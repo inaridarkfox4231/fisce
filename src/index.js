@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.2.0
+ * @version 1.2.1
  */
 
 (function (global, factory) {
