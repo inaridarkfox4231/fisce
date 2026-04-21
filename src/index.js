@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.2.1
+ * @version 1.2.2
  */
 
 (function (global, factory) {
@@ -186,6 +186,57 @@
             return null;
         }
         return null;
+      }
+      randomInt(...args){
+        // 引数無し：0を返す。
+        // 引数1つ：それをMath.floorしてnとし0,1,...,n-1のどれかを返す
+        // nが負の時はたとえば-4なら0,-1,-2,-3のどれかを返すことにする
+        // 引数2つ：小さい方と大きい方をmin,maxとしmin,min+1,...,max-1のどれかを返す
+        // min===maxであればそれを返す
+        switch(args.length){
+          case 0: return 0;
+          case 1:
+            const n = Math.floor(args[0]);
+            if(n === 0) return 0;
+            if(n < 0){ -(Math.floor(-n*this.rdm()) % (-n)); }
+            return Math.floor(n * this.rdm()) % n;
+          case 2:
+            const nMin = Math.min(args[0], args[1]);
+            const nMax = Math.max(args[0], args[1]);
+            if(nMin === nMax){ return nMin; }
+            const nDiff = nMax - nMin;
+            const diff = Math.floor(nDiff*this.rdm()) % nDiff;
+            return nMin + diff;
+        }
+      }
+      randomP(array = [], n = 1){
+        if(array.length === 0){ return null; }
+        // n<1の場合はnullを返す。nはfloorを取る。
+        // arrayから重複を許してn個取って配列を返す。
+        if(n < 1){ return null; }
+        const count = Math.floor(n);
+        const result = [];
+        for(let i=0; i<count; i++){
+          result.push(this.random(array));
+        }
+        return result;
+      }
+      randomC(array = [], n = 1){
+        if(array.length === 0){ return null; }
+        // n<1の場合はnullを返す。nはfloorを取る。
+        // arrayから「重複を許さず」n個取って配列を返す。
+        // nはarray.lengthで頭を抑える。
+        if(n < 1){ return null; }
+        let count = Math.min(Math.floor(n), array.length);
+        const result = [];
+        const candidate = array.slice();
+        while(count > 0){
+          const index = (Math.floor(this.rdm() * candidate.length)) % candidate.length;
+          const c = candidate.splice(index, 1)[0];
+          result.push(c);
+          count--;
+        }
+        return result;
       }
       shuffle(a, immutable = false){
         // デフォルトは「変える」。
@@ -2146,6 +2197,93 @@
       return morton16(Math.min(a, b), Math.max(a, b));
     }
 
+    /*
+      union findの基本的な使い方
+      queryは整数の列ですね
+      nは総数です
+      queryは長さ2の整数組の配列です
+      その長さ2の両者がつながり、結果的にすべてまとまる仕組みです
+      それだけの処理です
+      まとまりはuf.uf（ユニオンファインド配列）を見ると分かります
+      lvに代表の通し番号が入ってます。グループの通し番号ですね。
+      グループの総数はuf.countに入ってますね
+      uf.repで代表indexの配列を取得できます
+      uf.mem[lv]でlv番のグループのすべてのindexを取得できますね
+      以上です
+    */
+    function unionFind(n, query){
+      let parent = [];
+      let rank = [];
+      for(let i = 0; i < n; i++){
+        parent.push(i);
+        rank.push(0);
+      }
+      function Find(a){
+        if(parent[a] == a){
+          return a;
+        }else{
+          parent[a] = Find(parent[a]);
+          return parent[a];
+        }
+      }
+      function Union(a, b){
+        let aRoot = Find(a);
+        let bRoot = Find(b);
+        if(rank[aRoot] > rank[bRoot]){
+          parent[bRoot] = aRoot;
+        }else if(rank[bRoot] > rank[aRoot]){
+          parent[aRoot] = bRoot;
+        }else if(aRoot != bRoot){
+          parent[bRoot] = aRoot;
+          rank[aRoot] = rank[aRoot] + 1;
+        }
+      }
+      for(let i = 0; i < 2; i++){
+        for(let q of query){
+          Union(q[0], q[1]);
+        }
+      }
+      let uf = [];
+      for(let i = 0; i < n; i++){
+        uf.push({id:i, pt:parent[i]});
+      }
+      uf.sort((x, y) => {
+        if(x.pt < y.pt){ return -1; }
+        if(x.pt > y.pt){ return 1; }
+        return 0;
+      });
+      uf[0].lv = 0;
+      let count = 1;
+      for(let i = 1; i < n; i++){
+        if(uf[i].pt == uf[i-1].pt){
+          uf[i].lv = uf[i-1].lv;
+        }else{
+          uf[i].lv = uf[i-1].lv + 1;
+          count++;
+        }
+      }
+      uf.sort((x, y) => {
+        if(x.id < y.id){ return -1; }
+        if(x.id > y.id){ return 1; }
+        return 0;
+      });
+      // 代表系の集合もあると便利だと思う。
+      const represents = new Array(count);
+      const members = new Array(count);
+      for(let i=0; i<members.length;i++) members[i] = [];
+      for(let x of uf){
+        represents[x.lv] = x.pt;
+        members[x.lv].push(x.id);
+      }
+      // uf:ユニオンファインド配列。
+      // 各indexにはptとlvへの参照が入ってる
+      // countは島の数
+      // repはレベルからptへの参照。これあるだけでだいぶ違うと思う。
+      // memは各々の島のメンバーの配列。これもあると便利そう。下処理でやるのは
+      // 大変だし。つけるかどうかオプションにするかは応相談。
+      return {uf:uf, count:count, rep:represents, mem:members};
+    }
+
     // loopのデフォルトは...ですね。falseがいいですねタブンネ。
     // 200 -> non-loop200count, 200l -> loop200count,
     // 200ms -> non-loop200milliseconds, 200msl -> loop200milliseconds.
@@ -3908,6 +4046,41 @@
       link.remove();
     }
 
+    // 関数の概要
+    // amountsは0から始まる単調増加列
+    // prgが0か1か
+    // prgが0ならindex=0のratio=0
+    // prgが1ならindexは末尾でratio=0
+    // それ以外の場合はa[i]<=prg*total<a[i+1]であるようなiをindexとしてratioの計算をする
+    // iは条件を満たすもののうち最大のものとする
+    // a[i]とa[i+1]の間のどこに位置するかのratioを返す形
+    // 汎用関数
+    function mapAmount(amounts, prg){
+      // ああこれでいいか。amountsとprg. 末尾にtotalが入ってるんだよね。
+      if(prg <= 0){
+        return {index:0, ratio:0};
+      }
+      if(prg >= 1){
+        return {index:amounts.length-1, ratio:0};
+      }
+      const total = amounts[amounts.length-1];
+      const s = total*prg;
+      let index = 0;
+      // 二分法で高速化できる...
+      for(let k=amounts.length-1; k>=0; k--){
+        if(amounts[k] <= s){ index = k; break; }
+      }
+      if(index >= amounts.length-1){
+        return {index:amounts.length-1, ratio:0};
+      }
+      const leftAmount = amounts[index];
+      const rightAmount = amounts[index+1];
+      if(leftAmount < rightAmount){
+        return {index:index, ratio:(s - leftAmount)/(rightAmount - leftAmount)};
+      }
+      return {index:index, ratio:0};
+    }
+
     // bdは欲しいがalignmentは不要という場合に使う
     function getTextBoundingRect(ctx, txt, x, y){
       const m = ctx.measureText(txt);
@@ -3948,6 +4121,381 @@
       return result;
     }
 
+    // segmenterの一般的な作り方
+    // const segmenter = new Intl.Segmenter('ja', {granularity:'grapheme'});
+    // 参考：https://qiita.com/axoloto210/items/a1e81e989f1f2f8e1795
+    // 'grapheme'を'word'や'sentence'にすると面白いらしいです。
+
+    // こっちは残そうか。
+    function getPartialText(segmenter, txt, prg=1){
+      if(prg<=0) return "";
+      if(prg>=1) return txt;
+      const letters = [...segmenter.segment(txt)].map(s => s.segment);
+
+      let result = "";
+      // ここでroundを使うのはいい考えだと思う。
+      for(let i=0; i < Math.round(prg*letters.length); i++){ result += letters[i]; }
+      return result;
+    }
+
+    // まあこうなるわな。
+    // ctx, segmenterで始まってるのは...クラス化します？ん～。
+    // まあこれも別に排除しなくてもいいか。
+    // segmenterはごめんなさいって感じだけどね。だからあんま使わないとは思うよ。
+    function drawPartialText(ctx, segmenter, txt, x, y, prg=1, options = {}){
+      if(prg <= 0) return;
+      if(prg >= 1){ drawText(ctx, txt, x, y, options); return; }
+
+      const partialText = getPartialText(segmenter, txt, prg);
+
+      drawText(ctx, partialText, x, y, options);
+    }
+
+    // 改行
+    function drawText(ctx, txt, x, y, options = {}){
+      if(txt === "") return;
+
+      const {xAlign = "center", yAlign = "center", leading = 1.5, commands = ["fill"]} = options;
+      const texts = txt.split('\n');
+
+      // 空行の場合はどうするか？空行が無いなら、空行ではないのは事前にもう確かめてあるんで
+      // ...改行記号だけの場合？知らん。やめろ。
+      // 空行ではない行のheightの平均で決めればいい。
+      // だからalignsとheightsの計算は思考停止mapは使わない方がいいかもね。
+
+      const aligns = [];
+      const heights = [];
+      for(let i=0; i<texts.length; i++){
+        if(texts[i] === ""){
+          aligns.push(null); heights.push(null); continue;
+        }
+        // どうせだからhが0の場合も排除するか
+        const bd = getTextBoundingRect(ctx, texts[i], x, y);
+        if(bd.h === 0){
+          aligns.push(null); heights.push(null); continue;
+        }
+        // bd.h > 0の場合だけ入れましょう
+        aligns.push(getTextAlign(ctx, texts[i], x, y, xAlign, "top"));
+        heights.push(bd.h);
+      }
+
+      // まあ改行だけとか空行だけとかそういう意味不明なケースは排除しましょう
+      if(aligns.every((align) => align === null)) return;
+
+      // meanHeightの方がいいかもしれないんでmeanHeight使うかな。知らんけども。
+      let nonNullTextCount = 0;
+      let heightSum = 0;
+      for(let i=0; i<heights.length; i++){
+        if(heights[i] !== null){
+          nonNullTextCount++;
+          heightSum += heights[i];
+        }
+      }
+      const meanHeight = heightSum/nonNullTextCount;
+
+      let textHeight = 0;
+      for(let i=0; i<heights.length; i++){
+        const h = (heights[i] !== null ? heights[i] : meanHeight);
+        textHeight += h;
+        if(i < heights.length-1){
+          textHeight += h * (leading - 1);
+        }
+      }
+
+      let yOffset = 0;
+      switch(yAlign){
+        case "top":
+          yOffset = 0; break;
+        case "center":
+          yOffset = -textHeight*0.5; break;
+        case "bottom":
+          yOffset = -textHeight; break;
+      }
+      // 描画関数ここで。
+      const execute = (t, x, y) => {
+        for(let m=0; m<commands.length; m++){
+          switch(commands[m]){
+            case "fill":
+              ctx.fillText(t, x, y); break;
+            case "stroke":
+              ctx.strokeText(t, x, y); break;
+          }
+        }
+      }
+      for(let i=0; i<texts.length; i++){
+        let leftSpaceOffset = 0;
+        let rightSpaceOffset = 0;
+        let isSpaceOnly = true;
+        for(let k=0; k<texts[i].length; k++){
+          const sp = texts[i][k];
+          if(sp === " "){ leftSpaceOffset += meanHeight*0.5; }
+          else if(sp === "　"){ leftSpaceOffset += meanHeight; }
+          else{
+            isSpaceOnly = false; break;
+          }
+        }
+        for(let k=texts[i].length-1; k>=0; k--){
+          const sp = texts[i][k];
+          if(sp === " "){ rightSpaceOffset += meanHeight*0.5; }
+          else if(sp === "　"){ rightSpaceOffset += meanHeight; }
+          else{
+            isSpaceOnly = false; break;
+          }
+        }
+        // この時点でisSpaceOnlyがtrueの場合、空行ということになるが...
+        // なおスペースが無くて""であっても空行になる。
+        if(isSpaceOnly){
+          yOffset += meanHeight * leading;
+          continue;
+        }
+        execute(
+          texts[i],
+          aligns[i].x + (xAlign !== 'right' ? leftSpaceOffset : 0) - (xAlign !== 'left' ? rightSpaceOffset : 0),
+          aligns[i].y + yOffset
+    	);
+        yOffset += meanHeight * leading;
+      }
+      // おわり？
+    }
+
+    // Measurable Texts
+    // アラインメントをオリジナルテキストを元に取得したうえで
+    // パーシャルテキストを用意する形ですかね...
+    // length？
+    // Segmenterに基づいて長さを決めてamount列をってしないとまずいかもしれないですね
+    // というのも、
+    // Segmenterを使わないとamountの列を作れないんですが
+    // 描画時にもこれを使うと二度手間になってしまうんで
+    // graphemeに分ける処理をinitの1回だけにしたいがために
+    // ...っていうね。だからセンテンスに分けるよりその方がいいですよね。
+    // まあテキストを分割する機会がそもそもあんまないけど。
+    // じゃあさっさと終わらせよう。
+    class MTS{
+      constructor(txt = ""){
+        this.txt = txt;
+        this.heights = [];
+        this.graphemesArray = []; // graphemesのArray.
+        this.texts = []; // そういえばこれも要るんだった。なぜ？yAlignがおかしくなるから。
+        this.lengthAmountArray = []; // 2,3,4,5から...とかそういう。
+        this.meanHeight = 0;
+        this.segmenter = new Intl.Segmenter('ja', {granularity:'grapheme'});
+        this.init();
+      }
+      add(txt){
+        this.txt += `\n${txt}`;
+        return this;
+      }
+      set(txt){
+        this.txt = txt;
+        return this;
+      }
+      initHeights(ctx){
+        // heights関連だけ描画時にやるか。コンテキストが必要な部分だけ描画時にやろう。
+        this.heights = [];
+        this.meanHeight = 0;
+
+        // 各成分を見て空っぽならnullを入れる...
+        for(let i=0; i<this.texts.length; i++){
+          if(this.texts[i] === ""){
+            this.heights.push(null); continue;
+          }
+          // どうせだからhが0の場合も排除するか
+          // ここには と　だけの場合も含まれる（space only）
+          const bd = getTextBoundingRect(ctx, this.texts[i], 0, 0);
+          if(bd.h === 0){
+            this.heights.push(null);
+            // この場合は空行にしてしまおう
+            this.texts[i] = "";
+            continue;
+          }
+          // bd.h > 0の場合
+          this.heights.push(bd.h);
+        }
+
+        // nullしかない場合はここで切る
+        if(this.heights.every((h) => h === null)){
+          this.heights = [];
+          this.txt = "";
+          return;
+        }
+
+        // meanHeightの方がいいかもしれないんでmeanHeight使うかな。知らんけども。
+        // nullのみの場合は弾いてあるのでnonNullTextCount>=1は保証されている
+        let nonNullTextCount = 0;
+        let heightSum = 0;
+        for(let i=0; i<this.heights.length; i++){
+          if(this.heights[i] !== null){
+            nonNullTextCount++;
+            heightSum += this.heights[i];
+          }
+        }
+
+        this.meanHeight = heightSum/nonNullTextCount;
+      }
+      init(options = {}){
+        // this.txtは既に用意されているとする
+
+        this.graphemesArray = [];
+        this.texts = [];
+        this.lengthAmountArray = [0];
+
+        // 空文字の場合は何もしない
+        if(this.txt === "") return this;
+        // まず改行で区切る
+        this.texts = this.txt.split('\n');
+
+        // height関連は描画時にやる。
+
+        // あとはamountを計算してprogressの際に使えるようにする...
+        // そのためにまずgraphemeに分ける
+        for(let i=0; i<this.texts.length; i++){
+          const row = this.texts[i];
+          this.graphemesArray[i] = [...this.segmenter.segment(row)].map(s => s.segment);
+        }
+        // grapheme単位での文字の個数に基づいたamountsを作る形
+        for(let i=0; i<this.texts.length; i++){
+          this.lengthAmountArray[i+1] = this.lengthAmountArray[i] + this.graphemesArray[i].length;
+        }
+        // これで一通り作業は終了
+        return this;
+      }
+      execute(ctx, txt, x, y, commands = ["fill"]){
+        for(let m=0; m<commands.length; m++){
+          switch(commands[m]){
+            case "fill":
+              ctx.fillText(txt, x, y); break;
+            case "stroke":
+              ctx.strokeText(txt, x, y); break;
+          }
+        }
+      }
+      display(ctx, x, y, prg = 1, options = {}){
+        // height関連の処理
+        this.initHeights(ctx);
+
+        if(this.txt === "") return;
+
+        const {
+          xAlign = 'center', yAlign = 'center', leading = 1.5, commands = ["fill"],
+          fillStyle = "", strokeStyle = ""
+        } = options;
+
+
+        // prgを元に描画範囲を決める
+        const m = mapAmount(this.lengthAmountArray, prg);
+
+        // 描画するテキストを決める
+        const targetRows = [];
+        for(let i=0; i<m.index; i++){
+          const graphemes = this.graphemesArray[i];
+          let s = "";
+          for(let k=0; k<graphemes.length; k++){ s += graphemes[k]; }
+          targetRows.push(s);
+        }
+
+        // m.index < this.lengthAmountArray.length-1 である場合、残りを入れる...
+        if(m.index < this.lengthAmountArray.length - 1){
+          let s = "";
+          const finalGraphemes = this.graphemesArray[m.index];
+          for(let k=0; k<Math.round(m.ratio * finalGraphemes.length); k++){
+            s += finalGraphemes[k];
+          }
+          targetRows.push(s);
+        }
+
+        // targetRowsの長さに応じてtotalHeightを決める。
+        let totalHeight = 0;
+        for(let i=0; i<targetRows.length; i++){
+          const h = (this.heights[i] !== null ? this.heights[i] : this.meanHeight);
+          totalHeight += h;
+          if(i < targetRows.length-1){
+            totalHeight += h * (leading - 1);
+          }
+        }
+
+        // totalHeightとyAlignからyOffsetが決まる
+        let yOffset = 0;
+        switch(yAlign){
+          case 'top':
+            yOffset = 0; break;
+          case 'center':
+            yOffset = -totalHeight*0.5; break;
+          case 'bottom':
+            yOffset = -totalHeight; break;
+        }
+        // targetRowsを元にalignsを用意する
+        // しかしyAlignはホールテキストを使う必要がある
+        // そうしないといわゆる「がたつき」が起きてしまうので
+        const aligns = [];
+        for(let i=0; i<targetRows.length; i++){
+          // このように、2種類のアラインメントを組み合わせる。
+          const partialAlign = getTextAlign(ctx, targetRows[i], x, y, xAlign, 'top');
+          const totalAlign = getTextAlign(ctx, this.texts[i], x, y, xAlign, 'top');
+          aligns.push({x:partialAlign.x, y:totalAlign.y});
+        }
+
+        // 色とかconfigはここでやるか。全体適用だからな。
+        if(fillStyle !== ""){
+          ctx.fillStyle = fillStyle;
+        }
+        if(strokeStyle !== ""){
+          ctx.strokeStyle = strokeStyle;
+        }
+        // configは関数。位置とか臨時で変えたい場合用。
+        if(typeof options.config === 'function'){
+          options.config(ctx);
+        }
+        // サンドイッチは必要ないでしょう。煩雑になる。
+        // 結局それは、スケッチの方向性としてステートマシンで行くのかステートレスで行くのかっていうことになる。
+        // 2DはWebGLと一緒でステートマシンなので、ステートレスは疑似的にしか実現できない。それでもその方が都合がいい場合は、こうするというわけ。
+        // なおWebGPUはステートレスですが、p5のWebGPUはWebGLに寄せた「似非WebGPU」なので実質ステートマシンとなっています。
+        // なんだかな...
+
+        for(let i=0; i<targetRows.length; i++){
+          const row = targetRows[i];
+          let leftSpaceOffset = 0;
+          let rightSpaceOffset = 0;
+          let isSpaceOnly = true;
+          for(let k=0; k<row.length; k++){
+            const sp = row[k];
+            if(sp === " "){ leftSpaceOffset += this.meanHeight*0.5; }
+            else if(sp === "　"){ leftSpaceOffset += this.meanHeight; }
+            else{
+              isSpaceOnly = false; break;
+            }
+          }
+          for(let k=row.length-1; k>=0; k--){
+            const sp = row[k];
+            if(sp === " "){ rightSpaceOffset += this.meanHeight*0.5; }
+            else if(sp === "　"){ rightSpaceOffset += this.meanHeight; }
+            else{
+              isSpaceOnly = false; break;
+            }
+          }
+
+          // この時点でisSpaceOnlyがtrueの場合、空行ということになるが...
+          // なおスペースが無くて""であっても空行になる。
+          if(isSpaceOnly){
+            yOffset += this.meanHeight * leading;
+            continue;
+          }
+          this.execute(
+            ctx, row,
+            aligns[i].x + (xAlign !== 'right' ? leftSpaceOffset : 0) - (xAlign !== 'left' ? rightSpaceOffset : 0),
+            aligns[i].y + yOffset,
+            commands
+    	  );
+          // meanHeightかheights[i]かで悩むんだけどどうしようね。
+          // meanHeightの定義を考えるなら全体の長さは変わらないですから、これでいきましょう。
+          yOffset += this.meanHeight * leading;
+        }
+      }
+      displayAll(ctx, x, y, options = {}){
+        // context忘れてた
+        this.display(ctx, x, y, 1, options = {});
+      }
+    }
+
     utils.Damper = Damper;
 
     // Array関連
@@ -3968,8 +4516,10 @@
     utils.Vertice = Vertice;
     utils.Edge = Edge;
 
+    // Tree関連の補助関数
     utils.morton16 = morton16; // 16bit符号なし整数の対を単整数と紐付ける。
     utils.morton16Symmetry = morton16Symmetry;
+    utils.unionFind = unionFind; // unionFindです
 
     // Clock関連. Clock以外は廃止
     utils.Clock = Clock;
@@ -4010,9 +4560,16 @@
     utils.saveText = saveText;
     utils.saveJSON = saveJSON;
 
+    // 分類できない補助関数
+    utils.mapAmount = mapAmount;
+
     // text関連のユーティリティ
     utils.getTextBoundingRect = getTextBoundingRect;
     utils.getTextAlign = getTextAlign;
+    utils.getPartialText = getPartialText;
+    utils.drawPartialText = drawPartialText;
+    utils.drawText = drawText;
+    utils.MTS = MTS; // Measurable Texts.
 
     return utils;
   })();
@@ -7680,7 +8237,7 @@ available waveTables:
   const foxApplications = (function(){
     const applications = {};
 
-    const {Damper, Tree, saveCanvas, ResourceLoader} = foxUtils;
+    const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount} = foxUtils;
     const {Interaction, Inspector} = foxIA;
     const {Vecta, MT3, MT4} = fox3Dtools;
 
@@ -8827,6 +9384,639 @@ available waveTables:
       return allContours;
     }
 
+    // Measurable Contours.
+    // addで追加してinitで初期化してdisplayで描画
+    // displayParallelで並行描画
+    class MCS{
+      constructor(data = [], dimension = 2){
+        this.contours = [];
+        this.set(data, dimension);
+        this.lengthAmountsArray = [];
+        this.totalLengthArray = []; // contourの長さそれぞれの配列
+        this.totalLengthAmounts = [];
+        this.entireLength = 0; // 全体の長さの総和。totalLengthArrayのreduceSum.
+        this.path = null;
+        this.init();
+      }
+      createPath(){
+        // contoursをもとにpath2Dを作る
+        const path = new Path2D();
+        for(let i=0; i<this.contours.length; i++){
+          const contour = this.contours[i];
+          for(let k=0; k<contour.length; k++){
+            const p = contour[k];
+            if(k===0){ path.moveTo(p.x, p.y); }else{ path.lineTo(p.x, p.y); }
+          }
+        }
+        this.path = path;
+      }
+      add(data = [], dimension = 2){
+        // 配列だとして0番が数字->そこからベクトルを作る、ベクトル->そのまま使う
+        if(data.length === 0) return;
+        if(data[0] instanceof Vecta){
+          this.contours.push(data);
+          return this;
+        }
+        if(typeof data[0] === 'number'){
+          const contour = [];
+          for(let k=0; k<data.length; k+=dimension){
+            contour.push(Vecta.create(data.slice(k, k+dimension)));
+          }
+          this.contours.push(contour);
+        }
+        return this;
+      }
+      set(data = [], dimension = 2){
+        // contoursの初期化を実行する。既存のそれに足していくならaddを使う。
+        this.contours = [];
+        if(data.length === 0) return;
+        // data[0]が配列の場合
+        if(Array.isArray(data[0])){
+          for(let i=0; i<data.length; i++){
+            this.add(data[i], dimension);
+          }
+          return this;
+        }
+        // data[0]が配列でない、単独contourの場合。
+        this.add(data, dimension);
+        return this;
+      }
+      init(){
+        this.lengthAmountsArray = [];
+        this.totalLengthArray = []; // contourの長さそれぞれの配列
+        this.entireLength = 0; // 全体の長さの総和。totalLengthArrayのreduceSum.
+        // contoursの各成分に対し、lengthAmountsを作ってセットする。
+        for(let k=0; k<this.contours.length; k++){
+          const contour = this.contours[k];
+          const lengthAmounts = [0];
+          let totalLength = 0;
+          for(let i=1; i<contour.length; i++){
+            const d = contour[i].dist(contour[i-1]);
+            totalLength += d;
+            lengthAmounts[i] = lengthAmounts[i-1] + d;
+          }
+          this.lengthAmountsArray.push(lengthAmounts);
+          this.totalLengthArray.push(totalLength);
+          this.entireLength += totalLength;
+        }
+        // たとえばcontourが3本の場合、長さは4になる。0,1,2,3. 累積の記録。
+        this.totalLengthAmounts = [0];
+        for(let k=0; k<this.totalLengthArray.length; k++){
+          this.totalLengthAmounts[k+1] = this.totalLengthAmounts[k] + this.totalLengthArray[k];
+        }
+        // pathを作る
+        this.createPath();
+        return this;
+      }
+      mapping(prg){
+        // どのcontourのどの頂点までかって言うのを計算する
+        // ratioが正の場合に追加すればいいですね
+        // たとえば頂点が0,1,2,3,4とある場合に最後がratio=0なら0,1,2,3,4でおわりですが
+        // indexが3でratioが0.5なら3と4の中間点を追加するわけです
+        const contourCount = this.contours.length;
+        const m0 = mapAmount(this.totalLengthAmounts, prg);
+        if(m0.index >= contourCount){
+          return {index:contourCount-1, contourIndex:this.contours[contourCount-1].length-1, ratio:0};
+        }
+        const targetContour = this.contours[m0.index];
+        const m1 = mapAmount(this.lengthAmountsArray[m0.index], m0.ratio);
+        if(m1.index >= targetContour.length-1){
+          return {index:m0.index, contourIndex:targetContour.length-1, ratio:0};
+        }
+        return {index:m0.index, contourIndex:m1.index, ratio:m1.ratio};
+      }
+      mappingParallel(prg){
+        // contourごとに進捗を計算する
+        // それぞれについて同じことをする
+        const progressData = [];
+        for(let i=0; i<this.contours.length; i++){
+          const contour = this.contours[i];
+          const m = mapAmount(this.lengthAmountsArray[i], prg);
+          if(m.index >= contour.length-1){
+            progressData.push({index:contour.length-1, ratio:0});
+            continue;
+          }
+          progressData.push({index:m.index, ratio:m.ratio});
+        }
+        return progressData;
+      }
+      drawContours(ctx, prg){
+        // closedについてですが
+        // 使わないことにします
+        // 使わない方がすっきりする
+        // 構成時にあれする方向で行きましょうね
+        const m = this.mapping(prg);
+        // contourのうち、m.indexより小さいもの：すべてかく
+        // m.indexのところで、m.contourIndexまですべてかく
+        // m.contourIndex < contour.length-1であるならば...次のものとratioでlerpして一つ追加する。
+        for(let k=0; k<m.index; k++){
+          const contour = this.contours[k];
+          for(let i=0; i<contour.length; i++){
+            const p = contour[i];
+            if(i===0){ ctx.moveTo(p.x, p.y); }else{ ctx.lineTo(p.x, p.y); }
+          }
+        }
+        const finalContour = this.contours[m.index];
+        for(let i=0; i<=m.contourIndex; i++){
+          const p = finalContour[i];
+          if(i===0){ ctx.moveTo(p.x, p.y); }else{ ctx.lineTo(p.x, p.y); }
+        }
+        if(m.contourIndex < finalContour.length-1){
+          const left = finalContour[m.contourIndex];
+          const right = finalContour[m.contourIndex+1];
+          const lerped = left.lerp(right, m.ratio, true);
+          //const lerped = left.copy().mult(1-m.ratio).addScalar(right, m.ratio);
+          ctx.lineTo(lerped.x, lerped.y);
+        }
+      }
+      drawContoursParallel(ctx, prg){
+        const mArray = this.mappingParallel(prg);
+        for(let i=0; i<this.contours.length; i++){
+          const contour = this.contours[i];
+          const m = mArray[i];
+          for(let k=0; k<=m.index; k++){
+            const p = contour[k];
+            if(k===0){ ctx.moveTo(p.x, p.y); }else{ ctx.lineTo(p.x, p.y); }
+          }
+          if(m.index < contour.length-1){
+            const left = contour[m.index];
+            const right = contour[m.index+1];
+            const lerped = left.lerp(right, m.ratio, true);
+            //const lerped = left.copy().mult(1-m.ratio).addScalar(right, m.ratio);
+            ctx.lineTo(lerped.x, lerped.y);
+          }
+        }
+      }
+      execute(ctx, options = {}, usePath = false){
+        // せいぜいruleくらいは作るか
+        // defaultはevenoddにするか
+        const {commands = ["stroke"], rule = 'evenodd', fillStyle = "", strokeStyle = ""} = options;
+        if(fillStyle !== ""){
+          ctx.fillStyle = fillStyle;
+        }
+        if(strokeStyle !== ""){
+          ctx.strokeStyle = strokeStyle;
+        }
+
+        for(let k=0; k<commands.length; k++){
+          switch(commands[k]){
+            case "stroke":
+              if(usePath){
+                ctx.stroke(this.path);
+              }else{
+                ctx.stroke();
+              }
+              break;
+            case "fill":
+              if(usePath){
+                ctx.fill(this.path, rule);
+              }else{
+                ctx.fill(rule);
+              }
+              break;
+          }
+        }
+      }
+      display(ctx, prg, options = {}){
+        // configがあれば実行する
+        if(typeof options.config === 'function'){ options.config(ctx); }
+
+        // せいぜいruleくらいは作るか
+        ctx.beginPath();
+        this.drawContours(ctx, prg);
+
+        this.execute(ctx, options);
+        return this;
+      }
+      displayParallel(ctx, prg, options = {}){
+        // configがあれば実行する
+        if(typeof options.config === 'function'){ options.config(ctx); }
+
+        ctx.beginPath();
+        this.drawContoursParallel(ctx, prg);
+
+        this.execute(ctx, options);
+        return this;
+      }
+      displayAll(ctx, options = {}){
+        // configがあれば実行する
+        if(typeof options.config === 'function'){ options.config(ctx); }
+
+        // 全部書くときは普通にpathを使う
+        // usePath:true
+        this.execute(ctx, options, true);
+      }
+      polygon(data = []){
+        const polygonData = MCS.polygon(data);
+        this.add(polygonData);
+        return this;
+      }
+      rect(data = [], options = {}){
+        const rectData = MCS.rect(data, options);
+        this.add(rectData);
+        return this;
+      }
+      roundRect(data = [], options = {}){
+        const roundRectData = MCS.roundRect(data, options);
+        this.add(roundRectData);
+        return this;
+      }
+      arc(data = [], options = {}){
+        const arcData = MCS.arc(data, options);
+        this.add(arcData);
+        return this;
+      }
+      ellipse(data = [], options = {}){
+        const ellipseData = MCS.ellipse(data, options);
+        this.add(ellipseData);
+        return this;
+      }
+      circle(data = [], options = {}){
+        const circleData = MCS.circle(data, options);
+        this.add(circleData);
+        return this;
+      }
+      quadratic(data = [], options = {}){
+        const qData = MCS.quadratic(data, options);
+        this.add(qData);
+        return this;
+      }
+      bezier(data = [], options = {}){
+        const bData = MCS.bezier(data, options);
+        this.add(bData);
+        return this;
+      }
+      svg(s = "M 0 0", options = {}){
+        // svgの場合はcontoursなのでsetですね。
+        const contours = MCS.svg(s, options);
+        this.set(contours);
+        return this;
+      }
+      static create(){
+        return new this(...arguments);
+      }
+      static convertToVectors(coords = [], dimension = 2){
+        // ベクトル列かcoordsかで紛糾していますが、
+        // ベクトル列->加工やinspectに便利
+        // coords->テッセレーション時にそのまま使える
+        // どっちも役割あるんでわからんですね。
+        const result = [];
+        for(let k=0; k<coords.length; k+=dimension){
+          result.push(Vecta.create(coords.slice(k, k+dimension)));
+        }
+        return result;
+      }
+      static convertToCoords(vectors = [], dimension = 2){
+        // どっちも役割あるならどっちも作って戻り値はベクトルで統一すればいいでしょ。
+        const result = [];
+        for(let k=0; k<vectors.length; k++){
+          const v = vectors[k];
+          if(dimension === 2){ result.push(v.x, v.y); }
+          if(dimension === 3){ result.push(v.x, v.y, v.z); }
+        }
+        return result;
+      }
+      static polygon(data = []){
+        return this.points(data, {closed:true});
+      }
+      static points(data = [], options = {}){
+        const {closed = true} = options;
+        if(data.length === 0){ return []; }
+        if(typeof data[0] !== 'number'){ return []; }
+        const properCoords = data.slice();
+        if(closed){
+          properCoords.push(data[0], data[1]);
+        }
+        return this.convertToVectors(properCoords);
+      }
+      static calcRectCoords(data = [], options = {}){
+        // 丸形で流用するため。
+        const {mode = 'corner', clockwise = true} = options;
+        switch(mode){
+          case "corner":
+            const x0 = data[0];
+            const y0 = data[1];
+            const w0 = data[2];
+            const h0 = data[3];
+            if(clockwise){
+               return [x0, y0, x0+w0, y0, x0+w0, y0+h0, x0, y0+h0];
+            }else{
+                return [x0, y0, x0, y0+h0, x0+w0, y0+h0, x0+w0, y0];
+            }
+            break;
+          case "corners":
+            const a1 = Math.min(data[0], data[2]);
+            const b1 = Math.min(data[1], data[3]);
+            const c1 = Math.max(data[0], data[2]);
+            const d1 = Math.max(data[1], data[3]);
+            if(clockwise){
+              return [a1, b1, c1, b1, c1, d1, a1, d1];
+            }else{
+              return [a1, b1, a1, d1, c1, d1, c1, b1];
+            }
+            break;
+          case "center":
+              const a2 = data[0] - data[2]*0.5;
+              const b2 = data[1] - data[3]*0.5;
+              const c2 = data[0] + data[2]*0.5;
+              const d2 = data[1] + data[3]*0.5;
+          if(clockwise){
+                 return [a2, b2, c2, b2, c2, d2, a2, d2];
+              }else{
+                  return [a2, b2, a2, d2, c2, d2, c2, b2];
+              }
+             break;
+          case "radius":
+              const a3 = data[0] - data[2];
+              const b3 = data[1] - data[3];
+              const c3 = data[0] + data[2];
+              const d3 = data[1] + data[3];
+          if(clockwise){
+                 return [a3, b3, c3, b3, c3, d3, a3, d3];
+              }else{
+                  return [a3, b3, a3, d3, c3, d3, c3, b3];
+              }
+             break;
+        }
+        return [];
+      }
+      static rect(data = [], options = {}){
+        const {closed = true} = options;
+
+        if(data.length === 0){ return []; }
+        if(typeof data[0] !== 'number'){ return []; }
+        const properCoords = [];
+        properCoords.push(...MCS.calcRectCoords(data, options));
+
+        if(closed){
+          properCoords.push(properCoords[0], properCoords[1]);
+        }
+        return this.convertToVectors(properCoords);
+      }
+      static roundRect(data = [], options = {}){
+        // closedはtrueでいいです。
+        const {clockwise = true, detail = 50, radius = 5} = options;
+        if(data.length === 0){ return []; }
+        if(typeof data[0] !== 'number'){ return []; }
+        const rectCoords = MCS.calcRectCoords(data, options);
+        const v = [];
+        for(let i=0; i<8; i+=2){
+          v.push(Vecta.create(rectCoords[i], rectCoords[i+1]));
+        }
+        const la = v[0].dist(v[1]); // clockwiseなら横幅、counterClockwiseなら縦幅
+        const lb = v[1].dist(v[2]); // clockwiseなら縦幅、counterClockwiseなら横幅
+        const maxRadius = Math.min(la, lb) * 0.5;
+        const r = Math.max(0, Math.min(maxRadius, radius));
+        const w = [];
+        w.push(v[0].lerp(v[1], r/la, true));
+        w.push(v[0].lerp(v[1], 1-r/la, true));
+        w.push(v[1].lerp(v[2], r/lb, true));
+        w.push(v[1].lerp(v[2], 1-r/lb, true));
+        w.push(v[2].lerp(v[3], r/la, true));
+        w.push(v[2].lerp(v[3], 1-r/la, true));
+        w.push(v[3].lerp(v[0], r/lb, true));
+        w.push(v[3].lerp(v[0], 1-r/lb, true));
+        // 0-1, 2-3, 4-5, 6-7 は直線でいい
+        // 1-2, 3-4, 5-6, 7-0が円弧となる
+        const c = [];
+        for(let i=0; i<4; i++){
+          const w0 = w[2*i+1];
+          const w1 = w[(2*i+2)%8];
+          // 対称差は可読性が落ちるのであんま使いたくない。
+          const cornerVector = (((i%2===0) && clockwise) || ((i%2===1) && !clockwise) ? Vecta.create(w0.x, w1.y) : Vecta.create(w1.x, w0.y));
+          c.push(cornerVector);
+        }
+        const result = [];
+        for(let k=0; k<4; k++){
+          result.push(w[2*k], w[2*k+1]);
+
+          const arrow = w[2*k+1].sub(c[k], true);
+          for(let j=1; j<=detail; j++){
+            const angle = (Math.PI*0.5*j/detail) * (clockwise ? 1 : -1);
+            result.push(arrow.rotate(angle, true).add(c[k]));
+          }
+        }
+        // アルゴリズムに問題が無ければ最初の点まできっちり入るはずです。つまりclosed前提。
+        return result;
+      }
+      static arc(data = [], options = {}){
+        // radius/diam
+        const {detail = 200, start = 0, band = Math.PI*2, mode = "radius", clockwise = true, closed = true} = options;
+        if(data.length === 0){ return []; }
+        if(typeof data[0] !== 'number'){ return []; }
+        const x = data[0];
+        const y = data[1];
+        const radiusX = (mode === 'radius' ? data[2] : data[2]/2);
+        const radiusY = (mode === 'radius' ? data[3] : data[3]/2);
+        const properCoords = [];
+        for(let i=0; i<detail; i++){
+          const angle = start + (clockwise ? 1 : -1) * band*i/detail;
+          properCoords.push(x + radiusX * Math.cos(angle), y + radiusY * Math.sin(angle));
+        }
+        if(closed){
+          properCoords.push(properCoords[0], properCoords[1]);
+        }
+        return this.convertToVectors(properCoords);
+      }
+      static ellipse(data = [], options = {}){
+        const properOptions = {};
+        for(const [key, value] of Object.entries(options)){ properOptions[key] = value; }
+        properOptions.band = Math.PI*2;
+        return this.arc(data, properOptions);
+      }
+      static circle(data = [], options = []){
+        return this.ellipse([data[0], data[1], data[2], data[2]], options);
+      }
+      static quadratic(data = [], options = {}){
+        // イメージ的には3つ...2次元で。どうしようね。まあ3次元でもいいか。
+        const {dimension = 2, detail = 50} = options;
+        const vectors = [];
+        for(let i=0; i<data.length; i+=dimension){
+          vectors.push(Vecta.create(data.slice(i, i+dimension)));
+        }
+        const result = [];
+        for(let i=0; i<=detail; i++){
+          const t = i/detail;
+          result.push(vectors[0].copy().mult((1-t)*(1-t)).addScalar(vectors[1], 2*t*(1-t)).addScalar(vectors[2], t*t));
+        }
+        return result;
+      }
+      static bezier(data = [], options = {}){
+        // イメージ的には3つ...2次元で。どうしようね。まあ3次元でもいいか。
+        const {dimension = 2, detail = 50} = options;
+        const vectors = [];
+        for(let i=0; i<data.length; i+=dimension){
+          vectors.push(Vecta.create(data.slice(i, i+dimension)));
+        }
+        const result = [];
+        for(let i=0; i<=detail; i++){
+          const t = i/detail;
+          result.push(vectors[0].copy().mult((1-t)*(1-t)*(1-t)).addScalar(vectors[1], 3*t*(1-t)*(1-t)).addScalar(vectors[2], 3*t*t*(1-t)).addScalar(vectors[3], t*t*t));
+        }
+        return result;
+      }
+      static svg(s = "M 0 0", options = {}){
+        const {quadraticDetail = 20, bezierDetail = 20, parseScale = 1} = options;
+        // svgのみcontoursを作るんで、使うならaddではなくsetっすね
+        const cmdData = s.split(" ");
+        const result = [];
+        // 内部的にiを増やすのが気に食わないのであれば...どうしましょうね。
+        const commands = [];
+        let currentCommand = "";
+        const currentCoords = [];
+        for(let i=0; i<cmdData.length; i++){
+          const cmd = cmdData[i];
+          if(cmd.match(/[A-Z]{1}/) !== null){
+            if(currentCommand !== ""){
+              commands.push({command:currentCommand, data:currentCoords.slice()});
+              currentCoords.length = 0;
+            }
+            currentCommand = cmd;
+          }else{
+            currentCoords.push(Number(cmd));
+          }
+        }
+        // あ、最後忘れてたわ。
+        if(currentCommand !== ""){
+          commands.push({command:currentCommand, data:currentCoords.slice()});
+          currentCoords.length = 0;
+        }
+
+        // これでいいっすね。Zの場合は空っぽっす。
+        const contour = [];
+        for(let k=0; k<commands.length; k++){
+          const {command, data} = commands[k];
+          switch(command){
+            case "M":
+              if(contour.length > 0){
+                // 完成なので、入れます。
+                result.push(contour.slice());
+                contour.length = 0;
+              }
+              contour.push(Vecta.create(...data).mult(parseScale));
+              continue;
+            case "L":
+              contour.push(Vecta.create(...data).mult(parseScale));
+              continue;
+            case "Q":
+              const q0 = contour[contour.length-1];
+              const q1 = Vecta.create(data.slice(0,2)).mult(parseScale);
+              const q2 = Vecta.create(data.slice(2,4)).mult(parseScale);
+              for(let k=1; k<=quadraticDetail; k++){
+                const t = k/quadraticDetail;
+                const q = q0.copy().mult((1-t)*(1-t)).addScalar(q1, 2*t*(1-t)).addScalar(q2, t*t);
+                contour.push(q);
+              }
+              continue;
+            case "C":
+              const c0 = contour[contour.length-1];
+              const c1 = Vecta.create(data.slice(0,2)).mult(parseScale);
+              const c2 = Vecta.create(data.slice(2,4)).mult(parseScale);
+              const c3 = Vecta.create(data.slice(4,6)).mult(parseScale);
+              for(let k=1; k<=bezierDetail; k++){
+                const t = k/bezierDetail;
+                const c = c0.copy().mult((1-t)*(1-t)*(1-t)).addScalar(c1, 3*t*(1-t)*(1-t)).addScalar(c2, 3*t*t*(1-t)).addScalar(c3, t*t*t);
+                contour.push(c);
+              }
+              continue;
+            case "Z":
+              // 始点を入れるだけ。
+              contour.push(contour[0].copy());
+              continue;
+          }
+        }
+        // 最後です。
+        result.push(contour.slice());
+        return result;
+      }
+    }
+
+    // 普通に考えたらパラレルのパラレルとかも考えられるんだろうが
+    // まあどうでもいいな...
+    // まあつくるかな...（馬鹿）
+    // パラレルのパラレルというのはそれぞれがパラレルの流儀で描画されるということです
+    // おわかり？？？めんどうだな...
+    class MCSArray{
+      constructor(data = []){
+        this.mcss = [];
+        this.entireLengthAmountsArray = [];
+        for(let i=0; i<data.length; i++){
+          if(data[i] instanceof MCS){
+            this.mcss.push(data[i]);
+          }
+        }
+        this.init();
+      }
+      add(mcs){
+        this.mcss.push(mcs);
+        return this;
+      }
+      set(mcs){
+        this.mcss.length = 0;
+        this.mcss.push(mcs);
+        return this;
+      }
+      init(){
+        if(this.mcss.length === 0) return this;
+        this.entireLengthAmountsArray = [0];
+        for(let k=0; k<this.mcss.length; k++){
+          this.entireLengthAmountsArray[k+1] = this.entireLengthAmountsArray[k] + this.mcss[k].entireLength;
+        }
+        return this;
+      }
+      display(ctx, prg, optionsArray = [], options = {}){
+        const {parallel = false} = options;
+
+        const properOptionsArray = [];
+        for(let k=0; k<this.mcss.length; k++){
+          if(optionsArray[k] === undefined){
+            properOptionsArray.push({});
+          }else{
+            properOptionsArray.push(optionsArray[k]);
+          }
+        }
+
+        if(this.mcss.length === 0) return;
+        const m = mapAmount(this.entireLengthAmountsArray, prg);
+
+        for(let k=0; k<m.index; k++){
+          this.mcss[k].displayAll(ctx, properOptionsArray[k]);
+        }
+        if(m.index < this.mcss.length){
+          if(parallel){
+            this.mcss[m.index].displayParallel(ctx, m.ratio, properOptionsArray[m.index]);
+          }else{
+            this.mcss[m.index].display(ctx, m.ratio, properOptionsArray[m.index]);
+          }
+        }
+      }
+      displayParallel(ctx, prg, optionsArray = [], options = {}){
+        const {parallel} = options;
+
+        const properOptionsArray = [];
+        for(let k=0; k<this.mcss.length; k++){
+          if(optionsArray[k] === undefined){
+            properOptionsArray.push({});
+          }else{
+            properOptionsArray.push(optionsArray[k]);
+          }
+        }
+
+        // parallelなので当然こうなる
+        for(let k=0; k<this.mcss.length; k++){
+          if(parallel){
+            this.mcss[k].displayParallel(ctx, prg, properOptionsArray[k]);
+          }else{
+            this.mcss[k].display(ctx, prg, properOptionsArray[k]);
+          }
+        }
+      }
+      displayAll(ctx, optionsArray = [], options = {}){
+        // まあこうなる
+        this.display(ctx, 1, optionsArray, options);
+      }
+    }
+
     // saveめんどくさい。fireを用意しよう。lilの時に役に立つ。fireとexecuteで完結する。フラグ要らない。
     // さらに保存の際の名前をconfigなどから決められる。もちろん不要ならexecuteで決める形。柔軟性が大事。
     // easySave:trueがデフォルトでdblclickでsaveできるがそうでない場合も必要だろうと思うので無しにできるようにする。
@@ -9873,6 +11063,8 @@ available waveTables:
     applications.mergePointsAll = mergePointsAll;
     applications.getBoundingBoxOfContours = getBoundingBoxOfContours;
     applications.alignmentContours = alignmentContours;
+    applications.MCS = MCS;
+    applications.MCSArray = MCSArray;
 
     // Text関連
     applications.parseData = parseData;
