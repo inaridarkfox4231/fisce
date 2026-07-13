@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.2.2/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.2.3/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.2.2/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.2.3/src/index.min.js"></script>
 ```
 
 memo  
@@ -537,5 +537,5 @@ matcapやcubemapはライティングしない場合もあるのでそれ用、�
 基本ライティング用。directional,point,spotの3種類。通常のライティング。  
 #### PBRLightRender3D
 PBRライティング用。directional,point,spotの3種類だが微妙にプロパティが異なり、あとmetallicがある。  
-  
+
 Vectaにslerpを導入。円補間。方向が近いなら線形補間。真反対の場合は、2Dなら(0,0,1)で回す。3Dでも何かしら返すようにする。  
