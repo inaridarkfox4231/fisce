@@ -485,3 +485,57 @@ MCSはいわゆるcontour描画用の機能ですね。プログレスベース�
 svgも使える優れもの。  
 MCSArrayはmcs単位で個別に描画オプションをいじれるのでますます便利。  
 いずれマニュアルとかの形でまとめようかと思います。デモ作れるといいね。  
+
+### 1.2.3
+MCSにsquareとroundSquareを導入  
+さらにroundRectの角の半径の大きさを個別に決められるように仕様変更  
+統計周りと反時計回りのそれぞれの場合に指定した順に半径が指定される。少ない場合は途中から一緒。  
+
+Verticeの仕様を変更して、イベントを実行できるようにした。詳細：  
+#### createTree  
+confirmEvent: 辺が確定した場合のイベントを実行する。cur（現在の頂点）,next（辺の向こうの頂点）,edge（結ぶ辺）を引数に持つ。  
+removeEvent: 辺の不採用が決まった場合のイベントを実行する。cur（現在の頂点）,next（辺の向こうの頂点）,edge（消去する辺）を引数に持つ。  
+backEvent: 戻る場合のイベントを実行する。cur（現在の頂点）,next（戻った先の頂点）を引数に持つ。  
+finishEvent: Tree完成時のイベントを実行する。まあ別に使うことは無いだろうが、curで終了時の頂点。  
+#### createHierarchy  
+setDepthEvent: depthが確定した時のイベント。cur（該当する頂点）,depth（深度）を引数に持つ。  
+forwardEvent: 潜っていくときのイベント。cur（現在の頂点）,next（次の頂点）,edge（たどる辺）.  
+backEvent: 浮上するときのイベント。cur（現在の頂点）,next（戻る先の頂点）,edge（たどる辺）.
+finishEvent: 終わった時。curで一応頂点。  
+
+注意：removeEventが適切に実行されるためには、createTreeの直前にすべてのedgeのresetを実行してください。以前は不要でした。  
+1回こっきりなら不要ですが、繰り返しやる場合は必須です。  
+
+parseCmdToTextのバグを修正。なぜか末尾をカットしていたので。そのせいでメッシュのスケッチの一部がおかしなことになってました。  
+
+MCSのsvgにおいてH（水平）,V（垂直）,T（Qの対蹠点接続）,S（Cの対蹠点接続）,A（arcToに準じる）を導入。  
+MCS.create()を導入。ここからrectやcircleにつなげていける。  
+
+createVAOの導入  
+glと頂点数とattrsとindicesから作ります。内容は任意です。面でも辺でも何でもあり。  
+attrsのプロパティ：  
+data:配列。location:ロケーション。usage:基本STATIC_DRAW. arrayType:基本Float32Array.  
+size,type,normalize,stride,offset:いろいろ。まあ基本いじらないっすね。  
+arrayOutput:型付配列が必要な場合。srcでアクセスできるようになる。  
+indicesのプロパティ：  
+data:配列。基本これだけでいい。あとはusageとarrayOutputだがまあ使わないだろう。  
+出力されたvaoオブジェクトにはbufsというプロパティがあり、登録時と同じ名前でバッファにアクセスできる。  
+それにより動的更新とかもできる。その辺の機構も作れるといいっすね。どうしましょうね。まあそのうち作るか。  
+
+ShaderPrototypeとRenderSystemの系列。簡略化のため。  
+一応4種類作りました。2D,ライトを使わない3D,StandardLightの3D,PBRLightの3D.  
+シェーダーの改変機構ですね。precision,declaration,global,mainに分かれてる。あとポストプロセスとか。  
+プログラムを複数用意してあれこれできる。  
+#### Render2D  
+板ポリ芸用。uvが予めvaryingとして用意されている。fsでvec2のuvとvec4のcolorが用意され、mainでいじって色々できる。  
+vsでuvをいじって送ったりできる。デフォルトは左上(0,0)のleftUpで、右下は(1,1).  
+あと3種類ある。leftDownは左下(0,0)の右上(1,1). center_yUpとcenter_yDownは中心が(0,0)で、それぞれ左下か左上が(-1,-1).   
+#### NoLightRender3D  
+ライトを使わない3D. 色はcolorを使って好きに決める。normalが必要な場合はuseNormal:trueとする。  
+matcapやcubemapはライティングしない場合もあるのでそれ用、後は線描画など。  
+#### StandardLightRender3D  
+基本ライティング用。directional,point,spotの3種類。通常のライティング。  
+#### PBRLightRender3D
+PBRライティング用。directional,point,spotの3種類だが微妙にプロパティが異なり、あとmetallicがある。  
+  
+Vectaにslerpを導入。円補間。方向が近いなら線形補間。真反対の場合は、2Dなら(0,0,1)で回す。3Dでも何かしら返すようにする。  

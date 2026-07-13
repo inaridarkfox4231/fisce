@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.2.2
+ * @version 1.2.3
  */
 
 (function (global, factory) {
@@ -1268,8 +1268,81 @@
       }
     }
 
+    // VAO関連
+
+    // countは頂点数。
+    // あとからinstanceとかはいじれるね。divisorとか。
+    function createVAO(gl, count = 1, attrs = {}, indices = {}){
+      const vao = gl.createVertexArray();
+      const bufs = {};
+
+      gl.bindVertexArray(vao);
+      for(const [name, params] of Object.entries(attrs)){
+        bufs[name] = registArrayBuffer(gl, params);
+      }
+      for(const [name, params] of Object.entries(indices)){
+        bufs[name] = registIndexBuffer(gl, count, params);
+      }
+      gl.bindVertexArray(null);
+
+      vao.bufs = bufs;
+      return vao;
+    }
+
+    // 基本はdataとlocationだけでいいです。
+    // usage: 基本STATIC_DRAWですね。
+    // arrayType: 基本Float32Arrayですね。
+    // size: vやnなら3ですが、2や4の場合もあるでしょう。uvやcです。
+    // type: 基本FLOATですね。変わり種を使う場合はUNSIGNED_INTとかにするかも。cとか。
+    // normalize, stride, offset: インターリーブで異なる型を使う場合に必要になるかも。
+    // arrayOutput: 基本false. これをtrueにすると、生成した型付配列を外部で使えるようになる。動的更新などに使う。
+    function registArrayBuffer(gl, params = {}){
+      const {
+        data, location, usage = gl.STATIC_DRAW, arrayType = Float32Array,
+        size = 3, type = gl.FLOAT, normalize = false, stride = 0, offset = 0,
+        arrayOutput = false
+      } = params;
+
+      const buf = gl.createBuffer();
+      const src = new arrayType(data);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, src, usage);
+      gl.vertexAttribPointer(location, 3, type, normalize, 0, 0);
+      gl.enableVertexAttribArray(location);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null); // こっちでヌルバすればいい
+
+      // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。
+      if(arrayOutput){ buf.src = src; }
+
+      return buf;
+    }
+
+    // 基本はdataだけでいいですね。
+    // usage: 基本STATIC_DRAWですね。いじらないですね。
+    // arrayOutput: trueの場合、作った型付配列にアクセスできる。
+    function registIndexBuffer(gl, count = 1, params = {}){
+      const {
+        data, usage = gl.STATIC_DRAW,
+        arrayOutput = false
+      } = params;
+      const buf = gl.createBuffer();
+      const src = (count <= 65536 ? new Uint16Array(data) : new Uint32Array(data));
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, src, usage);
+      buf.length = data.length;
+      buf.type = (count <= 65536 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT);
+
+      // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。
+      if(arrayOutput){ buf.src = src; }
+
+      return buf;
+    }
+
     utils.createShaderProgram = createShaderProgram;
     utils.uniformX = uniformX; // projectXみたいでなんかいいね（馬鹿）
+    utils.createVAO = createVAO;
+    utils.registArrayBuffer = registArrayBuffer;
+    utils.registIndexBuffer = registIndexBuffer;
 
     return utils;
   })();
@@ -2017,6 +2090,17 @@
     // グラフという概念の「頂点」の抽象化。自分の観点から見た場合の。それは自分の中ではプレツリー（木の前段階）なので、
     // treeを持たせてある。というかtreeにヒエラルキーを与える関数を付随させている。通常ヒエラルキーはaddChildで動的に構成するが、
     // グラフ構造を援用して構築できるようにもした方がいい。connectedはEdgeの集合。
+    // イベントを追加しました。
+    // --createTreeのイベント挿入--
+    // finishEvent: curのみで、最後（＝最初）の頂点
+    // confirmEvent: 辺確定時。新しい辺の根元と先っちょがcurとnext,つなぐ辺がedge.
+    // removeEvent: 辺消去時。消去する辺の根元がcurで先っちょがnextで消す辺がedge.
+    // backEvent: 出戻り時。元の頂点がcurで行き先がnext.edgeは無し。
+    // --createHierarchyのイベント挿入--
+    // finishEvent: createTreeと同じ
+    // setDepthEvent: curでその頂点。depthを記録する。
+    // forwardEvent: createTreeの辺確定と同じ感じ
+    // backEvent: createTreeのバックと同じ感じ
     class Vertice{
       constructor(tree = new Tree()){
         this.dirtyFlag = false;
@@ -2074,7 +2158,9 @@
         this.dirtyFlag = true;
         return this;
       }
-      static createTree(nodeVertice){
+      static createTree(nodeVertice, params = {}){
+        // removeEventに改名
+        const {finishEvent = ()=>{}, removeEvent = ()=>{}, confirmEvent = ()=>{}, backEvent = ()=>{}} = params;
         let curVertice = nodeVertice;
         curVertice.check();
 
@@ -2085,25 +2171,38 @@
             // ここのタイミングでリセット可能
             curVertice.connected.reset();
             if(stuck.length === 0){
+              // ここで終了時イベント
+              finishEvent({cur:curVertice, next:null, edge:null});
               break;
             }else{
-              curVertice = stuck.pop();
+              const backVertice = stuck.pop();
+              backEvent({cur:curVertice, next:backVertice, edge:null});
+              curVertice = backVertice;
             }
           }else{
+            const edgeIsAlreadyChecked = connectedEdge.checked();
             connectedEdge.check();
             const nextVertice = connectedEdge.getOppositeVertice(curVertice);
             if(nextVertice.checked()){
+              // 辺消去時イベントは辺が消去されるタイミングでのみ実行する
+              if(!edgeIsAlreadyChecked){
+                removeEvent({cur:curVertice, next:nextVertice, edge:connectedEdge});
+              }
               continue;
             }
             curVertice.branches.push(connectedEdge);
             nextVertice.branches.push(connectedEdge);
             nextVertice.check();
             stuck.push(curVertice);
+            // connectedEdgeがnullでないなら辺確定時イベントを実行する
+            confirmEvent({cur:curVertice, next:nextVertice, edge:connectedEdge});
             curVertice = nextVertice;
           }
         }
       }
-      static createHierarchy(nodeVertice){
+      static createHierarchy(nodeVertice, params = {}){
+        const {finishEvent = ()=>{}, setDepthEvent = ()=>{}, backEvent = ()=>{}, forwardEvent = ()=>{}} = params;
+
         let curVertice = nodeVertice;
         curVertice.check();
         curVertice.parent = null;
@@ -2116,15 +2215,19 @@
           if(curVertice.branches.index === 0){
             // 初回訪問時にdepthを記録する
             curVertice.tree.setDepth(curDepth);
+            setDepthEvent({cur:curVertice, depth:curDepth});
           }
           const branch = curVertice.branches.pick();
           if(branch === null){
             // ここでリセットできる
             curVertice.branches.reset();
             if(stuck.length === 0){
+              finishEvent({cur:curVertice, next:null, edge:null});
               break;
             }else{
-              curVertice = stuck.pop();
+              const backVertice = stuck.pop();
+              backEvent({cur:curVertice, next:backVertice, edge:null});
+              curVertice = backVertice;
               curDepth--;
             }
           }else{
@@ -2140,6 +2243,7 @@
             nextVertice.parentBranch = branch;
 
             stuck.push(curVertice);
+            forwardEvent({cur:curVertice, next:nextVertice, edge:branch});
             curVertice = nextVertice;
             curDepth++;
           }
@@ -6606,6 +6710,39 @@ available waveTables:
         this.z = (1-res.s) * z + res.s * res.z;
         return this;
       }
+      slerp(){
+        // lerpと引数仕様は同じ。円補間。大きさは乗算補間。
+        const res = Vecta.validateForScalar(...arguments);
+        if(res.im){
+          return this.copy().slerp(res.x, res.y, res.z, res.s, false);
+        }
+        const ratio = res.s;
+        const vMag = this.magSq();
+        const w = Vecta.create(res.x, res.y, res.z);
+        const wMag = w.magSq();
+        // 片方がゼロの場合は線型補間
+        if(vMag < Number.EPSILON || wMag < Number.EPSILON){
+          this.lerp(w, ratio);
+          return this;
+        }
+        const axis = this.cross(w, true);
+        if(axis.magSq() < Number.EPSILON){
+          // 2次元ならば(0,0,1)が採用されるようにしよう。
+          if(this.z === 0 && w.z === 0){
+            axis.set(0,0,1);
+          }else{
+            axis.set(Vecta.getOrtho(this));
+          }
+        }
+        axis.normalize();
+        // 角度は線形補間、大きさは乗算補間
+        const angle = this.angleTo(w, axis) * ratio;
+        const magnitude = Math.pow(this.mag(), 1-ratio) * Math.pow(w.mag(), ratio);
+        this.normalize();
+        const v3 = axis.cross(this, true);
+        const result = this.mult(Math.cos(angle)).addScalar(v3, Math.sin(angle)).mult(magnitude);
+        return this;
+      }
       dot(){
         // 引数は割と自由で。1,2,3とかでもできるようにしましょ。
         const res = Vecta.validate(...arguments);
@@ -8237,9 +8374,11 @@ available waveTables:
   const foxApplications = (function(){
     const applications = {};
 
+    const {createShaderProgram, uniformX} = webglUtils;
     const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount} = foxUtils;
     const {Interaction, Inspector} = foxIA;
-    const {Vecta, MT3, MT4} = fox3Dtools;
+    const {Vecta, MT3, MT4, QCameraPerse, QCameraOrtho} = fox3Dtools;
+    const {coulour3} = foxColor;
 
     // isActiveを追加。カメラが動いてるときだけ更新するなどの用途がある。
     // configも追加。操作性をいじるための機能。actionCoeffを変更できる。デフォルトは1. thresholdも0.01とかでいいかもだしな。
@@ -9210,30 +9349,34 @@ available waveTables:
     // 翻訳する。本来は不要かもしれないがこれによりこれとは別の汎用関数が
     // 利用可能になるのでこういった手順を踏んでいる。最初にやったのはsayoさん
     // です。もっというとp5もこれ確かやってるはず
+    // バグ対応！
+    // 全部閉路なのでZは要らないですね...
+    // というかまあこれでいいでしょう。なお、前後の半角はトリミングされるようです。
     function parseCmdToText(cmd){
       let result = "";
-      for(let i=0; i<cmd.length-1; i++){
+      //for(let i=0; i<cmd.length-1; i++){
+      for(let i=0; i < cmd.length; i++){
         const command = cmd[i];
         const {x, y, x1, y1, x2, y2} = command;
         switch(command.type){
           case "M":
-            result += "M " + x.toFixed(3) + " " + y.toFixed(3) + " ";
+            result += `M ${x} ${y} `;
             break;
           case "Q":
-            result += "Q " + x1.toFixed(3) + " " + y1.toFixed(3) + " " + x.toFixed(3) + " " + y.toFixed(3) + " ";
+            result += `Q ${x1} ${y1} ${x} ${y} `;
             break;
           case "L":
-            result += "L " + x.toFixed(3) + " " + y.toFixed(3) + " ";
+            result += `L ${x} ${y} `;
             break;
           case "C":
-            result += "C " + x1.toFixed(3) + " " + y1.toFixed(3) + " " + x2.toFixed(3) + " " + y2.toFixed(3) + " " + x.toFixed(3) + " " + y.toFixed(3) + " ";
+            result += `C ${x1} ${y1} ${x} ${y} `;
             break;
           case "Z":
-            result += "Z ";
+            result += `Z `;
             break;
+          }
         }
-      }
-      result += "Z";
+      //result += "Z";
       return result;
     }
 
@@ -9621,6 +9764,16 @@ available waveTables:
         this.add(roundRectData);
         return this;
       }
+      square(data = [], options = {}){
+        const squareData = MCS.square(data, options);
+        this.add(squareData);
+        return this;
+      }
+      roundSquare(data = [], options = {}){
+        const roundSquareData = MCS.roundSquare(data, options);
+        this.add(roundSquareData);
+        return this;
+      }
       arc(data = [], options = {}){
         const arcData = MCS.arc(data, options);
         this.add(arcData);
@@ -9757,6 +9910,23 @@ available waveTables:
         // closedはtrueでいいです。
         const {clockwise = true, detail = 50, radius = 5} = options;
         if(data.length === 0){ return []; }
+
+        // 配列の場合は長さ0ならすべて0で長さ1以上で4未満の場合は最後を重複させる
+        // 順番は頂点をめぐる順なのでcounterClockwiseだと逆指定になる
+        const radiusArray = new Array(4);
+        if(typeof radius === 'number'){
+         for(let k=0; k<4; k++){ radiusArray[k] = radius; }
+        }else if(Array.isArray(radius)){
+          for(let k=0; k<4; k++){
+            if(radius.length === 0){ radiusArray[k] = 0; }
+            else if(k >= radius.length){
+              radiusArray[k] = radius[radius.length-1];
+            }else{
+              radiusArray[k] = radius[k];
+            }
+          }
+        }
+
         if(typeof data[0] !== 'number'){ return []; }
         const rectCoords = MCS.calcRectCoords(data, options);
         const v = [];
@@ -9766,16 +9936,23 @@ available waveTables:
         const la = v[0].dist(v[1]); // clockwiseなら横幅、counterClockwiseなら縦幅
         const lb = v[1].dist(v[2]); // clockwiseなら縦幅、counterClockwiseなら横幅
         const maxRadius = Math.min(la, lb) * 0.5;
-        const r = Math.max(0, Math.min(maxRadius, radius));
+
+        //const r = Math.max(0, Math.min(maxRadius, radius));
+        for(let k=0; k<4; k++){
+          // 0～maxRadiusでclampする
+          radiusArray[k] = Math.max(0, Math.min(maxRadius, radiusArray[k]));
+        }
+
         const w = [];
-        w.push(v[0].lerp(v[1], r/la, true));
-        w.push(v[0].lerp(v[1], 1-r/la, true));
-        w.push(v[1].lerp(v[2], r/lb, true));
-        w.push(v[1].lerp(v[2], 1-r/lb, true));
-        w.push(v[2].lerp(v[3], r/la, true));
-        w.push(v[2].lerp(v[3], 1-r/la, true));
-        w.push(v[3].lerp(v[0], r/lb, true));
-        w.push(v[3].lerp(v[0], 1-r/lb, true));
+        // 点を取った後は回転で補間するんで半径は出てきません
+        w.push(v[0].lerp(v[1], radiusArray[0]/la, true));
+        w.push(v[0].lerp(v[1], 1-radiusArray[1]/la, true));
+        w.push(v[1].lerp(v[2], radiusArray[1]/lb, true));
+        w.push(v[1].lerp(v[2], 1-radiusArray[2]/lb, true));
+        w.push(v[2].lerp(v[3], radiusArray[2]/la, true));
+        w.push(v[2].lerp(v[3], 1-radiusArray[3]/la, true));
+        w.push(v[3].lerp(v[0], radiusArray[3]/lb, true));
+        w.push(v[3].lerp(v[0], 1-radiusArray[0]/lb, true));
         // 0-1, 2-3, 4-5, 6-7 は直線でいい
         // 1-2, 3-4, 5-6, 7-0が円弧となる
         const c = [];
@@ -9798,6 +9975,16 @@ available waveTables:
         }
         // アルゴリズムに問題が無ければ最初の点まできっちり入るはずです。つまりclosed前提。
         return result;
+      }
+      static square(data = [], options = {}){
+        // 引数が1個減るだけ
+        // なおcornersの場合は意図しない挙動になる。まあどうでもいい。使うなってだけの話。
+        return this.rect([data[0], data[1], data[2], data[2]], options);
+      }
+      static roundSquare(data = [], options = {}){
+        // 引数が1個減るだけ
+        // なおcornersの場合は意図しない挙動になる。まあどうでもいい。使うなってだけの話。
+        return this.roundRect([data[0], data[1], data[2], data[2]], options);
       }
       static arc(data = [], options = {}){
         // radius/diam
@@ -9856,7 +10043,10 @@ available waveTables:
         return result;
       }
       static svg(s = "M 0 0", options = {}){
-        const {quadraticDetail = 20, bezierDetail = 20, parseScale = 1} = options;
+        // quadraticDetail: QとT用。
+        // bezierDetail: CとS用。
+        // arcDetail: A用。
+        const {quadraticDetail = 20, bezierDetail = 20, arcDetail = 20, parseScale = 1} = options;
         // svgのみcontoursを作るんで、使うならaddではなくsetっすね
         const cmdData = s.split(" ");
         const result = [];
@@ -9884,50 +10074,150 @@ available waveTables:
 
         // これでいいっすね。Zの場合は空っぽっす。
         const contour = [];
+        const lastPoint = Vecta.create();
+        const lastControlPoint = Vecta.create();
+        let lastCommand = "";
         for(let k=0; k<commands.length; k++){
           const {command, data} = commands[k];
           switch(command){
             case "M":
+              lastCommand = "M";
               if(contour.length > 0){
                 // 完成なので、入れます。
                 result.push(contour.slice());
                 contour.length = 0;
               }
               contour.push(Vecta.create(...data).mult(parseScale));
-              continue;
+              break;
             case "L":
+              lastCommand = "L";
               contour.push(Vecta.create(...data).mult(parseScale));
-              continue;
+              break;
             case "Q":
-              const q0 = contour[contour.length-1];
+              lastCommand = "Q";
+              const q0 = lastPoint;
               const q1 = Vecta.create(data.slice(0,2)).mult(parseScale);
               const q2 = Vecta.create(data.slice(2,4)).mult(parseScale);
+              lastControlPoint.set(q1);
               for(let k=1; k<=quadraticDetail; k++){
                 const t = k/quadraticDetail;
                 const q = q0.copy().mult((1-t)*(1-t)).addScalar(q1, 2*t*(1-t)).addScalar(q2, t*t);
                 contour.push(q);
               }
-              continue;
+              break;
             case "C":
-              const c0 = contour[contour.length-1];
+              lastCommand = "C";
+              const c0 = lastPoint;
               const c1 = Vecta.create(data.slice(0,2)).mult(parseScale);
               const c2 = Vecta.create(data.slice(2,4)).mult(parseScale);
               const c3 = Vecta.create(data.slice(4,6)).mult(parseScale);
+              lastControlPoint.set(c2);
               for(let k=1; k<=bezierDetail; k++){
                 const t = k/bezierDetail;
                 const c = c0.copy().mult((1-t)*(1-t)*(1-t)).addScalar(c1, 3*t*(1-t)*(1-t)).addScalar(c2, 3*t*t*(1-t)).addScalar(c3, t*t*t);
                 contour.push(c);
               }
-              continue;
+              break;
+            case "H":
+              lastCommand = "H";
+              // horizontal:水平。x座標。
+              contour.push(Vecta.create(data[0], lastPoint.y).mult(parseScale));
+              break;
+            case "V":
+              lastCommand = "V";
+              // vertical:垂直。y座標。
+              contour.push(Vecta.create(lastPoint.x, data[0]).mult(parseScale));
+              break;
+            case "T":
+              // 簡易版Q. さっきの制御点の対蹠点が制御点になる。前がQかTでなければLと同じ。
+              // Qに色々つなげていくための物なので、Q-T-T-...のような使い方が想定される。
+              if(lastCommand !== "Q" && lastCommand !== "T"){
+                lastCommand = "L";
+                contour.push(Vecta.create(...data).mult(parseScale));
+              }else{
+                lastCommand = "T";
+                const q0 = lastPoint;
+                const q1 = q0.copy().mult(2).sub(lastControlPoint);
+                const q2 = Vecta.create(...data).mult(parseScale);
+                lastControlPoint.set(q1);
+                for(let k=1; k<=quadraticDetail; k++){
+                  const t = k/quadraticDetail;
+                  const q = q0.copy().mult((1-t)*(1-t)).addScalar(q1, 2*t*(1-t)).addScalar(q2, t*t);
+                  contour.push(q);
+                }
+              }
+              break;
+            case "S":
+              // 簡易版C. さっきの2番目の制御点の対蹠点が1番目の制御点になる。前がCかSでなければQと同じ。
+              // Cに色々つなげていくための物なので、C-S-S-...のような使い方が想定される。
+              if(lastCommand !== "C" && lastCommand !== "S"){
+                lastCommand = "Q";
+                const q0 = lastPoint;
+                const q1 = Vecta.create(data.slice(0,2)).mult(parseScale);
+                const q2 = Vecta.create(data.slice(2,4)).mult(parseScale);
+                lastControlPoint.set(q1);
+                for(let k=1; k<=quadraticDetail; k++){
+                  const t = k/quadraticDetail;
+                  const q = q0.copy().mult((1-t)*(1-t)).addScalar(q1, 2*t*(1-t)).addScalar(q2, t*t);
+                  contour.push(q);
+                }
+              }else{
+                lastCommand = "S";
+                const c0 = lastPoint;
+                const c1 = c0.copy().mult(2).sub(lastControlPoint);
+                const c2 = Vecta.create(data.slice(0,2)).mult(parseScale);
+                const c3 = Vecta.create(data.slice(2,4)).mult(parseScale);
+                lastControlPoint.set(c2);
+                for(let k=1; k<=bezierDetail; k++){
+                  const t = k/bezierDetail;
+                  const c = c0.copy().mult((1-t)*(1-t)*(1-t)).addScalar(c1, 3*t*(1-t)*(1-t)).addScalar(c2, 3*t*t*(1-t)).addScalar(c3, t*t*t);
+                  contour.push(c);
+                }
+              }
+              break;
+            case "A":
+              // 本家はややこしいのでarcToと同じとする。
+              // つまりx,y,x1,y1,r. 最後の点とx1,y1でx,yに近い方の距離とrでminを取ってproperとし、円弧でつなげる。
+              lastCommand = "A";
+              const a0 = lastPoint;
+              const a1 = Vecta.create(data.slice(0,2)).mult(parseScale);
+              const a2 = Vecta.create(data.slice(2,4)).mult(parseScale);
+              const r0 = data[4]*parseScale;
+              const r = Math.min(Math.min(a0.dist(a1), a1.dist(a2)), r0);
+              const v01 = a1.sub(a0, true).normalize();
+              const v12 = a2.sub(a1, true).normalize();
+              const angle = v01.angleTo(v12);
+              const b0 = a1.addScalar(v01, -r, true);
+              const b1 = a1.addScalar(v12, r, true);
+              // a0 -> b0 -> b1 -> a2 で作る。b0 -> b1 は円弧。
+              // 中心を割り出す計算だと破綻するので、角度を元に計算した方がよい。
+              // ごめんなさいangleは絶対値を取って評価します
+              const u = v01.mult((Math.abs(angle) < Number.EPSILON ? 2*r/arcDetail : 2*r*Math.sin(angle*0.5/arcDetail)/Math.tan(angle*0.5)), true);
+              u.rotate(angle*0.5/arcDetail);
+              contour.push(b0);
+              const bCur = b0.copy();
+              for(let k=1; k<arcDetail; k++){
+                bCur.add(u);
+                contour.push(bCur.copy());
+                u.rotate(angle/arcDetail);
+              }
+              contour.push(b1);
+              contour.push(a2);
+              break;
             case "Z":
               // 始点を入れるだけ。
+              lastCommand = "Z";
               contour.push(contour[0].copy());
-              continue;
+              break;
           }
+          lastPoint.set(contour[contour.length-1]);
         }
         // 最後です。
         result.push(contour.slice());
         return result;
+      }
+      static create(){
+        return new this();
       }
     }
 
@@ -9991,7 +10281,7 @@ available waveTables:
         }
       }
       displayParallel(ctx, prg, optionsArray = [], options = {}){
-        const {parallel} = options;
+        const {parallel = false} = options;
 
         const properOptionsArray = [];
         for(let k=0; k<this.mcss.length; k++){
@@ -11037,6 +11327,1480 @@ available waveTables:
     // 単位行列
     Gltf.IDENTITY = new MT4();
 
+    // ShaderPrototype, RenderSystem.
+    // ShaderとProgramで名前を分けよう。
+    class ShaderPrototype{
+      constructor(){
+        this.vs = "";
+        this.fs = "";
+        this.program = null;
+        // code.
+        this.vsPrecision = "";
+        this.vsDeclaration = "";
+        this.vsGlobal = "";
+        this.vsMain = "";
+        this.fsPrecision = "";
+        this.fsDeclaration = "";
+        this.fsGlobal = "";
+        this.fsMain = "";
+        // config.
+        this.fsFloatPrecision = `high`;
+        this.colorInput = `out vec4 fragColor;`;
+        this.postProcess = ``; // 出力前にいじる用
+        this.colorOutput = `fragColor = color;`;
+      }
+      precision(target = "vs", code = "", mode = 'w'){
+        const text = this[`${target}Precision`];
+        this[`${target}Precision`] = ShaderPrototype.modifyCode(code, text, mode);
+        return this;
+      }
+      declaration(target = "vs", code = "", mode = 'w'){
+        const text = this[`${target}Declaration`];
+        this[`${target}Declaration`] = ShaderPrototype.modifyCode(code, text, mode);
+        return this;
+      }
+      global(target = "vs", code = "", mode = 'w'){
+        const text = this[`${target}Global`];
+        this[`${target}Global`] = ShaderPrototype.modifyCode(code, text, mode);
+        return this;
+      }
+      main(target = "vs", code = "", mode = 'w'){
+        const text = this[`${target}Main`];
+        this[`${target}Main`] = ShaderPrototype.modifyCode(code, text, mode);
+        return this;
+      }
+      config(options = {}){
+        const keywords = ['fsFloatPrecision', 'colorInput', 'colorOutput', 'postProcess'];
+        // いろいろ
+        for(const keyword of keywords){
+          if(options[keyword] !== undefined){
+            this[keyword] = options[keyword];
+          }
+        }
+        return this;
+      }
+      createShader(){
+        this.vs =
+        `#version 300 es
+        ${this.vsPrecision}
+
+        ${this.vsDeclaration}
+
+        ${this.vsGlobal}
+
+        void main(){
+          vec3 position = vec3(0.0);
+          ${this.vsMain}
+          gl_Position = vec4(position, 1.0);
+        }
+        `;
+        this.fs =
+        `#version 300 es
+        precision ${this.fsFloatPrecision}p float;
+        ${this.fsPrecision}
+
+        ${this.fsDeclaration}
+
+        ${this.fsGlobal}
+
+        ${this.colorInput}
+
+        void main(){
+          vec4 color = vec4(1.0);
+
+          ${this.fsMain}
+
+          ${this.postProcess}
+          ${this.colorOutput}
+        }
+        `;
+      }
+      createProgram(gl, params = {}){
+        const {
+          name = "", layout = {}, outVaryings = [], separate = true,
+          showVertexShader = false, showFragmentShader = false
+        } = params;
+
+        if(showVertexShader){ console.log(this.vs); }
+        if(showFragmentShader){ console.log(this.fs); }
+
+        this.program = createShaderProgram(gl, {
+          vs:this.vs, fs:this.fs, name, layout, outVaryings, separate
+        });
+        return this;
+      }
+      static modifyCode(code = "", text = "", mode = 'w'){
+        let result = text;
+        switch(mode){
+          case 'w':
+            result = code; break;
+          case 'a':
+            result += code; break;
+        }
+        return result;
+      }
+    }
+
+    // 板ポリ芸。
+    // 一番楽なのは順番とか適当で...宣言？
+    // 宣言と外部コードとメインコードで全部、でいいっすね。
+    // って思ったけど面倒だな。もうglobalとmainだけでいいや！！
+    // vs/fsとGlobal/MainProcessは分けなくてもいいんですが、可読性のために分けています。
+    // まああのあれ、fsしかいじらない場合もあるだろうし。
+    // alignか...
+    // center_yUp, center_yDown, leftUp, leftDownくらいかなぁ。
+    // (0,0)を中心に置いてyが上か下か、コーナーは±1.
+    // それと左上(0,0)もしくは左下(0,0)ですね。そしてデフォルトは 'leftUp' にする、と。
+    // textureから取るときとかそうしますし。
+    class PlaneShader extends ShaderPrototype{
+      constructor(options = {}){
+        super();
+        const {align = 'leftUp'} = options;
+        this.align = align;
+      }
+      createShader(){
+        // 純粋な板ポリ芸を書く。vUvをvaryingとして渡す。以下略。いじってもいい。基本は左上(0,0)で右下(1,1)です。uvですし。
+        // 変更点と留意点
+        // Precisionを導入。vsは要らんのだけど、fsの方でテクスチャとかで必要になるかも。
+        // vsMainProcessでいじれるプリセット変数はvec2のuvとfloatのdepthです。
+        // uvはvUvとしてfsに送られます。
+        // fsMainProcessでいじれるプリセットはvec4のcolorのみです。
+        // いずれもプリセットだけなので、Globalであれこれして導入したものについては自由にあれこれできます。
+        this.vs =
+        `#version 300 es
+        ${this.vsPrecision}
+
+        const vec2[4] pos = vec2[](
+          vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0)
+        );
+        out vec2 vUv;
+
+        ${this.vsDeclaration}
+
+        ${this.vsGlobal}
+
+        void main(){
+          vec2 uv = pos[gl_VertexID];
+          vec2 original_uv = uv; // 板ポリ用
+          float depth = 0.0; // depthもいじれるように
+
+          ${PlaneShader.aligns[this.align]}
+
+          ${this.vsMain}
+
+          vUv = uv; // uvをいじれるようにする
+          gl_Position = vec4(original_uv, depth, 1.0);
+        }
+        `;
+        this.fs =
+        `#version 300 es
+        precision ${this.fsFloatPrecision}p float;
+        ${this.fsPrecision}
+
+        in vec2 vUv;
+
+        ${this.fsDeclaration}
+
+        ${this.fsGlobal}
+
+        ${this.colorInput}
+
+        void main(){
+          vec2 uv = vUv;
+          vec4 color = vec4(1.0);
+
+          ${this.fsMain}
+
+          ${this.postProcess}
+          ${this.colorOutput}
+        }
+        `;
+      }
+    }
+
+    PlaneShader.aligns = {
+      center_yUp:``,
+      center_yDown:
+      `uv.y = -uv.y;
+      `,
+      leftUp:
+      `uv.y = -uv.y;
+      uv = 0.5 + 0.5 * uv;
+      `,
+      leftDown:
+      `uv = 0.5 + 0.5 * uv;
+      `
+    };
+
+    // 一応共通部分作るか
+    class RenderSystem{
+      constructor(gl){
+        this.gl = gl;
+        this.shaders = {};
+        this.shaderFactory = () => {};
+        this.currentShader = null;
+      }
+      addShader(name, options = {}){
+        // ここで作ったものをセットする
+        this.shaders[name] = this.shaderFactory(options);
+        this.currentShader = this.shaders[name];
+        return this;
+      }
+      setShader(name){
+        this.currentShader = this.shaders[name];
+        return this;
+      }
+      getShader(){
+        return this.currentShader;
+      }
+      getProgram(){
+        return this.currentShader.program;
+      }
+      deleteShader(name){
+        // nameのやつを消す。
+        delete this.shaders[name];
+        return this;
+      }
+      createShader(){
+        this.currentShader.createShader();
+        return this;
+      }
+      createProgram(params = {}){
+        this.currentShader.createProgram(this.gl, params);
+        return this;
+      }
+      useProgram(){
+        this.gl.useProgram(this.currentShader.program);
+        return this;
+      }
+      clearProgram(){
+        this.gl.useProgram(null);
+        return this;
+      }
+      flush(){
+        this.gl.flush();
+        return this;
+      }
+    }
+
+    class Render2D extends RenderSystem{
+      constructor(gl){
+        super(gl);
+        this.shaderFactory = (options) => { return new PlaneShader(options); };
+        this.addShader('default');
+      }
+      render(options = {}){
+        // triangle_stripで板ポリ芸。optionsは未定。
+        const gl = this.gl;
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+    }
+
+    // NoLightShader
+    // noLightなのでライティング機構が無いです。
+    // lightingの方でライトオフすることもできるんですが、
+    // そもそも使わないのとオンオフするのは別なので
+    // 具体的にはあれ、キューブマップとかああいうの。射影テクスチャでもいい。
+    // normalはデフォルトでは不使用。
+    class NoLightShader extends ShaderPrototype{
+      constructor(options = {}){
+        super();
+        const {useNormal = false} = options;
+        this.useNormal = useNormal;
+      }
+      createShader(){
+        // noLightなのでpositionとnormalだけであとは...あってもいいけどライティングはしない
+        // normalがあるかどうかで微妙な違いはあるけど。
+        // positionは0番,normalは1番で固定。
+        this.vs =
+        `#version 300 es
+        ${this.vsPrecision}
+
+        layout (location = 0) in vec3 aPosition;
+        ${(this.useNormal ? 'layout (location = 1) in vec3 aNormal;' : '')}
+
+        // positionの生データ,model変換後のposition,modelView変換後のposition
+        out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
+        // normalの生データ,model変換後のnormal,modelView変換後のnormal
+        ${(this.useNormal ? 'out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;' : '')}
+
+        uniform mat4 uModelMatrix;
+        uniform mat4 uModelViewMatrix;
+        uniform mat4 uProjMatrix;
+        ${(this.useNormal ? 'uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;' : '')}
+
+        ${this.vsDeclaration}
+
+        ${this.vsGlobal}
+
+        void main(){
+          vec3 position = aPosition;
+          ${(this.useNormal ? 'vec3 normal = aNormal;' : '')}
+
+          // position,normalを改変するためのプリプロセス
+          ${this.vsMain}
+
+          // local -> model変換 -> global -> view変換 -> view
+          vLocalPosition = position;
+          vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+          vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
+          vViewPosition = viewModelPosition.xyz;
+          // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
+          vec4 normalDeviceCoordinate = viewModelPosition * uProjMatrix;
+          // 送っちゃえ
+          vNormalDeviceCoordinate = normalDeviceCoordinate;
+
+          // これ以外の、たとえば影描画などの場合の特殊なNDCとかはmainで出来るんで、これはこれでいいですね。
+
+          // local -> model変換 -> global -> view変換 -> view
+          ${(this.useNormal ? 'vLocalNormal = normal;' : '')}
+          ${(this.useNormal ? 'vGlobalNormal = normalize(normal * uModelNormalMatrix);' : '')}
+          ${(this.useNormal ? 'vViewNormal = normalize(normal * uNormalMatrix);' : '')}
+
+          gl_Position = normalDeviceCoordinate;
+        }
+        `;
+
+        // 色は自由に決めてね
+        this.fs =
+        `#version 300 es
+        precision ${this.fsFloatPrecision}p float;
+        ${this.fsPrecision}
+
+        in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
+        ${(this.useNormal ? 'in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;' : '')}
+
+        ${this.fsDeclaration}
+
+        ${this.fsGlobal}
+
+        ${this.colorInput}
+
+        void main(){
+          vec4 color = vec4(1.0);
+
+          // materialColorは無く、直接colorをいじる。
+          ${this.fsMain}
+
+          // 本来はここでライティング処理
+
+          // そのあとポストプロセス（透明度とか？）
+          ${this.postProcess}
+          ${this.colorOutput}
+        }
+        `;
+      }
+    }
+
+    // Position & Normalでライティング（フォン）
+    // 彩色はON/OFF可能(uniform経由でシステムから)
+    // あー、3種類全部要るんだ。まあ用意してからでいいか。面倒だけど仕方ないね。
+    class StandardLightingShader extends ShaderPrototype{
+      constructor(options = {}){
+        super();
+      }
+      createShader(){
+        this.vs =
+        `#version 300 es
+        ${this.vsPrecision}
+
+        layout (location = 0) in vec3 aPosition;
+        layout (location = 1) in vec3 aNormal;
+
+        // positionの生データ,model変換後のposition,modelView変換後のposition
+        out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
+        // normalの生データ,model変換後のnormal,modelView変換後のnormal
+        out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;
+
+        uniform mat4 uModelMatrix;
+        uniform mat4 uModelViewMatrix;
+        uniform mat4 uProjMatrix;
+        uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;
+
+        ${this.vsDeclaration}
+
+        ${this.vsGlobal}
+
+        void main(){
+          vec3 position = aPosition;
+          vec3 normal = aNormal;
+
+          // position,normalを改変するためのプリプロセス
+          ${this.vsMain}
+
+          // local -> model変換 -> global -> view変換 -> view
+          vLocalPosition = position;
+          vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+          vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
+          vViewPosition = viewModelPosition.xyz;
+          // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
+          vec4 normalDeviceCoordinate = viewModelPosition * uProjMatrix;
+          // 送っちゃえ
+          vNormalDeviceCoordinate = normalDeviceCoordinate;
+
+          // local -> model変換 -> global -> view変換 -> view
+          vLocalNormal = normal;
+          vGlobalNormal = normalize(normal * uModelNormalMatrix);
+          vViewNormal = normalize(normal * uNormalMatrix);
+
+          gl_Position = normalDeviceCoordinate;
+        }
+        `;
+
+        // ライティング関連のuniformを用意します。
+        // 3種類。ついでにnoLight,これはデフォルトでfalseですから、問題ないんですが、
+        // 仕様上はきちんとfalseを入れます。システムサイドでいじる。
+        this.fs =
+        `#version 300 es
+        precision ${this.fsFloatPrecision}p float;
+        ${this.fsPrecision}
+
+        in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
+        in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;
+
+        ${this.fsDeclaration}
+
+        // ----------------------- StandardLight -----------------------//
+        const int DIRECTIONAL_LIGHT_COUNT_MAX = 16;
+        const int POINT_LIGHT_COUNT_MAX = 16;
+        const int SPOT_LIGHT_COUNT_MAX = 16;
+
+        struct punctualLight{
+          vec3 diffuse;
+          vec3 specular;
+        };
+
+        // 方向
+        struct directionalLight{
+          vec3 viewLightDirection;
+          vec3 diffuseColor;
+          vec3 specularColor;
+          float specularPower;
+        };
+
+        // 位置と距離
+        struct pointLight{
+          vec3 viewLightPosition;
+          float distance;
+          float decay;
+          vec3 diffuseColor;
+          vec3 specularColor;
+          float specularPower;
+        };
+
+        // 位置と方向と距離
+        struct spotLight{
+          vec3 viewLightDirection;
+          vec3 viewLightPosition;
+          float distance;
+          float decay;
+          float coneCos;
+          vec3 diffuseColor;
+          vec3 specularColor;
+          float specularPower;
+        };
+
+        punctualLight directional(in directionalLight light, in vec3 fromPointToEye, in vec3 viewNormal){
+          // diffuse.
+          vec3 l = normalize(light.viewLightDirection);
+          float diffuseFactor = max(0.1, dot(l, viewNormal));
+
+          // specular.
+          vec3 reflectedLight = reflect(-l, viewNormal); // 入射光に使う関数なので逆にする
+          float specularFactor = pow(max(0.0, dot(reflectedLight, fromPointToEye)), light.specularPower);
+
+          // 個別に用意
+          punctualLight c;
+          c.diffuse = light.diffuseColor * diffuseFactor;
+          c.specular = light.specularColor * specularFactor;
+          return c;
+        }
+
+        punctualLight point(in pointLight light, in vec3 fromPointToEye, in vec3 viewPosition, in vec3 viewNormal){
+          // distance factor.
+          float d = length(light.viewLightPosition - viewPosition);
+          // 逆二乗則にしよう。それでdecayは係数にしよう。デフォルトは1で。
+          float distanceFactor = light.decay * min(1.0, pow(light.distance/(1e-6 + d), 2.0));
+
+          //  diffuse.
+          vec3 l = normalize(light.viewLightPosition - viewPosition);
+          float diffuseFactor = max(0.1, dot(l, viewNormal));
+
+          // specular.
+          vec3 reflectedLight = reflect(-l, viewNormal); // 入射光に使う関数なので逆にする
+          float specularFactor = pow(max(0.0, dot(reflectedLight, fromPointToEye)), light.specularPower);
+
+          // 個別に用意
+          punctualLight c;
+          float factor = distanceFactor;
+          c.diffuse = factor * light.diffuseColor * diffuseFactor;
+          c.specular = factor * light.specularColor * specularFactor;
+          return c;
+        }
+
+        punctualLight spot(in spotLight light, in vec3 fromPointToEye, in vec3 viewPosition, in vec3 viewNormal){
+          // distance factor.
+          float d = length(light.viewLightPosition - viewPosition);
+          // 逆二乗則にしよう。それでdecayは係数にしよう。デフォルトは1で。
+          float distanceFactor = light.decay * min(1.0, pow(light.distance/(1e-6 + d), 2.0));
+
+          // diffuse.
+          vec3 l = normalize(light.viewLightPosition - viewPosition);
+          float diffuseFactor = max(0.1, dot(l, viewNormal));
+
+          // angle factor
+          vec3 ld = normalize(light.viewLightDirection);
+          float angleFactor = smoothstep(light.coneCos, 1.0, dot(l, ld));
+
+          // specular.
+          vec3 reflectedLight = reflect(-l, viewNormal); // 入射光に使う関数なので逆にする
+          float specularFactor = pow(max(0.0, dot(reflectedLight, fromPointToEye)), light.specularPower);
+
+          // 個別に用意
+          punctualLight c;
+          float factor = distanceFactor * angleFactor;
+          c.diffuse = factor * light.diffuseColor * diffuseFactor;
+          c.specular = factor * light.specularColor * specularFactor;
+          return c;
+        }
+
+        uniform int uDirectionalLightCount;
+        uniform directionalLight uDirectionalLights[DIRECTIONAL_LIGHT_COUNT_MAX];
+        uniform int uPointLightCount;
+        uniform pointLight uPointLights[POINT_LIGHT_COUNT_MAX];
+        uniform int uSpotLightCount;
+        uniform spotLight uSpotLights[SPOT_LIGHT_COUNT_MAX];
+        uniform bool uNoLight;
+        uniform vec3 uAmbientColor;
+        // ----------------------- StandardLightここまで -----------------------//
+
+        ${this.fsGlobal}
+
+        ${this.colorInput}
+
+        void main(){
+          vec3 viewPosition = vViewPosition;
+          vec3 fromPointToEye = normalize(-vViewPosition);
+          vec3 viewNormal = normalize(vViewNormal);
+
+          vec4 color = vec4(1.0);
+
+          // materialColorの可能性は主に3つ。
+          // 1. 単色(uniform) 2. 頂点色(varying) 3.テクスチャ彩色(varying & uniform, 様々な可能性)
+          vec3 materialColor = vec3(1.0);
+
+          // materialColorをいじるパート
+          ${this.fsMain}
+
+          vec3 diffuse = vec3(0.0);
+          vec3 specular = vec3(0.0);
+          vec3 ambient = uAmbientColor;
+
+          if(!uNoLight){
+            for(int i=0; i<DIRECTIONAL_LIGHT_COUNT_MAX; i++){
+              if(i == uDirectionalLightCount) break;
+              punctualLight dl = directional(uDirectionalLights[i], fromPointToEye, viewNormal);
+              diffuse += dl.diffuse;
+              specular += dl.specular;
+            }
+            for(int i=0; i<POINT_LIGHT_COUNT_MAX; i++){
+              if(i == uPointLightCount) break;
+              punctualLight pl = point(uPointLights[i], fromPointToEye, viewPosition, viewNormal);
+              diffuse += pl.diffuse;
+              specular += pl.specular;
+            }
+            for(int i=0; i<SPOT_LIGHT_COUNT_MAX; i++){
+              if(i == uSpotLightCount) break;
+              punctualLight sl = spot(uSpotLights[i], fromPointToEye, viewPosition, viewNormal);
+              diffuse += sl.diffuse;
+              specular += sl.specular;
+            }
+            color.rgb = materialColor * diffuse + specular + ambient;
+          }else{
+            // noLightの場合はmaterialColorをそのまま使う
+            color.rgb = materialColor + ambient;
+          }
+
+          // そのあとポストプロセス（透明度とか？）
+          ${this.postProcess}
+          ${this.colorOutput}
+        }
+        `;
+      }
+    }
+
+    // Position & Normalでライティング（PBR）
+    // 彩色はON/OFF可能(uniform経由でシステムから)
+    // Standardと仕組みが違うんですが、ここだけ...
+    class PBRLightingShader extends ShaderPrototype{
+      constructor(options = {}){
+        super();
+      }
+      createShader(){
+        this.vs =
+        `#version 300 es
+        ${this.vsPrecision}
+
+        layout (location = 0) in vec3 aPosition;
+        layout (location = 1) in vec3 aNormal;
+
+        // positionの生データ,model変換後のposition,modelView変換後のposition
+        out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
+        // normalの生データ,model変換後のnormal,modelView変換後のnormal
+        out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;
+
+        uniform mat4 uModelMatrix;
+        uniform mat4 uModelViewMatrix;
+        uniform mat4 uProjMatrix;
+        uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;
+
+        ${this.vsDeclaration}
+
+        ${this.vsGlobal}
+
+        void main(){
+          vec3 position = aPosition;
+          vec3 normal = aNormal;
+
+          // position,normalを改変するためのプリプロセス
+          ${this.vsMain}
+
+          // local -> model変換 -> global -> view変換 -> view
+          vLocalPosition = position;
+          vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+          vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
+          vViewPosition = viewModelPosition.xyz;
+          // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
+          vec4 normalDeviceCoordinate = viewModelPosition * uProjMatrix;
+          // 送っちゃえ
+          vNormalDeviceCoordinate = normalDeviceCoordinate;
+
+          // local -> model変換 -> global -> view変換 -> view
+          vLocalNormal = normal;
+          vGlobalNormal = normalize(normal * uModelNormalMatrix);
+          vViewNormal = normalize(normal * uNormalMatrix);
+
+          gl_Position = normalDeviceCoordinate;
+        }
+        `;
+
+        this.fs =
+        `#version 300 es
+        precision ${this.fsFloatPrecision}p float;
+        ${this.fsPrecision}
+
+        in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
+        in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;
+
+        ${this.fsDeclaration}
+
+        // ----------------------- PBRLight -----------------------//
+        // 使うものだけ
+        #define PI 3.14159265359
+        #define PI2 6.28318530718
+        #define EPSILON 1e-6
+        #define saturate(a) clamp( a, 0.0, 1.0 ) // 計算で使う
+
+        #define LIGHT_MAX 16
+
+        // 入射光
+        struct IncidentLight {
+          vec3 color;
+          vec3 direction;
+          bool visible;  // 光が届くときtrue
+        };
+
+        // 反射光（必要な分だけ）
+        struct ReflectedLight {
+          vec3 directDiffuse;
+          vec3 directSpecular;
+        };
+
+        // positionはvViewPositionそのままで
+        // normalはvViewNormalを正規化する
+        // viewDirは-positionの正規化
+        struct GeometricContext {
+          vec3 position;
+          vec3 normal;
+          vec3 viewDir;
+        };
+
+        // specularRoughnessはroughnessそのまま
+        // diffuseColorとspecularColorをmetalnessから計算する
+        struct Material {
+          vec3 diffuseColor;
+          vec3 specularColor;
+          float specularRoughness;
+        };
+
+        // ライトの構造体とライティングルーチン
+
+        // ライトについては送るときに
+        // 方向はview行列でview空間に落としておく
+        // 点光源とスポットライトもモデルビューで位置をビューに落としておくこと
+
+        // 平行光
+        struct DirectionalLight {
+          vec3 direction;
+          vec3 color;
+        };
+
+        // 点光源
+        struct PointLight {
+          vec3 position;
+          vec3 color;
+          float distance;
+          float decay;  // 減衰率
+        };
+
+        // スポットライト
+        // ざっくりいうと
+        // penumbraCosまでいくとあそこが1になるんですよ
+        // coneCosぎりぎりで0ですね
+        // smoothstepってのはそういうこと
+        // なお送る前にcosに変換していますね...
+        struct SpotLight {
+          vec3 position;
+          vec3 direction;
+          vec3 color;
+          float distance;
+          float decay;
+          float coneCos;
+          float penumbraCos;
+        };
+
+        // punctual light 3兄弟
+        // だんご！！
+        uniform DirectionalLight uDirectionalLights[LIGHT_MAX];
+        uniform PointLight uPointLights[LIGHT_MAX];
+        uniform SpotLight uSpotLights[LIGHT_MAX];
+
+        // ライトの数をユニフォーム変数として登録してるね。
+        uniform int uDirectionalLightCount;
+        uniform int uPointLightCount;
+        uniform int uSpotLightCount;
+
+        // 光が届くときにtrueを返す。pointLightとspotLightで使う
+        bool testLightInRange(const in float lightDistance, const in float cutoffDistance) {
+          return any(bvec2(cutoffDistance == 0.0, lightDistance < cutoffDistance));
+        }
+
+        // 減衰を調べるコード
+        // 当然だが平行光に減衰の概念は適用されない
+        float punctualLightIntensityToIrradianceFactor(const in float lightDistance, const in float cutoffDistance, const in float decayExponent) {
+          if (decayExponent > 0.0) {
+            return pow(saturate(-lightDistance / cutoffDistance + 1.0), decayExponent);
+          }
+
+          return 1.0;
+        }
+
+        // 平行光の放射照度ファクター
+        // 平行なので必ず届くし、色と方向があるだけ。
+        void getDirectionalDirectLightIrradiance(const in DirectionalLight directionalLight, const in GeometricContext geometry, out IncidentLight directLight) {
+          directLight.color = directionalLight.color;
+
+          directLight.direction = directionalLight.direction;
+
+          directLight.visible = true;
+        }
+
+        // 点光源の放射照度ファクター
+        // 位置により届くかどうかや減衰の度合いが決まる
+        // より点光源らしいふるまいとなっている
+        void getPointDirectLightIrradiance(const in PointLight pointLight, const in GeometricContext geometry, out IncidentLight directLight) {
+          vec3 L = pointLight.position - geometry.position;
+          directLight.direction = normalize(L);
+
+          float lightDistance = length(L);
+          if (testLightInRange(lightDistance, pointLight.distance)) {
+            directLight.color = pointLight.color;
+            directLight.color *= punctualLightIntensityToIrradianceFactor(lightDistance, pointLight.distance, pointLight.decay);
+            directLight.visible = true;
+          } else {
+            directLight.color = vec3(0.0);
+            directLight.visible = false;
+          }
+        }
+
+        // coneCosで0, penumbraCosで1ですね。間で0～1ですね。つまり充分傘の内側に
+        // 居れば1だということ。
+
+        void getSpotDirectLightIrradiance(const in SpotLight spotLight, const in GeometricContext geometry, out IncidentLight directLight) {
+          vec3 L = spotLight.position - geometry.position;
+          directLight.direction = normalize(L);
+
+          float lightDistance = length(L);
+          float angleCos = dot(directLight.direction, spotLight.direction);
+
+          if (all(bvec2(angleCos > spotLight.coneCos, testLightInRange(lightDistance, spotLight.distance)))) {
+            float spotEffect = smoothstep(spotLight.coneCos, spotLight.penumbraCos, angleCos);
+            directLight.color = spotLight.color;
+            directLight.color *= spotEffect * punctualLightIntensityToIrradianceFactor(lightDistance, spotLight.distance, spotLight.decay);
+            directLight.visible = true;
+          } else {
+            directLight.color = vec3(0.0);
+            directLight.visible = false;
+          }
+        }
+
+        // BRDF関連のルーチン群
+
+        // Normalized Lambert
+        vec3 DiffuseBRDF(vec3 diffuseColor) {
+          return diffuseColor / PI;
+        }
+
+        vec3 F_Schlick(vec3 specularColor, vec3 H, vec3 V) {
+          return (specularColor + (1.0 - specularColor) * pow(1.0 - saturate(dot(V,H)), 5.0));
+        }
+
+        float D_GGX(float a, float dotNH) {
+          float a2 = a*a;
+          float dotNH2 = dotNH*dotNH;
+          float d = dotNH2 * (a2 - 1.0) + 1.0;
+          return a2 / (PI * d * d);
+        }
+
+        float G_Smith_Schlick_GGX(float a, float dotNV, float dotNL) {
+          float k = a*a*0.5 + EPSILON;
+          float gl = dotNL / (dotNL * (1.0 - k) + k);
+          float gv = dotNV / (dotNV * (1.0 - k) + k);
+          return gl*gv;
+        }
+
+        // Cook-Torrance
+        vec3 SpecularBRDF(const in IncidentLight directLight, const in GeometricContext geometry, vec3 specularColor, float roughnessFactor) {
+
+          vec3 N = geometry.normal;
+          vec3 V = geometry.viewDir;
+          vec3 L = directLight.direction;
+
+          float dotNL = saturate(dot(N,L));
+          float dotNV = saturate(dot(N,V));
+          vec3 H = normalize(L+V);
+          float dotNH = saturate(dot(N,H));
+          float dotVH = saturate(dot(V,H));
+          float dotLV = saturate(dot(L,V));
+          float a = roughnessFactor * roughnessFactor;
+
+          float D = D_GGX(a, dotNH);
+          float G = G_Smith_Schlick_GGX(a, dotNV, dotNL);
+          vec3 F = F_Schlick(specularColor, V, H);
+          return (F*(G*D))/(4.0*dotNL*dotNV+EPSILON);
+        }
+
+        // RenderEquations(RE)
+        void RE_Direct(const in IncidentLight directLight, const in GeometricContext geometry, const in Material material, inout ReflectedLight reflectedLight) {
+
+          float dotNL = saturate(dot(geometry.normal, directLight.direction));
+          vec3 irradiance = dotNL * directLight.color;
+
+          // punctual light
+          irradiance *= PI;
+
+          reflectedLight.directDiffuse += irradiance * DiffuseBRDF(material.diffuseColor);
+          reflectedLight.directSpecular += irradiance * SpecularBRDF(directLight, geometry, material.specularColor, material.specularRoughness);
+        }
+
+        // albedoはmaterialColor扱いにする形で。あとambientにしよう。
+        uniform float uMetallic;
+        uniform float uRoughness;
+
+        uniform vec3 uAmbientColor;
+        uniform bool uNoLight;
+        // ----------------------- PBRLightここまで -----------------------//
+
+        ${this.fsGlobal}
+
+        ${this.colorInput}
+        void main(){
+          // この辺はStandardLightと一緒ですが、実は逆で、こっちからあっちに逆輸入したんですよね。
+          GeometricContext geometry;
+          geometry.position = vViewPosition; // こういうこと？
+          geometry.normal = normalize(vViewNormal);
+          geometry.viewDir = normalize(-vViewPosition);
+
+          vec4 color = vec4(1.0);
+
+          // albedoの可能性は主に3つ。
+          // 1. 単色(uniform) 2. 頂点色(varying) 3.テクスチャ彩色(varying & uniform, 様々な可能性)
+          vec3 albedo = vec3(1.0);
+
+          // albedoをいじるパート
+          ${this.fsMain}
+
+          vec3 diffuse = vec3(0.0);
+          vec3 specular = vec3(0.0);
+          vec3 ambient = uAmbientColor;
+
+          // metallicが大きいとスペキュラ優先
+          // 小さいとalbedo優先
+          Material material;
+          material.diffuseColor = mix(albedo, vec3(0.0), uMetallic);
+          material.specularColor = mix(vec3(0.04), albedo, uMetallic);
+          material.specularRoughness = uRoughness;
+
+          // 以下、ライティング
+          if(!uNoLight){
+            // 入射光の構造体だけ作っておいて今からいじる
+            IncidentLight directLight;
+            // とはいえ間接的に使うだけで、resultは上記のreflectedLightだけども。
+            // 要はメソッド内で内容をいじるために存在する媒体
+            // 反射光を計算するために入射光が要るということ
+
+            // コンストラクタで初期化
+            ReflectedLight reflectedLight = ReflectedLight(vec3(0.0), vec3(0.0));
+
+            // directional light
+            for (int i=0; i<LIGHT_MAX; ++i) {
+              if (i >= uDirectionalLightCount) break;
+              getDirectionalDirectLightIrradiance(uDirectionalLights[i], geometry, directLight);
+              RE_Direct(directLight, geometry, material, reflectedLight);
+            }
+
+            // point light
+            for (int i=0; i<LIGHT_MAX; ++i) {
+              if (i >= uPointLightCount) break;
+              getPointDirectLightIrradiance(uPointLights[i], geometry, directLight);
+              if (directLight.visible) {
+                RE_Direct(directLight, geometry, material, reflectedLight);
+              }
+            }
+
+            // spot light
+            for (int i=0; i<LIGHT_MAX; ++i) {
+              if (i >= uSpotLightCount) break;
+              getSpotDirectLightIrradiance(uSpotLights[i], geometry, directLight);
+              if (directLight.visible) {
+                RE_Direct(directLight, geometry, material, reflectedLight);
+              }
+            }
+
+            color.rgb = reflectedLight.directDiffuse + reflectedLight.directSpecular + ambient;
+          }else{
+            color.rgb = albedo + ambient;
+          }
+
+          // そのあとポストプロセス（透明度とか？）
+          ${this.postProcess}
+          ${this.colorOutput}
+        }
+        `
+      }
+    }
+
+    // カメラとオビコンが備わっているのです。そこら辺はまあ、いろいろいじれるようにしたいところ。
+    // ドローコール要らないかもな。カメラだけいろいろやってくれればいいよ。
+    // プログラムだけ用意してくれれば良いかなって感じですかね...
+    // めんどうだろ。だからドローコールやVAOは直接用意すればいいよ。
+
+    // canvasは必須でいいと思う。
+    // リサイズやリセットはccを外部的に用意すればいかようにもできる
+    // easySetting:デフォルトはnoneで、perse, ortho, axis, freeを指定する。
+    // /で区切る。
+    // autoReset. 20フレームでダブルクリックで戻る。イージングはeaseInOutQuadでいいです。
+
+    // 未指定の場合のcamとccの仕様。
+    // ccが不要な場合もあるでしょう。そこでデフォルト（両方未指定）ではcamのみ用意する。
+    // cc:'axis'などとある場合のみ用意する。つまり使う場合はccのみ指定するということ。
+    // camのみ指定する場合、そのままではccは用意されない。文字列指定かダイレクト指定で用意できる。
+
+    // 分かりやすくまとめる
+    // 1. camとccが未指定：
+    // easySettingが無ければデフォのperseだけ用意して終わり。あるならそれに従う。
+    // 2. camだけ指定：
+    // 文字列で指定する場合はperseかorthoなら用意されるがそれ以外の場合はnullとなり、以降は上と同じ。
+    // 通常指定の場合、easySettingは機能せず、ccのないシステムとなる。
+    // 3. ccだけ指定：
+    // 文字列で指定する場合はaxisかfreeならデフォルトのperseカメラにそれがセットされる。
+    // cc「だけ」ということはカメラが無いので、ccも用意できず、文字列でしか指定できない。
+    // 4. camもccも指定
+    // 共に通常の指定方法ならそれが使われるだけ。文字列で指定すると然るべくデフォルトが使われる。
+    // たとえばcamだけきちんと用意してccは軸とか適当でいいよ...いつものy上でいいよ...の場合、'free'とか'axis'で済む。
+    // z上とかがいい場合はきちんと用意しましょう！！
+    // 文字列の指定の仕方によってはnullになるんで、その場合は上記のどれかになる。
+    class Render3D extends RenderSystem{
+      constructor(gl, params = {}){
+        super(gl);
+        const {
+          cvs = null, cam = null, cc = null, easySetting = 'default',
+          autoReset = false
+        } = params;
+        this.cvs = cvs;
+        // camに文字列を許す。ただしデフォルトの場合だけね。
+        if(typeof(cam) === 'string'){
+          // 変な文字列の場合はnull.
+          this.cam = (cam === 'perse' ? new QCameraPerse() : (cam === 'ortho' ? new QCameraOrtho : null));
+        }else{
+          this.cam = cam;
+        }
+        // camだけきちんと用意されていてccが文字列の場合でもうまく機能するようにしよう。
+        if(this.cam !== null && typeof(cc) === 'string'){
+          // 変な文字列の場合はnull.
+          if(cc === 'none' || cc === 'axis' || cc === 'free'){
+            this.cc = new CameraController(cvs, {}, {
+              cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:cc
+            });
+          }else{
+            this.cc = null;
+          }
+        }else{
+          this.cc = cc;
+        }
+        const easySettingKey = Render3D.createEasySettingKey(easySetting);
+
+        if(this.cam === null){
+          if(this.cc === null){
+            // 両方nullの場合にのみ、easySettingを使う。noneの場合は用意されない。指定しない場合も同様。
+            // たとえばperseとだけ書くとperseのカメラだけ用意してccは無し。perse/freeでccがfreeで用意される。
+            // eye:[0, 1, 3], center:[0, 0, 0], top:[0, 1, 0],
+            // fov:Math.PI/3, aspect:WIW/WIH, near:0.01, far:400
+            this.cam = (easySettingKey.cam === 'perse' ? new QCameraPerse() : new QCameraOrtho());
+            if(easySettingKey.cc !== 'none'){
+              this.cc = new CameraController(cvs, {}, {
+                cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:easySettingKey.cc
+              });
+            }
+          }else{
+            // cam「だけ」nullの場合はeasySettingKeyは無視されて、ccの文字列で判定される。axis/freeの場合に然るべく。
+            // この場合実質的にccは文字列でしか用意できない。なのでそれ以外の場合はnullとなり、機能しない。
+            this.cam = new QCameraPerse();
+            if(this.cc === 'axis' || this.cc === 'free'){
+              const rotationMode = this.cc;
+              this.cc = new CameraController(cvs, {}, {
+                cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:rotationMode
+              });
+            }else{
+              this.cc = null;
+            }
+          }
+        }
+
+        this.modelMatrix = new MT4();
+        this.viewMatrix = this.cam.getView();
+        this.modelViewMatrix = this.viewMatrix.multM(this.modelMatrix, true);
+        this.autoReset = (this.cc !== null && autoReset);
+        if(this.autoReset){
+          this.resetter = {duration:20, current:20};
+          const IR = new Inspector(cvs, {dblclick:true});
+          this.cameraReset = ()=>{
+            if(this.resetter.current === this.resetter.duration){
+              this.cam.saveState("tmp");
+              this.cc.pause();
+              this.resetter.current = 0;
+            }
+          };
+          IR.add("dblclick", this.cameraReset);
+          IR.add("dbltap", this.cameraReset);
+        }
+      }
+      model(){
+        // 好きに。
+        return this.modelMatrix;
+      }
+      update(){
+        // CameraControllerのupdateとビュー行列の更新
+        // autoResetの場合はダブルクリックでリセットする
+        if(this.autoReset){
+          if(this.resetter.current < this.resetter.duration){
+            this.resetter.current++;
+            const prg = this.resetter.current/this.resetter.duration;
+            this.cam.lerpState("tmp", "default", prg*prg*(3-2*prg));
+            if(this.resetter.current === this.resetter.duration){
+              this.cc.start();
+              this.cc.reset();
+            }
+          }
+        }
+        // ccを使わない場合は何もしない。
+        if(this.cc !== null){ this.cc.update(); }
+
+        this.viewMatrix.set(this.cam.getView());
+        return this;
+      }
+      setMatrices(){
+        const gl = this.gl;
+        const pg = this.currentShader.program;
+        this.modelViewMatrix.set(this.viewMatrix).multM(this.modelMatrix);
+
+        uniformX(gl, pg, "matrix4fv", "uProjMatrix", this.cam.getProj().m);
+        uniformX(gl, pg, "matrix4fv", "uModelMatrix", this.modelMatrix.m);
+        uniformX(gl, pg, "matrix4fv", "uModelViewMatrix", this.modelViewMatrix.m);
+        uniformX(gl, pg, "matrix3fv", "uNormalMatrix", this.modelViewMatrix.getInverseTranspose3x3());
+        uniformX(gl, pg, "matrix3fv", "uModelNormalMatrix", this.modelMatrix.getInverseTranspose3x3());
+
+        return this;
+      }
+      static createEasySettingKey(key = 'default'){
+        if(key === 'default'){ return {cam:'perse', cc:'none'}; }
+        const keys = key.split('/');
+        const result = {cam:'perse', cc:'none'};
+        for(const eachKey of keys){
+          if(eachKey === 'perse' || eachKey === 'ortho'){
+            result.cam = eachKey;
+          }
+          if(eachKey === 'none' || eachKey === 'axis' || eachKey === 'free'){
+            result.cc = eachKey;
+          }
+        }
+        return result;
+      }
+    }
+
+    class NoLightRender3D extends Render3D{
+      constructor(gl, params = {}){
+        super(gl, params);
+        this.shaderFactory = (options) => { return new NoLightShader(options); }
+        this.addShader('default');
+      }
+    }
+
+    class LightRender3D extends Render3D{
+      constructor(gl, params = {}){
+        super(gl, params);
+        this.lights = {
+          directional: Array(16).fill(null),
+          point: Array(16).fill(null),
+          spot: Array(16).fill(null)
+        };
+        this.ambientLight = [0.1, 0.1, 0.1];
+        this.useLight = true;
+      }
+      light(type = "directional", slotIndex = 0, params = {}){
+        return this;
+      }
+      setAmbient(...args){
+        this.ambientLight = coulour3(...args);
+        return this;
+      }
+      lightOn(){
+        this.useLight = true;
+        return this;
+      }
+      lightOff(){
+        this.useLight = false;
+        return this;
+      }
+      switchLight(){
+        this.useLight = !this.useLight;
+        return this;
+      }
+      setLights(){
+        // uniform関連
+        return this;
+      }
+    }
+
+    /*
+      違いは3種類のライトごとのプロパティと、
+      PBRの場合はalbedoがあるので...なおalbedoがmaterialColorに相当する。
+      なのでnoLightの場合はalbedoをそのままambientに足して出力する。
+      そうです
+      それでいいですね
+    */
+
+    // StandardLight
+    class StandardLightRender3D extends LightRender3D{
+      constructor(gl, params = {}){
+        super(gl, params);
+        this.shaderFactory = (options) => { return new StandardLightingShader(options); };
+        this.addShader('default');
+      }
+      light(type = "directional", slotIndex = 0, params = {}){
+        if(this.lights[type][slotIndex] === null){
+          this.lights[type][slotIndex] = StandardLightRender3D.createLight(type, params);
+        }else{
+          StandardLightRender3D.configLight(this.lights[type][slotIndex], params);
+        }
+        return this;
+      }
+      setLights(){
+        const {gl, viewMatrix} = this;
+        const pg = this.currentShader.program;
+
+        let directionalLightCount = 0;
+        for(let i=0; i<this.lights.directional.length; i++){
+          const l = this.lights.directional[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const direction = l.direction.copy();
+          viewMatrix.multN(direction);
+          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].viewLightDirection`, ...direction.array());
+          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].diffuseColor`, ...l.diffuseColor);
+          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].specularColor`, ...l.specularColor);
+          uniformX(gl, pg, "1f", `uDirectionalLights[${directionalLightCount}].specularPower`, l.specularPower);
+          directionalLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uDirectionalLightCount", directionalLightCount);
+
+        let pointLightCount = 0;
+        for(let i=0; i<this.lights.point.length; i++){
+          const l = this.lights.point[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const position = l.position.copy();
+          viewMatrix.multV(position);
+          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].viewLightPosition`, ...position.array());
+          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].distance`, l.distance);
+          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].decay`, l.decay);
+          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].diffuseColor`, ...l.diffuseColor);
+          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].specularColor`, ...l.specularColor);
+          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].specularPower`, l.specularPower);
+          pointLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uPointLightCount", pointLightCount);
+
+        let spotLightCount = 0;
+        for(let i=0; i<this.lights.spot.length; i++){
+          const l = this.lights.spot[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const direction = l.direction.copy();
+          const position = l.position.copy();
+          viewMatrix.multN(direction);
+          viewMatrix.multV(position);
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].viewLightDirection`, ...direction.array());
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].viewLightPosition`, ...position.array());
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].distance`, l.distance);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].decay`, l.decay);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].coneCos`, l.coneCos);
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].diffuseColor`, ...l.diffuseColor);
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].specularColor`, ...l.specularColor);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].specularPower`, l.specularPower);
+          spotLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uSpotLightCount", spotLightCount);
+
+        uniformX(gl, pg, "1i", "uNoLight", !this.useLight);
+        uniformX(gl, pg, "3f", "uAmbientColor", ...this.ambientLight);
+
+        return this;
+      }
+      static createDirectionalLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          direction = [0,0,1],
+          diffuseColor = [0.5,0.5,0.5], specularColor = [1,1,1], specularPower = 20
+        } = params;
+        l.use = use;
+        l.direction = Vecta.create(direction);
+        l.diffuseColor = coulour3(diffuseColor);
+        l.specularColor = coulour3(specularColor);
+        l.specularPower = specularPower;
+        return l;
+      }
+      static createPointLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          position = [0,0,3], distance = 3, decay = 1,
+          diffuseColor = [0.5,0.5,0.5], specularColor = [1,1,1], specularPower = 20
+        } = params;
+        l.use = use;
+        l.position = Vecta.create(position);
+        l.distance = distance;
+        l.decay = decay;
+        l.diffuseColor = coulour3(diffuseColor);
+        l.specularColor = coulour3(specularColor);
+        l.specularPower = specularPower;
+        return l;
+      }
+      static createSpotLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          direction = [0,0,1], position = [0,0,6], distance = 6, decay = 1, coneCos = 0.95,
+          diffuseColor = [0.5,0.5,0.5], specularColor = [1,1,1], specularPower = 20
+        } = params;
+        l.use = use;
+        l.direction = Vecta.create(direction);
+        l.position = Vecta.create(position);
+        l.decay = decay;
+        l.coneCos = coneCos;
+        l.diffuseColor = coulour3(diffuseColor);
+        l.specularColor = coulour3(specularColor);
+        l.specularPower = specularPower;
+        return l;
+      }
+      static createLight(type = "directional", params = {}){
+        switch(type){
+          case 'directional':
+            return this.createDirectionalLight(params);
+          case 'point':
+            return this.createPointLight(params);
+          case 'spot':
+            return this.createSpotLight(params);
+        }
+        return {};
+      }
+      static configLight(target, params = {}){
+        for(const [key, value] of Object.entries(params)){
+          // Vectaの場合、色の場合、それ以外。
+          if(target[key] instanceof Vecta){
+            target[key].set(value);
+          }else if(key === 'diffuseColor' || key === 'specularColor'){
+            target[key] = coulour3(value);
+          }else{
+            target[key] = value;
+          }
+        }
+      }
+    }
+
+    // PBRLight
+    class PBRLightRender3D extends LightRender3D{
+      constructor(gl, params = {}){
+        super(gl, params);
+        this.shaderFactory = (options) => { return new PBRLightingShader(options); };
+        this.addShader('default');
+        this.pbrParams = {metallic:0.5, roughness:0.5};
+      }
+      metallic(v = 0.5){
+        this.pbrParams.metallic = v;
+        return this;
+      }
+      roughness(v = 0.5){
+        this.pbrParams.roughness = v;
+        return this;
+      }
+      light(type = "directional", slotIndex = 0, params = {}){
+        if(this.lights[type][slotIndex] === null){
+          this.lights[type][slotIndex] = PBRLightRender3D.createLight(type, params);
+        }else{
+          PBRLightRender3D.configLight(this.lights[type][slotIndex], params);
+        }
+        return this;
+      }
+      setLights(){
+        const {gl, viewMatrix} = this;
+        const pg = this.currentShader.program;
+
+        let directionalLightCount = 0;
+        for(let i=0; i<this.lights.directional.length; i++){
+          const l = this.lights.directional[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const direction = l.direction.copy();
+          viewMatrix.multN(direction);
+          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].direction`, ...direction.array());
+          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].color`, ...l.color);
+          directionalLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uDirectionalLightCount", directionalLightCount);
+
+        let pointLightCount = 0;
+        for(let i=0; i<this.lights.point.length; i++){
+          const l = this.lights.point[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const position = l.position.copy();
+          viewMatrix.multV(position);
+          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].position`, ...position.array());
+          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].distance`, l.distance);
+          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].decay`, l.decay);
+          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].color`, ...l.color);
+          pointLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uPointLightCount", pointLightCount);
+
+        let spotLightCount = 0;
+        for(let i=0; i<this.lights.spot.length; i++){
+          const l = this.lights.spot[i];
+          if(l === null) continue;
+          if(!l.use) continue;
+          const direction = l.direction.copy();
+          const position = l.position.copy();
+          viewMatrix.multN(direction);
+          viewMatrix.multV(position);
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].direction`, ...direction.array());
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].position`, ...position.array());
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].distance`, l.distance);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].decay`, l.decay);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].coneCos`, l.coneCos);
+          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].penumbraCos`, l.penumbraCos);
+          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].color`, ...l.color);
+          spotLightCount++;
+        }
+        uniformX(gl, pg, "1i", "uSpotLightCount", spotLightCount);
+
+        uniformX(gl, pg, "1i", "uNoLight", !this.useLight);
+        uniformX(gl, pg, "3f", "uAmbientColor", ...this.ambientLight);
+
+        uniformX(gl, pg, "1f", "uMetallic", this.pbrParams.metallic);
+        uniformX(gl, pg, "1f", "uRoughness", this.pbrParams.roughness);
+
+        return this;
+      }
+      static createDirectionalLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          direction = [0,0,1],
+          color = [0.5,0.5,0.5]
+        } = params;
+        l.use = use;
+        l.direction = Vecta.create(direction);
+        l.color = coulour3(color);
+        return l;
+      }
+      static createPointLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          position = [0,0,3],
+          distance = 20, decay = 1, color = [0.5,0.5,0.5]
+        } = params;
+        l.use = use;
+        l.position = Vecta.create(position);
+        l.distance = distance;
+        l.decay = decay;
+        l.color = coulour3(color);
+        return l;
+      }
+      static createSpotLight(params = {}){
+        const l = {};
+        const {
+          use = true,
+          direction = [0,0,1], position = [0,0,3],
+          distance = 10, decay = 1, coneCos = 0.5, penumbraCos = 1, color = [0.5,0.5,0.5]
+        } = params;
+        l.use = use;
+        l.direction = Vecta.create(direction);
+        l.position = Vecta.create(position);
+        l.distance = distance; // 忘れました。ごめんなさい。ほんとにごめんなさい。疲れてます。
+        l.decay = decay;
+        l.coneCos = coneCos;
+        l.penumbraCos = penumbraCos;
+        l.color = coulour3(color);
+        return l;
+      }
+      static createLight(type = "directional", params = {}){
+        switch(type){
+          case 'directional':
+            return this.createDirectionalLight(params);
+          case 'point':
+            return this.createPointLight(params);
+          case 'spot':
+            return this.createSpotLight(params);
+        }
+        return {};
+      }
+      static configLight(target, params = {}){
+        for(const [key, value] of Object.entries(params)){
+          // Vectaの場合、色の場合、それ以外。
+          if(target[key] instanceof Vecta){
+            target[key].set(value);
+          }else if(key === 'color'){
+            target[key] = coulour3(value);
+          }else{
+            target[key] = value;
+          }
+        }
+      }
+    }
+
     // 3D関連
     applications.CameraController = CameraController;
     applications.WeightedVertice = WeightedVertice;
@@ -11071,6 +12835,21 @@ available waveTables:
     applications.parseCmdToText = parseCmdToText;
     applications.getSVGContours = getSVGContours;
     applications.getTextContours = getTextContours;
+
+    // Shader & Render 関連
+    applications.ShaderPrototype = ShaderPrototype;
+    applications.PlaneShader = PlaneShader;
+    applications.StandardLightingShader = StandardLightingShader;
+    applications.PBRLightingShader = PBRLightingShader;
+
+    applications.RenderSystem = RenderSystem;
+    applications.Render2D = Render2D;
+    applications.NoLightShader = NoLightShader;
+    applications.Render3D = Render3D;
+    applications.NoLightRender3D = NoLightRender3D;
+    applications.LightRender3D = LightRender3D;
+    applications.StandardLightRender3D = StandardLightRender3D;
+    applications.PBRLightRender3D = PBRLightRender3D;
 
     // context2D関連
 
