@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.2.3
+ * @version 1.3.0
  */
 
 (function (global, factory) {
@@ -1093,256 +1093,6 @@
     utils.createCanvas = createCanvas;
     utils.createOffscreen = createOffscreen;
     utils.SketchLooper = SketchLooper;
-
-    return utils;
-  })();
-
-  const webglUtils = (function(){
-    const utils = {};
-
-    // 生成に失敗したら文字列が返って原因が分かるようにする
-    function createShaderProgram(gl, params = {}){
-      // glがレンダリングコンテキストかどうか調べる。
-      if(!(gl instanceof WebGL2RenderingContext)){
-        const errorMessage = `コンテキストの指定が不正です\nWebGL2RenderingContextを指定してください`;
-        console.error(errorMessage);
-        return errorMessage;
-      }
-
-      // nameを付けることでどのshaderがやばいか識別するとかできると良いかと
-      const {vs, fs, name = "", layout = {}, outVaryings = [], separate = true} = params;
-
-      // vsとfsが文字列かどうか調べる
-      if(typeof vs !== 'string' || typeof fs !== 'string'){
-        const errorMessage = `${name}:シェーダーソースの指定が不正です\n文字列を指定してください`;
-        console.error(errorMessage);
-        return errorMessage;
-      }
-
-      const vsShader = gl.createShader(gl.VERTEX_SHADER);
-      gl.shaderSource(vsShader, vs);
-      gl.compileShader(vsShader);
-
-      if(!gl.getShaderParameter(vsShader, gl.COMPILE_STATUS)){
-        console.log(`${name}:vertex shaderの作成に失敗しました`);
-        const infoLog = gl.getShaderInfoLog(vsShader);
-        console.error(infoLog);
-        return infoLog;
-      }
-
-      const fsShader = gl.createShader(gl.FRAGMENT_SHADER);
-      gl.shaderSource(fsShader, fs);
-      gl.compileShader(fsShader);
-
-      if(!gl.getShaderParameter(fsShader, gl.COMPILE_STATUS)){
-        console.log(`${name}:fragment shaderの作成に失敗しました。`);
-        const infoLog = gl.getShaderInfoLog(fsShader);
-        console.error(infoLog);
-        return infoLog;
-      }
-
-      const program = gl.createProgram();
-
-      gl.attachShader(program, vsShader);
-      gl.attachShader(program, fsShader);
-
-      // レイアウト指定はアタッチしてからリンクするまでにやらないと機能しない。
-      // なおこの機能はwebgl1でも使うことができる。webgl2で実装されたというのは誤解。
-      setAttributeLayout(gl, program, layout);
-
-      setOutVaryings(gl, program, outVaryings, separate);
-
-      gl.linkProgram(program);
-
-      if(!gl.getProgramParameter(program, gl.LINK_STATUS)){
-        console.log(`${name}:programのlinkに失敗しました。`);
-        const infoLog = gl.getProgramInfoLog(program);
-        console.error(infoLog);
-        return infoLog;
-      }
-
-      // uniform情報を作成時に登録してしまおう
-      program.uniforms = getActiveUniforms(gl, program);
-      // attribute情報も登録してしまおう。
-      program.attributes = getActiveAttributes(gl, program);
-
-      console.log(`${name} program created successfully.`);
-
-      return program;
-    }
-
-    // レイアウトの指定。各attributeを配列のどれで使うか決める。
-    // 指定しない場合はデフォルト値が使われる。基本的には通しで0,1,2,...と付く。
-    function setAttributeLayout(gl, pg, layout = {}){
-      const names = Object.keys(layout);
-      if(names.length === 0) return;
-
-      for(const name of names){
-        const index = layout[name];
-        gl.bindAttribLocation(pg, index, name);
-      }
-    }
-
-    // TFF用の設定箇所
-    function setOutVaryings(gl, pg, outVaryings = [], separate = true){
-      if(outVaryings.length === 0) return;
-      gl.transformFeedbackVaryings(pg, outVaryings, (separate ? gl.SEPARATE_ATTRIBS : gl.INTERLEAVED_ATTRIBS));
-    }
-
-    function getActiveUniforms(gl, pg){
-      const uniforms = {};
-
-      // active uniformの個数を取得。
-      const numActiveUniforms = gl.getProgramParameter(pg, gl.ACTIVE_UNIFORMS);
-      console.log(`active uniformの個数は${numActiveUniforms}個です`);
-
-      for(let i=0; i<numActiveUniforms; i++){
-        const uniform = gl.getActiveUniform(pg, i);
-        const location = gl.getUniformLocation(pg, uniform.name);
-
-        uniform.location = location;
-        uniforms[uniform.name] = uniform;
-      }
-      return uniforms;
-    }
-
-    function getActiveAttributes(gl, pg){
-      const attributes = {};
-
-      // active attributeの個数を取得。
-      const numActiveAttributes = gl.getProgramParameter(pg, gl.ACTIVE_ATTRIBUTES);
-      console.log(`active attributeの個数は${numActiveAttributes}個です`);
-
-      for(let i=0; i<numActiveAttributes; i++){
-        // 取得は難しくない。uniformと似てる。
-        const attribute = gl.getActiveAttrib(pg, i);
-        const location = gl.getAttribLocation(pg, attribute.name);
-        console.log(`${attribute.name}のlocationは${location}です`);
-
-        attribute.location = location;
-        attributes[attribute.name] = attribute;
-      }
-
-      return attributes;
-    }
-
-    function uniformX(gl, pg, type, name){
-      const {uniforms} = pg;
-
-      // 存在しない場合はスルー
-      if(uniforms[name] === undefined) return;
-
-      // 存在するならlocationを取得
-      const location = uniforms[name].location;
-
-      // nameのあとに引数を並べる。そのまま放り込む。
-      const args = [...arguments].slice(4);
-      switch(type){
-        case "1f": gl.uniform1f(location, ...args); break;
-        case "2f": gl.uniform2f(location, ...args); break;
-        case "3f": gl.uniform3f(location, ...args); break;
-        case "4f": gl.uniform4f(location, ...args); break;
-        case "1fv": gl.uniform1fv(location, ...args); break;
-        case "2fv": gl.uniform2fv(location, ...args); break;
-        case "3fv": gl.uniform3fv(location, ...args); break;
-        case "4fv": gl.uniform4fv(location, ...args); break;
-        case "1i": gl.uniform1i(location, ...args); break;
-        case "2i": gl.uniform2i(location, ...args); break;
-        case "3i": gl.uniform3i(location, ...args); break;
-        case "4i": gl.uniform4i(location, ...args); break;
-        case "1iv": gl.uniform1iv(location, ...args); break;
-        case "2iv": gl.uniform2iv(location, ...args); break;
-        case "3iv": gl.uniform3iv(location, ...args); break;
-        case "4iv": gl.uniform4iv(location, ...args); break;
-      }
-      if(type === "matrix2fv"||type==="matrix3fv"||type==="matrix4fv"){
-        const v = args[0]; // 通常配列でいいならそうするかなぁ
-        // つまりわざわざFloat32にする処理をCPUでやるのかそれともGPUにお任せするのかということ
-        // どうでもいいか。やめちゃおう。おそらくバイト列だと駄目、その程度の意味だと思う。
-        //const v = (args[0] instanceof Float32Array ? args[0] : new Float32Array(args[0]));
-        switch(type){
-          case "matrix2fv": gl.uniformMatrix2fv(location, false, v); break;
-          case "matrix3fv": gl.uniformMatrix3fv(location, false, v); break;
-          case "matrix4fv": gl.uniformMatrix4fv(location, false, v); break;
-        }
-      }
-    }
-
-    // VAO関連
-
-    // countは頂点数。
-    // あとからinstanceとかはいじれるね。divisorとか。
-    function createVAO(gl, count = 1, attrs = {}, indices = {}){
-      const vao = gl.createVertexArray();
-      const bufs = {};
-
-      gl.bindVertexArray(vao);
-      for(const [name, params] of Object.entries(attrs)){
-        bufs[name] = registArrayBuffer(gl, params);
-      }
-      for(const [name, params] of Object.entries(indices)){
-        bufs[name] = registIndexBuffer(gl, count, params);
-      }
-      gl.bindVertexArray(null);
-
-      vao.bufs = bufs;
-      return vao;
-    }
-
-    // 基本はdataとlocationだけでいいです。
-    // usage: 基本STATIC_DRAWですね。
-    // arrayType: 基本Float32Arrayですね。
-    // size: vやnなら3ですが、2や4の場合もあるでしょう。uvやcです。
-    // type: 基本FLOATですね。変わり種を使う場合はUNSIGNED_INTとかにするかも。cとか。
-    // normalize, stride, offset: インターリーブで異なる型を使う場合に必要になるかも。
-    // arrayOutput: 基本false. これをtrueにすると、生成した型付配列を外部で使えるようになる。動的更新などに使う。
-    function registArrayBuffer(gl, params = {}){
-      const {
-        data, location, usage = gl.STATIC_DRAW, arrayType = Float32Array,
-        size = 3, type = gl.FLOAT, normalize = false, stride = 0, offset = 0,
-        arrayOutput = false
-      } = params;
-
-      const buf = gl.createBuffer();
-      const src = new arrayType(data);
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, src, usage);
-      gl.vertexAttribPointer(location, 3, type, normalize, 0, 0);
-      gl.enableVertexAttribArray(location);
-      gl.bindBuffer(gl.ARRAY_BUFFER, null); // こっちでヌルバすればいい
-
-      // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。
-      if(arrayOutput){ buf.src = src; }
-
-      return buf;
-    }
-
-    // 基本はdataだけでいいですね。
-    // usage: 基本STATIC_DRAWですね。いじらないですね。
-    // arrayOutput: trueの場合、作った型付配列にアクセスできる。
-    function registIndexBuffer(gl, count = 1, params = {}){
-      const {
-        data, usage = gl.STATIC_DRAW,
-        arrayOutput = false
-      } = params;
-      const buf = gl.createBuffer();
-      const src = (count <= 65536 ? new Uint16Array(data) : new Uint32Array(data));
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, src, usage);
-      buf.length = data.length;
-      buf.type = (count <= 65536 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT);
-
-      // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。
-      if(arrayOutput){ buf.src = src; }
-
-      return buf;
-    }
-
-    utils.createShaderProgram = createShaderProgram;
-    utils.uniformX = uniformX; // projectXみたいでなんかいいね（馬鹿）
-    utils.createVAO = createVAO;
-    utils.registArrayBuffer = registArrayBuffer;
-    utils.registIndexBuffer = registIndexBuffer;
 
     return utils;
   })();
@@ -2708,7 +2458,7 @@
       const t1 = t0.replaceAll(/(?<=\/\*).*?(?=\*\/)/g, "");
       // 無意味な改行を追加し、行コメント記号から改行エスケープまでの部分を排除する。
       const t2 = t1.concat("\\n").replaceAll(/(?<=\/\/).*?(?=\\n)/g, "");
-      // セミコロンを改行にする。あとで変換しないとコメント内の;が引っかかる罠（怖い）
+      // セミコロンを改行にする。コメントアウトのあとで変換しないとコメント内の;が引っかかる罠（怖い）
       const t3 = t2.replaceAll(";", "\\n");
       // コメント記号の残骸と半角スペースを削除
       const t4 = t3.replaceAll(/\/\*\*\//g,"").replaceAll(/\/\//g,"").replaceAll(" ", "");
@@ -7233,10 +6983,11 @@ available waveTables:
     // 4次正方行列。必要最低限の内容。
     class MT4{
       constructor(){
-        // 列挙のみ許す。ベクトルや四元数と揃える形。
+        // 列挙または配列。
         const args = [...arguments];
         this.m = new Float32Array(16);
-        if(args.length === 0){
+        // DataViewの場合は事故なので先に弾いておく
+        if(args.length === 0 || args[0] instanceof DataView){
           // 空っぽの場合
           for(let i=0; i<16; i++){
             this.m[i] = (i%5===0 ? 1 : 0); // 単位行列
@@ -7254,7 +7005,8 @@ available waveTables:
         }else{
           // 4x4の場合も含めて「その他」
           // args[0]が配列の場合はそれを採用する形。残りは0とする。
-          const data = (Array.isArray(args[0]) ? args[0] : args);
+          // これだと型付配列に対応できないのでArrayBuffer.isViewで判定する
+          const data = (Array.isArray(args[0]) || ArrayBuffer.isView(args[0]) ? args[0] : args);
           for(let i=0; i<16; i++){
             if(i<data.length){
               this.m[i] = data[i];
@@ -8107,10 +7859,11 @@ available waveTables:
 
     class MT3{
       constructor(){
-        // 列挙のみ許す。
+        // 列挙または配列。
         const args = [...arguments];
         this.m = new Float32Array(9);
-        if(args.length === 0){
+        // DataViewの場合は事故なので、ここで弾いておく。
+        if(args.length === 0 || args[0] instanceof DataView){
           // 空っぽの場合
           for(let i=0; i<9; i++){
             this.m[i] = (i%4===0 ? 1 : 0); // 単位行列
@@ -8127,9 +7880,13 @@ available waveTables:
           }
         }else{
           // 3x3の場合も含めて「その他」
+          // args[0]が配列の場合はそれを採用する形。残りは0とする。
+          // ああ型付配列はArray.isArrayだとだめか？
+          // isViewでいいや。DataViewの場合はそもそも作れないからな。
+          const data = (Array.isArray(args[0]) || ArrayBuffer.isView(args[0]) ? args[0] : args);
           for(let i=0; i<9; i++){
-            if(i<args.length){
-              this.m[i] = args[i];
+            if(i<data.length){
+              this.m[i] = data[i];
             }else{
               this.m[i] = 0;
             }
@@ -8367,6 +8124,1254 @@ available waveTables:
   })();
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
+
+  const webglUtils = (function(){
+    const utils = {};
+    const {Vecta, MT3, MT4, Quarternion} = fox3Dtools;
+
+    /*
+    // 生成に失敗したら文字列が返って原因が分かるようにする
+    function createShaderProgram(gl, params = {}){
+      // glがレンダリングコンテキストかどうか調べる。
+      if(!(gl instanceof WebGL2RenderingContext)){
+        const errorMessage = `コンテキストの指定が不正です\nWebGL2RenderingContextを指定してください`;
+        console.error(errorMessage);
+        return errorMessage;
+      }
+
+      // nameを付けることでどのshaderがやばいか識別するとかできると良いかと
+      const {
+        vs, fs, name = "default", layout = {},
+        outVaryings = [], separate = true,
+        showUniforms = false, showAttributes = false
+      } = params;
+
+      // vsとfsが文字列かどうか調べる
+      if(typeof vs !== 'string' || typeof fs !== 'string'){
+        const errorMessage = `${name}:シェーダーソースの指定が不正です\n文字列を指定してください`;
+        console.error(errorMessage);
+        return errorMessage;
+      }
+
+      const vsShader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vsShader, vs);
+      gl.compileShader(vsShader);
+
+      if(!gl.getShaderParameter(vsShader, gl.COMPILE_STATUS)){
+        console.log(`${name}:vertex shaderの作成に失敗しました`);
+        const infoLog = gl.getShaderInfoLog(vsShader);
+        console.error(infoLog);
+        return infoLog;
+      }
+
+      const fsShader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fsShader, fs);
+      gl.compileShader(fsShader);
+
+      if(!gl.getShaderParameter(fsShader, gl.COMPILE_STATUS)){
+        console.log(`${name}:fragment shaderの作成に失敗しました。`);
+        const infoLog = gl.getShaderInfoLog(fsShader);
+        console.error(infoLog);
+        return infoLog;
+      }
+
+      const program = gl.createProgram();
+
+      gl.attachShader(program, vsShader);
+      gl.attachShader(program, fsShader);
+
+      // レイアウト指定はアタッチしてからリンクするまでにやらないと機能しない。
+      // なおこの機能はwebgl1でも使うことができる。webgl2で実装されたというのは誤解。
+      setAttributeLayout(gl, program, layout);
+
+      setOutVaryings(gl, program, outVaryings, separate);
+
+      gl.linkProgram(program);
+
+      if(!gl.getProgramParameter(program, gl.LINK_STATUS)){
+        console.log(`${name}:programのlinkに失敗しました。`);
+        const infoLog = gl.getProgramInfoLog(program);
+        console.error(infoLog);
+        return infoLog;
+      }
+
+      // uniform情報を作成時に登録してしまおう
+      program.uniforms = getActiveUniforms(gl, program);
+      // attribute情報も登録してしまおう。
+      program.attributes = getActiveAttributes(gl, program);
+      // 名前を付けよう
+      program.name = name;
+
+      console.log(`${name} program created successfully.`);
+
+      return program;
+    }
+
+    // レイアウトの指定。各attributeを配列のどれで使うか決める。
+    // 指定しない場合はデフォルト値が使われる。基本的には通しで0,1,2,...と付く。
+    function setAttributeLayout(gl, pg, layout = {}){
+      const names = Object.keys(layout);
+      if(names.length === 0) return;
+
+      for(const name of names){
+        const index = layout[name];
+        gl.bindAttribLocation(pg, index, name);
+      }
+    }
+
+    // TFF用の設定箇所
+    function setOutVaryings(gl, pg, outVaryings = [], separate = true){
+      if(outVaryings.length === 0) return;
+      gl.transformFeedbackVaryings(pg, outVaryings, (separate ? gl.SEPARATE_ATTRIBS : gl.INTERLEAVED_ATTRIBS));
+    }
+
+    function getActiveUniforms(gl, pg){
+      const uniforms = {};
+
+      // active uniformの個数を取得。
+      const numActiveUniforms = gl.getProgramParameter(pg, gl.ACTIVE_UNIFORMS);
+      console.log(`active uniformの個数は${numActiveUniforms}個です`);
+
+      for(let i=0; i<numActiveUniforms; i++){
+        const uniform = gl.getActiveUniform(pg, i);
+
+        // これ以降の処理をglとpgに基づいてクラスの方でやることでコードをすっきりさせられる
+        const location = gl.getUniformLocation(pg, uniform.name);
+
+        uniform.location = location;
+        uniforms[uniform.name] = uniform;
+        // sizeとtypeは格納してある
+        const splittedName = uniform.name.split(".");
+        // 構造体かどうか
+        if(splittedName.length > 1){ uniform.isStruct = true; }else{ uniform.isStruct = false; }
+        const tail = splittedName.at(-1);
+        // 配列かどうか
+        if(tail.match(/[0]/) !== null){ uniform.isArray = true; }else{ uniform.isArray = false; }
+      }
+      return uniforms;
+    }
+
+    function getActiveAttributes(gl, pg){
+      const attributes = {};
+
+      // active attributeの個数を取得。
+      const numActiveAttributes = gl.getProgramParameter(pg, gl.ACTIVE_ATTRIBUTES);
+      console.log(`active attributeの個数は${numActiveAttributes}個です`);
+
+      for(let i=0; i<numActiveAttributes; i++){
+        // 取得は難しくない。uniformと似てる。
+        const attribute = gl.getActiveAttrib(pg, i);
+        const location = gl.getAttribLocation(pg, attribute.name);
+        console.log(`${attribute.name}のlocationは${location}です`);
+
+        attribute.location = location;
+        attributes[attribute.name] = attribute;
+      }
+
+      return attributes;
+    }
+
+    function uniformX(gl, pg, type, name){
+      const {uniforms} = pg;
+
+      // 存在しない場合はスルー
+      if(uniforms[name] === undefined) return;
+
+      // 存在するならlocationを取得
+      const location = uniforms[name].location;
+
+      // nameのあとに引数を並べる。そのまま放り込む。
+      const args = [...arguments].slice(4);
+      switch(type){
+        case "1f": gl.uniform1f(location, ...args); break;
+        case "2f": gl.uniform2f(location, ...args); break;
+        case "3f": gl.uniform3f(location, ...args); break;
+        case "4f": gl.uniform4f(location, ...args); break;
+        case "1fv": gl.uniform1fv(location, ...args); break;
+        case "2fv": gl.uniform2fv(location, ...args); break;
+        case "3fv": gl.uniform3fv(location, ...args); break;
+        case "4fv": gl.uniform4fv(location, ...args); break;
+        case "1i": gl.uniform1i(location, ...args); break;
+        case "2i": gl.uniform2i(location, ...args); break;
+        case "3i": gl.uniform3i(location, ...args); break;
+        case "4i": gl.uniform4i(location, ...args); break;
+        case "1iv": gl.uniform1iv(location, ...args); break;
+        case "2iv": gl.uniform2iv(location, ...args); break;
+        case "3iv": gl.uniform3iv(location, ...args); break;
+        case "4iv": gl.uniform4iv(location, ...args); break;
+      }
+      if(type === "matrix2fv"||type==="matrix3fv"||type==="matrix4fv"){
+        const v = args[0]; // 通常配列でいいならそうするかなぁ
+        // つまりわざわざFloat32にする処理をCPUでやるのかそれともGPUにお任せするのかということ
+        // どうでもいいか。やめちゃおう。おそらくバイト列だと駄目、その程度の意味だと思う。
+        //const v = (args[0] instanceof Float32Array ? args[0] : new Float32Array(args[0]));
+        switch(type){
+          case "matrix2fv": gl.uniformMatrix2fv(location, false, v); break;
+          case "matrix3fv": gl.uniformMatrix3fv(location, false, v); break;
+          case "matrix4fv": gl.uniformMatrix4fv(location, false, v); break;
+        }
+      }
+    }
+    */
+
+    class UniformWrapper{
+      constructor(gl, pg, uniform, location){
+        this.gl = gl;
+        this.pg = pg;
+        this.name = uniform.name;
+        // uniformBlock関連の場合locationがnullになるので、それを回避するために引数にlocationを追加しました。
+        this.location = location;
+        //this.location = gl.getUniformLocation(pg, this.name);
+        // typeはここでvec3とかmat2x4とかにする。
+        this.type = UniformWrapper.parseUniformType(gl, uniform.type);
+        // size. 1,2,3,4とか。samplerは1でいいっすね。matは2x3とかにする。つまり文字列。サイズ文字列。
+        // uniform.sizeははっきり言って使い道が無いので無視。typeはパース後の文字列を使う。当然ですが。
+        this.size = UniformWrapper.parseUniformSize(gl, this.type);
+        const splittedName = this.name.split(".");
+        const tail = splittedName.at(-1);
+        // 配列かどうか
+        this.isArray = (tail.match(/[0]/) !== null);
+        // 行列かどうか（行列はいずれにせよ配列を使うんで、バリデーションで失敗するのを防ぐ）
+        this.isMatrix = (this.type.match(/mat/) !== null);
+        // 関数登録
+        this.uniformFunction = UniformWrapper.getUniformFunction(gl, this.location, this.size, this.type, this.isArray);
+      }
+      setValue(value){
+        // 配列が来るんで、ばらすかどうか決める。
+        // 構造体の場合はObjectを指定するが、ここにObjectが来ることはない。
+        // なお行列の場合は配列「ではない」場合でも配列を用意するので、そこだけ注意する。サンプラはそもそも配列にできない。
+        if(this.isArray || this.isMatrix){
+          this.uniformFunction(value);
+        }else{
+          this.uniformFunction(...value);
+        }
+      }
+      show(){
+        const detail = `name:${this.name}, size:${this.size}, type:${this.type}, isArray:${this.isArray}, isMatrix:${this.isMatrix}`;
+        console.log(detail);
+        return detail;
+      }
+      getValue(index = 0){
+        // 値取得の関数があったはずなので一応用意しとく。
+        // 配列の場合、まとめて取得することはできない。ロケーションをあらかじめ用意しておくのは冗長なので、その場で取得する。
+        if(this.isArray){
+          const properName = this.name.replace(/(?<=.*)\[[0-9]{1}\](?=$)/, `[${index}]`);
+          const tmpLocation = this.gl.getUniformLocation(this.pg, properName);
+          return this.gl.getUniform(this.pg, tmpLocation);
+        }else{
+          return this.gl.getUniform(this.pg, this.location);
+        }
+        return null;
+      }
+      static create(gl, pg, uniform, location){
+        return new this(gl, pg, uniform, location);
+      }
+      static parseUniformType(gl, type){
+        switch(type){
+          case gl.FLOAT: return 'float1';
+          case gl.FLOAT_VEC2: return 'float2';
+          case gl.FLOAT_VEC3: return 'float3';
+          case gl.FLOAT_VEC4: return 'float4';
+          case gl.INT: return 'int1';
+          case gl.INT_VEC2: return 'int2';
+          case gl.INT_VEC3: return 'int3';
+          case gl.INT_VEC4: return 'int4';
+          case gl.UNSIGNED_INT: return 'uint1';
+          case gl.UNSIGNED_INT_VEC2: return 'uint2';
+          case gl.UNSIGNED_INT_VEC3: return 'uint3';
+          case gl.UNSIGNED_INT_VEC4: return 'uint4';
+          case gl.BOOL: return 'bool1';
+          case gl.BOOL_VEC2: return 'bool2';
+          case gl.BOOL_VEC3: return 'bool3';
+          case gl.BOOL_VEC4: return 'bool4';
+          case gl.SAMPLER_2D: return 'sampler2D';
+          case gl.SAMPLER_3D: return 'sampler3D';
+          case gl.SAMPLER_CUBE: return 'samplerCube';
+          case gl.SAMPLER_2D_ARRAY: return 'sampler2DArray';
+          case gl.FLOAT_MAT2: return 'mat2';
+          case gl.FLOAT_MAT3: return 'mat3';
+          case gl.FLOAT_MAT4: return 'mat4';
+          case gl.FLOAT_MAT2x3: return 'mat2x3';
+          case gl.FLOAT_MAT2x4: return 'mat2x4';
+          case gl.FLOAT_MAT3x2: return 'mat3x2';
+          case gl.FLOAT_MAT3x4: return 'mat3x4';
+          case gl.FLOAT_MAT4x2: return 'mat4x2';
+          case gl.FLOAT_MAT4x3: return 'mat4x3';
+        }
+        return 'null';
+      }
+      static parseUniformSize(gl, type){
+        // samplerは1で。
+        if(type.match(/sampler/) !== null){ return '1'; }
+        // matはそれ以降
+        if(type.match(/mat/) !== null){
+          return type.match(/(?<=mat).*/)[0];
+        }
+        // 他の場合は単純に数を取る
+        const numbers = type.match(/[0-9]{1}/);
+        if(numbers === null){ return null; }
+        return numbers[0];
+      }
+      static getUniformFunction(gl, location, size, type, isArray = false){
+        if(type.match(/float/) !== null){
+          if(!isArray){
+            switch(size){
+              case '1': return (v0) => { gl.uniform1f(location, v0); }
+              case '2': return (v0, v1) => { gl.uniform2f(location, v0, v1); }
+              case '3': return (v0, v1, v2) => { gl.uniform3f(location, v0, v1, v2); }
+              case '4': return (v0, v1, v2, v3) => { gl.uniform4f(location, v0, v1, v2, v3); }
+            }
+          }else{
+            switch(size){
+              case '1': return (data) => { gl.uniform1fv(location, data); }
+              case '2': return (data) => { gl.uniform2fv(location, data); }
+              case '3': return (data) => { gl.uniform3fv(location, data); }
+              case '4': return (data) => { gl.uniform4fv(location, data); }
+            }
+          }
+        }
+        if(type.match(/int/) !== null || type.match(/bool/) !== null){
+          if(!isArray){
+            switch(size){
+              case '1': return (i0) => { gl.uniform1i(location, i0); }
+              case '2': return (i0, i1) => { gl.uniform2i(location, i0, i1); }
+              case '3': return (i0, i1, i2) => { gl.uniform3i(location, i0, i1, i2); }
+              case '4': return (i0, i1, i2, i3) => { gl.uniform4i(location, i0, i1, i2, i3); }
+            }
+          }else{
+            switch(size){
+              case '1': return (data) => { gl.uniform1iv(location, data); }
+              case '2': return (data) => { gl.uniform2iv(location, data); }
+              case '3': return (data) => { gl.uniform3iv(location, data); }
+              case '4': return (data) => { gl.uniform4iv(location, data); }
+            }
+          }
+        }
+        if(type.match(/uint/) !== null){
+          if(!isArray){
+            switch(size){
+              case '1': return (ui0) => { gl.uniform1ui(location, ui0); }
+              case '2': return (ui0, ui1) => { gl.uniform2ui(location, ui0, ui1); }
+              case '3': return (ui0, ui1, ui2) => { gl.uniform3ui(location, ui0, ui1, ui2); }
+              case '4': return (ui0, ui1, ui2, ui3) => { gl.uniform4ui(location, ui0, ui1, ui2, ui3); }
+            }
+          }else{
+            switch(size){
+              case '1': return (data) => { gl.uniform1uiv(location, data); }
+              case '2': return (data) => { gl.uniform2uiv(location, data); }
+              case '3': return (data) => { gl.uniform3uiv(location, data); }
+              case '4': return (data) => { gl.uniform4uiv(location, data); }
+            }
+          }
+        }
+        if(type.match(/sampler/) !== null){
+          return (i0) => { gl.uniform1i(location, i0); }
+        }
+        if(type.match(/mat/) !== null){
+          switch(size){
+            case '2': return (data) => { gl.uniformMatrix2fv(location, false, data); }
+            case '3': return (data) => { gl.uniformMatrix3fv(location, false, data); }
+            case '4': return (data) => { gl.uniformMatrix4fv(location, false, data); }
+            case '2x3': return (data) => { gl.uniformMatrix2x3fv(location, false, data); }
+            case '2x4': return (data) => { gl.uniformMatrix2x4fv(location, false, data); }
+            case '3x2': return (data) => { gl.uniformMatrix3x2fv(location, false, data); }
+            case '3x4': return (data) => { gl.uniformMatrix3x4fv(location, false, data); }
+            case '4x2': return (data) => { gl.uniformMatrix4x2fv(location, false, data); }
+            case '4x3': return (data) => { gl.uniformMatrix4x3fv(location, false, data); }
+          }
+        }
+        return () => {};
+      }
+    }
+
+    class ProgramWrapper{
+      constructor(gl, params = {}){
+        this.gl = gl;
+        // nameを付けることでバグっているshaderを探しやすくする
+        const {
+          vs, fs, name = "default", layout = {},
+          outVaryings = [], separate = true, uboLayout = {}
+        } = params;
+        this.vs = vs;
+        this.fs = fs;
+        this.vsShader = null;
+        this.fsShader = null;
+        this.name = name;
+        this.layout = layout;
+        this.outVaryings = outVaryings;
+        this.separate = separate;
+        this.uboLayout = uboLayout;
+        this.uniforms = {}; // uniform
+        this.attributes = {}; // attribute
+        this.program = null;
+      }
+      compile(){
+        const {gl, vs, fs} = this;
+        const vsShader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vsShader, vs);
+        gl.compileShader(vsShader);
+
+        if(!gl.getShaderParameter(vsShader, gl.COMPILE_STATUS)){
+          console.log(`${name}:create vertex shader failed...`);
+          const infoLog = gl.getShaderInfoLog(vsShader);
+          console.error(infoLog);
+          return this;
+        }
+        this.vsShader = vsShader;
+
+        const fsShader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fsShader, fs);
+        gl.compileShader(fsShader);
+
+        if(!gl.getShaderParameter(fsShader, gl.COMPILE_STATUS)){
+          console.log(`${name}:create fragment shader failed...`);
+          const infoLog = gl.getShaderInfoLog(fsShader);
+          console.error(infoLog);
+          return this;
+        }
+        this.fsShader = fsShader;
+
+        return this;
+      }
+      attach(){
+        const {gl, vsShader, fsShader} = this;
+        const program = gl.createProgram();
+        gl.attachShader(program, vsShader);
+        gl.attachShader(program, fsShader);
+        this.program = program;
+        return this;
+      }
+      link(){
+        const {gl, program, layout, outVaryings, separate, uboLayout} = this;
+
+        // この辺の処理はアタッチしてからリンクするまでに実行する
+        ProgramWrapper.setAttributeLayout(gl, program, layout);
+        ProgramWrapper.setOutVaryings(gl, program, outVaryings, separate);
+
+        gl.linkProgram(this.program);
+
+        if(!gl.getProgramParameter(program, gl.LINK_STATUS)){
+          console.log(`${this.name}: link failed...`);
+          const infoLog = gl.getProgramInfoLog(program);
+          console.error(infoLog);
+          return this;
+        }
+        console.log(`${this.name} created successfully.`);
+
+        // この処理はリンク済みでなければ実行できない！知らんかったわ。
+        ProgramWrapper.setUBOLayout(gl, program, uboLayout);
+
+        return this;
+      }
+      registActiveUniforms(showInformation = false){
+        const {gl, program} = this;
+        this.uniforms = {};
+        // active uniformの個数を取得。
+        const numActiveUniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+        if(showInformation){
+          console.log(`active uniform count:${numActiveUniforms}`);
+        }
+        for(let i=0; i<numActiveUniforms; i++){
+          const u = gl.getActiveUniform(program, i);
+          const loc = gl.getUniformLocation(program, u.name);
+          // uniformBlock関連の場合ここはnullになるので、とばす。いずれUBOの仕様も作るが...
+          if(loc === null){ continue; }
+          // nullではないlocにより、UniformWrapperを構築する。まあnullじゃ何もできんからな。
+          const uniform = new UniformWrapper(gl, program, u, loc);
+          if(uniform.isArray){
+            // 末尾の[0]を取り除いてできる名前で登録
+            const properName = uniform.name.replace(/(?<=.*)\[[0-9]{1}\](?=$)/, ``);
+            this.uniforms[properName] = uniform;
+          }else{
+            this.uniforms[u.name] = uniform;
+          }
+          if(showInformation){ uniform.show(); }
+        }
+        return this;
+      }
+      registActiveAttributes(showInformation = false){
+        const {gl, program} = this;
+        this.attributes = {};
+        // active attributeの個数を取得。
+        const numActiveAttributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
+        if(showInformation){
+          console.log(`active attribute count:${numActiveAttributes}`);
+        }
+        for(let i=0; i<numActiveAttributes; i++){
+          // 取得は難しくない。uniformと似てる。なおiはただの通し番号で、ロケーションとか関係ない。
+          const attribute = gl.getActiveAttrib(program, i);
+          const location = gl.getAttribLocation(program, attribute.name);
+          const attrType = ProgramWrapper.parseAttributeType(gl, attribute.type);
+          const isInteger = ProgramWrapper.integerAttributeTypes.includes(attrType);
+          if(showInformation){
+            console.log(`name:${attribute.name}, location:${location}, type:${attrType}, isInteger:${isInteger}`);
+          }
+
+          this.attributes[name] = {name:attribute.name, location:location, type:attrType, isInteger:isInteger};
+        }
+        return this;
+      }
+      createProgram(params = {}){
+        // まとめてやる
+        const {showUniforms = false, showAttributes = false} = params;
+        this.compile();
+        this.attach();
+        this.link();
+        this.registActiveUniforms(showUniforms);
+        this.registActiveAttributes(showAttributes);
+        return this;
+      }
+      use(){
+        this.gl.useProgram(this.program);
+        return this;
+      }
+      clear(){
+        this.gl.useProgram(null);
+        return this;
+      }
+      setValue(name, value){
+        // ダイレクトにセットするための簡易関数
+        // 存在しない場合は何もしない。
+        if(this.uniforms[name] === undefined){ return this; }
+        this.uniforms[name].setValue(value);
+        return this;
+      }
+      setUniform(name){
+        const {gl, program} = this;
+        const args = [...arguments].slice(1);
+        const arg = args[0];
+        if(typeof(arg) === 'number' || typeof(arg) === 'boolean'){
+          return this.setValue(name, args);
+          //this.uniforms[name].setValue(args);
+          //return this;
+        }
+        if(arg instanceof Vecta || arg instanceof MT3 || arg instanceof MT4 || arg instanceof Quarternion){
+          const flattened = args.reduce((u, v) => { u.push(...v.array()); return u; }, []);
+          //this.uniforms[name].setValue(flattened);
+          //return this;
+          return this.setValue(name, flattened);
+        }
+        if(ArrayBuffer.isView(arg) && !(arg instanceof DataView)){
+          //this.uniforms[name].setValue(arg);
+          //return this;
+          return this.setValue(name, arg);
+        }
+        if(Array.isArray(arg)){
+          const x = arg[0];
+          if(typeof(x) === 'number' || typeof(x) === 'boolean'){
+            //this.uniforms[name].setValue(x);
+            //return this;
+            return this.setValue(name, arg);
+          }
+          if(x instanceof Vecta || x instanceof MT3 || x instanceof MT4 || x instanceof Quarternion){
+            const flattened = arg.reduce((u, v) => { u.push(...v.array()); return u; }, []);
+            //this.uniforms[name].setValue(flattened);
+            //return this;
+            this.setValue(name, flattened);
+          }
+          if(typeof(x) === 'object'){
+            for(let i=0; i<arg.length; i++){
+              for(const [key, value] of Object.entries(arg[i])){
+                this.setUniform(`${name}[${i}].${key}`, value);
+              }
+            }
+            return this;
+          }
+        }
+        if(typeof(arg) === 'object'){
+          for(const [key, value] of Object.entries(arg)){
+            this.setUniform(`${name}.${key}`, value);
+          }
+        }
+        return this;
+      }
+      getUniform(name, index = 0){
+        // 構造体の場合は末端まで全て指定します
+        return this.uniforms[name].getValue(index);
+      }
+      show(){
+        for(const uniform of Object.values(this.uniforms)){
+          uniform.show();
+        }
+        for(const attribute of Object.values(this.attributes)){
+          console.log(`name:${attribute.name}, location:${attribute.location}, type:${attribute.type}, isInteger:${attribute.isInteger}`);
+        }
+        return this;
+      }
+      static create(gl, params = {}){
+        return new this(gl, params);
+      }
+      static setAttributeLayout(gl, pg, layout = {}){
+        for(const [name, index] of Object.entries(layout)){
+          gl.bindAttribLocation(pg, index, name);
+        }
+      }
+      static setOutVaryings(gl, pg, outVaryings = [], separate = true){
+        if(outVaryings.length === 0) return;
+        gl.transformFeedbackVaryings(pg, outVaryings, (separate ? gl.SEPARATE_ATTRIBS : gl.INTERLEAVED_ATTRIBS));
+      }
+      static setUBOLayout(gl, pg, uboLayout = {}){
+        for(const [name, index] of Object.entries(uboLayout)){
+          const ubi = gl.getUniformBlockIndex(pg, name);
+          gl.uniformBlockBinding(pg, ubi, index);
+        }
+      }
+      static parseAttributeType(gl, type){
+        // プログラム内での名称
+        switch(type){
+          case gl.FLOAT: return 'float';
+          case gl.FLOAT_VEC2: return 'vec2';
+          case gl.FLOAT_VEC3: return 'vec3';
+          case gl.FLOAT_VEC4: return 'vec4';
+          case gl.INT: return 'int';
+          case gl.INT_VEC2: return 'ivec2';
+          case gl.INT_VEC3: return 'ivec3';
+          case gl.INT_VEC4: return 'ivec4';
+          case gl.UNSIGNED_INT: return 'uint';
+          case gl.UNSIGNED_INT_VEC2: return 'uvec2';
+          case gl.UNSIGNED_INT_VEC3: return 'uvec3';
+          case gl.UNSIGNED_INT_VEC4: return 'uvec4';
+          case gl.FLOAT_MAT2: return 'mat2';
+          case gl.FLOAT_MAT3: return 'mat3';
+          case gl.FLOAT_MAT4: return 'mat4';
+          case gl.FLOAT_MAT2x3: return 'mat2x3';
+          case gl.FLOAT_MAT2x4: return 'mat2x4';
+          case gl.FLOAT_MAT3x2: return 'mat3x2';
+          case gl.FLOAT_MAT3x4: return 'mat3x4';
+          case gl.FLOAT_MAT4x2: return 'mat4x2';
+          case gl.FLOAT_MAT4x3: return 'mat4x3';
+        }
+        return 'null';
+      }
+    }
+    ProgramWrapper.integerAttributeTypes = ['int', 'ivec2', 'ivec3', 'ivec4', 'uint', 'uvec2', 'uvec3', 'uvec4'];
+
+    // WBOのWrapper. 動的更新などをやりやすくする。
+    // VBOWrapperとIBOWrapperっていう風に分けた方がいいかもですね。そうですね...
+    // というのもregistIndexBufferでそういう風なことをしているので。面倒だろう。lengthとtypeはVBOには不要なので。
+    // 逆にIBOの方はstrideやoffsetと無縁なので、まとめて扱うのはやや難ありかな、という話。
+    // target2種類しかないんで、bindBufferBaseTFF/UBO作りましょう
+    // なおIBOはこれを使えません。残念。
+    class WBOWrapper{
+      constructor(gl){
+        this.gl = gl;
+        this.buf = gl.createBuffer();
+        this.target = null;
+      }
+      bind(target){
+        this.gl.bindBuffer(target, this.buf);
+        return this;
+      }
+      unbind(target){
+        this.gl.bindBuffer(target, null);
+        return this;
+      }
+      bindBufferBaseTFF(index){
+        this.gl.bindBufferBase(this.gl.TRANSFORM_FEEDBACK_BUFFER, index, this.buf);
+        return this;
+      }
+      unbindBufferBaseTFF(index){
+        this.gl.bindBufferBase(this.gl.TRANSFORM_FEEDBACK_BUFFER, index, null);
+        return this;
+      }
+      bindBufferBaseUBO(index){
+        this.gl.bindBufferBase(this.gl.UNIFORM_BUFFER, index, this.buf);
+        return this;
+      }
+      unbindBufferBaseUBO(index){
+        this.gl.bindBufferBase(this.gl.UNIFORM_BUFFER, index, null);
+        return this;
+      }
+      init(target, data = null, options = {}){
+        // bufferDataを実行する。
+        const {gl, buf} = this;
+        const {offset = -1, size = -1, usage = gl.STATIC_DRAW, arrayType = Float32Array} = options;
+        if(data === null){ return this; }
+
+        gl.bindBuffer(target, buf);
+
+        if(typeof(data) === 'number'){
+          gl.bufferData(target, data, usage);
+        }else{
+          // 通常配列の場合はarrayTypeに基づいて生成する
+          const properData = WBOWrapper.getProperData(data, arrayType);
+          if(properData === null){
+            gl.bindBuffer(target, null);
+            return this;
+          }
+          if(offset < 0){
+            gl.bufferData(target, properData, usage);
+          }else if(size < 0){
+            gl.bufferData(target, properData, usage, offset);
+          }else{
+            gl.bufferData(target, properData, usage, offset, size);
+          }
+        }
+        gl.bindBuffer(target, null);
+        return this;
+      }
+      update(target, data = null, options = {}){
+        // bufferSubDataを実行する。
+        const {gl, buf} = this;
+        // sizeはdataの方の範囲指定ですね。indexか、もしくはバイト単位。DataViewでなければindexですね。
+        const {offset = {}, size = -1, arrayType = Float32Array} = options;
+        const {cpu = 0, gpu = 0} = offset;
+        if(data === null){ return this; }
+
+        gl.bindBuffer(target, buf);
+        const properData = WBOWrapper.getProperData(data, arrayType);
+        if(properData === null){
+          gl.bindBuffer(target, null);
+          return this;
+        }
+        if(size < 0){
+          gl.bufferSubData(target, gpu, properData, cpu);
+        }else{
+          gl.bufferSubData(target, gpu, properData, cpu, size);
+        }
+        gl.bindBuffer(target, null);
+        return this;
+      }
+      output(target, data = null, options = {}){
+        // getBufferSubDataを実行する。
+        const {gl, buf} = this;
+        // sizeはdataの方の範囲指定で、どのくらいの長さをデータで置き換えるかっていう、それの指定。
+        const {offset = {}, size = -1, arrayType = Float32Array} = options;
+        const {cpu = 0, gpu = 0} = offset;
+        if(data === null){ return this; }
+
+        gl.bindBuffer(target, buf);
+        const properData = WBOWrapper.getProperData(data, arrayType);
+        if(properData === null){
+          gl.bindBuffer(target, null);
+          return this;
+        }
+        if(size < 0){
+          gl.getBufferSubData(target, gpu, properData, cpu);
+        }else{
+          gl.getBufferSubData(target, gpu, properData, cpu, size);
+        }
+        gl.bindBuffer(target, null);
+        return this;
+      }
+      show(target, options = {}){
+        // getBufferSubDataにより中身を確認する。
+        const {gl, buf} = this;
+        // arrayTypeオンリーなのでsizeも配列の長さオンリーとする。バイト長はarrayTypeから出す。
+        // offsetはgpuサイドのバイト長に限定します。だってcpuサイドは0固定だからね。
+        const {arrayType = Float32Array, byteOffset = 0, size = -1} = options;
+        gl.bindBuffer(target, buf);
+
+        const bytesPerElement = arrayType.BYTES_PER_ELEMENT;
+        const properSize = (size < 0 ? gl.getBufferParameter(target, gl.BUFFER_SIZE) / bytesPerElement : size);
+        const data = new arrayType(properSize);
+
+        if(size < 0){
+          gl.getBufferSubData(target, byteOffset, data, 0);
+        }else{
+          gl.getBufferSubData(target, byteOffset, data, 0, properSize);
+        }
+
+        gl.bindBuffer(target, null);
+        let result = "";
+        for(let i=0; i<data.length; i++){
+          result += data[i].toString();
+          if(i < data.length-1){ result += ", "; }
+        }
+        console.log(result);
+        return data;
+      }
+      static getProperData(data, arrayType = Float32Array){
+        // dataがDataViewもしくは型付配列の場合、arrayTypeは無視され、そのままdataが返る
+        if(ArrayBuffer.isView(data)){ return data; }
+        // 通常配列の場合はarrayTypeに応じた型付配列が返る
+        if(Array.isArray(data)){ return new arrayType(data); }
+        // まあなんか返すか
+        return new Uint8Array(1);
+      }
+      static create(gl, target = null, data = null, options = {}){
+        const wbo = new this(gl);
+        if(target === null){
+          return wbo;
+        }
+        wbo.init(target, data, options);
+        return wbo;
+      }
+    }
+
+    // init～showの個別定義は廃止
+    class VBOWrapper extends WBOWrapper{
+      constructor(gl){
+        super(gl);
+        this.target = gl.ARRAY_BUFFER;
+      }
+      bind(){
+        super.bind(this.target);
+        return this;
+      }
+      unbind(){
+        super.unbind(this.target);
+        return this;
+      }
+      init(data, options = {}){ super.init(this.target, data, options); return this; }
+      update(data, options = {}){ super.update(this.target, data, options); return this; }
+      output(data, options = {}){ super.output(this.target, data, options); return this; }
+      show(options = {}){ return super.show(this.target, options); }
+      static create(gl, data = null, options = {}){
+        // 作成と同時に初期化できるようにする
+        const vbo = new this(gl);
+        if(data === null){
+          return vbo;
+        }
+        vbo.init(data, options);
+        return vbo;
+        //return new this(gl);
+      }
+    }
+
+    // init～showの個別定義は廃止
+    class IBOWrapper extends WBOWrapper{
+      constructor(gl){
+        super(gl);
+        this.target = gl.ELEMENT_ARRAY_BUFFER;
+        this.length = 0;
+        this.type = gl.UNSIGNED_SHORT;
+      }
+      setParam(data = [], count = 0){
+        // dataは配列、もしくは配列の長さ
+        this.length = (typeof(data) === 'number' ? data : data.length);
+        this.type = (count <= 65536 ? this.gl.UNSIGNED_SHORT : this.gl.UNSIGNED_INT);
+        return this;
+      }
+      bind(){
+        super.bind(this.target);
+        return this;
+      }
+      unbind(){
+        super.unbind(this.target);
+        return this;
+      }
+      init(data, options = {}){ super.init(this.target, data, options); return this; }
+      update(data, options = {}){ super.update(this.target, data, options); return this; }
+      output(data, options = {}){ super.output(this.target, data, options); return this; }
+      show(options = {}){ return super.show(this.target, options); }
+      static create(gl, data = null, options = {}){
+        // 作成と同時に初期化できるようにする
+        const ibo = new this(gl);
+        if(data === null){
+          return ibo;
+        }
+        ibo.init(data, options);
+        return ibo;
+      }
+    }
+
+    // とりあえずこれだけ特別扱いでbindBufferBaseとunbindBufferBaseを用意しておきます
+    // まあUBOだけね
+    // TFFBOWrapperは作りません。おそらく使う機会が無いです。
+    class UBOWrapper extends WBOWrapper{
+      constructor(gl){
+        super(gl);
+        this.target = gl.UNIFORM_BUFFER;
+      }
+      bind(){
+        super.bind(this.target);
+        return this;
+      }
+      unbind(){
+        super.unbind(this.target);
+        return this;
+      }
+      bindBufferBase(index){ super.bindBufferBaseUBO(index); return this; }
+      unbindBufferBase(index){ super.unbindBufferBaseUBO(index); return this; }
+      init(data, options = {}){ super.init(this.target, data, options); return this; }
+      update(data, options = {}){ super.update(this.target, data, options); return this; }
+      output(data, options = {}){ super.output(this.target, data, options); return this; }
+      show(options = {}){ return super.show(this.target, options); }
+      static create(gl, data = null, options = {}){
+        // 作成と同時に初期化できるようにする
+        const ubo = new this(gl);
+        if(data === null){
+          return ubo;
+        }
+        ubo.init(data, options);
+        return ubo;
+      }
+    }
+
+    // VAO関連
+    // VAOのWrapperを作ろう。その関数としてcreateVAOを移植すればいい。
+    // vaoにあんまあれこれくっつけるくらいならその方がいいでしょ。
+    // registVBOとregistIBOはこれのstaticとする。createも追加しよう。
+    // そしてジオメトリはこれを出力するのだ。
+    // modifyは面倒なのでやめて、個別にbind～unbindしよう。
+    // initVBO/initIBOは無ければ作る仕様に変更
+    // インターリーブに対応するための仕様変更
+    // getVBO/getIBO
+    // VAOを作る場合、こっちサイドでvboやiboを作るんで、たとえばTFOとかと絡めたい場合、
+    // こっちからvboを抽出する必要があるんで、それをね。無い場合はnullを返す。
+    class VAOWrapper{
+      constructor(gl, params = {}){
+        this.gl = gl;
+        this.vao = gl.createVertexArray();
+        this.vbos = {};
+        this.ibos = {};
+        const {count = 1, vbo = {}, ibo = {}, layout = {}} = params;
+
+        this.bind();
+        // VBOの準備
+        for(const [key, value] of Object.entries(vbo)){
+          this.initVBO(key, value);
+        }
+        // IBOの準備
+        for(const [key, value] of Object.entries(ibo)){
+          this.initIBO(key, count, value);
+          // IBOは最後に作ったものが暫定的に採用される
+          this.setIBO(key);
+        }
+        // VBOを使ってレイアウトを作る
+        for(const [key, value] of Object.entries(layout)){
+          if(Array.isArray(value)){
+            for(const eachValue of value){ this.registVBO(key, eachValue); }
+          }else if(typeof(value) === 'object'){
+            this.registVBO(key, value);
+          }
+        }
+        this.unbind();
+      }
+      bind(){
+        this.gl.bindVertexArray(this.vao);
+        return this;
+      }
+      unbind(){
+        this.gl.bindVertexArray(null);
+        return this;
+      }
+      getVBO(name){ if(this.vbos[name] === undefined){ return null; } return this.vbos[name]; }
+      getIBO(name){ if(this.ibos[name] === undefined){ return null; } return this.ibos[name]; }
+      initVBO(name, params = {}){
+        // 無ければ作る
+        if(this.vbos[name] === undefined){
+          this.vbos[name] = new VBOWrapper(this.gl);
+        }
+        const vbo = this.vbos[name];
+        const {
+          data = null, usage = this.gl.STATIC_DRAW, arrayType = Float32Array
+        } = params;
+
+        vbo.init(data, {usage, arrayType});
+
+        return this;
+      }
+      registVBO(name, params = {}, modify = false){
+        // modifyがtrueの場合にサンドイッチする。constructorでは初期化の都合上、falseで運用する。
+        if(this.vbos[name] === undefined) return this;
+        const vbo = this.vbos[name];
+        const {
+          location = 0, size = 3, type = this.gl.FLOAT, normalize = false, stride = 0, offset = 0,
+          isInteger = false, divisor = 0
+        } = params;
+
+        if(modify){ this.bind(); }
+        vbo.bind();
+        // isIntegerをtrueにすると整数で登録できる
+        if(!isInteger){
+          this.gl.vertexAttribPointer(location, size, type, normalize, stride, offset);
+        }else{
+          this.gl.vertexAttribIPointer(location, size, type, stride, offset);
+        }
+        vbo.unbind();
+        this.gl.enableVertexAttribArray(location);
+        this.gl.vertexAttribDivisor(location, divisor);
+        if(modify){ this.unbind(); }
+
+        return this;
+      }
+      initIBO(name, count, params = {}){
+        // 無ければ作る
+        if(this.ibos[name] === undefined){
+          this.ibos[name] = new IBOWrapper(this.gl);
+        }
+        const ibo = this.ibos[name];
+        const {
+          data = null, usage = this.gl.STATIC_DRAW
+        } = params;
+
+        const arrayType = (count <= 65536 ? Uint16Array : Uint32Array);
+        if(typeof(data) === 'number'){
+          // dataが配列の長さの場合
+          ibo.init(data*arrayType.BYTES_PER_ELEMENT, {usage, arrayType});
+        }else{
+          // dataが配列の場合
+          ibo.init(data, {usage, arrayType});
+        }
+        ibo.setParam(data, count);
+
+        return this;
+      }
+      setIBO(name, modify = false){
+        // modifyがtrueの場合にサンドイッチする。これはvaoのバインド中に呼び出すことが多いので、そのようにする。
+        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        if(modify){ this.bind(); }
+        this.ibos[name].bind();
+        if(modify){ this.unbind(); }
+        return this;
+      }
+      enable(location = 0){
+        this.bind();
+        this.gl.enableVertexAttribArray(location);
+        this.unbind();
+        return this;
+      }
+      disable(location = 0){
+        this.bind();
+        this.gl.disableVertexAttribArray(location);
+        this.unbind();
+        return this;
+      }
+      divisor(location = 0, divisor = 1){
+        this.bind();
+        this.gl.vertexAttribDivisor(location, divisor);
+        this.unbind();
+        return this;
+      }
+      pointer(name, params = {}){
+        if(this.vbos[name] === undefined){ console.log('not found'); return this; }
+        const vbo = this.vbos[name];
+        const {
+          location = 0, size = 3, type = this.gl.FLOAT, normalize = false, stride = 0, offset = 0,
+          isInteger = false
+        } = params;
+
+        this.bind();
+        vbo.bind();
+        // isIntegerをtrueにすると整数で登録できる
+        if(!isInteger){
+          gl.vertexAttribPointer(location, size, type, normalize, stride, offset);
+        }else{
+          gl.vertexAttribIPointer(location, size, type, stride, offset);
+        }
+        vbo.unbind();
+        this.unbind();
+
+        return this;
+      }
+      updateVBO(name, data, options = {}){
+        if(this.vbos[name] === undefined){ console.log('not found'); return this; }
+        this.vbos[name].update(data, options);
+        return this;
+      }
+      updateIBO(name, data, options = {}){
+        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        this.ibos[name].update(data, options);
+        return this;
+      }
+      outputVBO(name, data, options = {}){
+        if(this.vbos[name] === undefined){ console.log('not found'); return this; }
+        this.vbos[name].output(data, options);
+        return this;
+      }
+      outputIBO(name, data, options = {}){
+        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        this.ibos[name].output(data, options);
+        return this;
+      }
+      showVBO(name, options = {}){
+        if(this.vbos[name] === undefined){ console.log('not found'); return null; }
+        return this.vbos[name].show(options);
+      }
+      showIBO(name, options = {}){
+        if(this.ibos[name] === undefined){ console.log('not found'); return null; }
+        return this.ibos[name].show(options);
+      }
+      drawElements(name, drawCall = 'triangles', options = {}){
+        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        const ibo = this.ibos[name];
+        const {count = 0, offset = 0, size = ibo.length, type = ibo.type} = options;
+        const properDrawCall = VAOWrapper.parseDrawCall(this.gl, drawCall);
+        if(count === 0){
+          this.gl.drawElements(properDrawCall, size, type, offset);
+        }else{
+          this.gl.drawElementsInstanced(properDrawCall, size, type, offset, count);
+        }
+        return this;
+      }
+      static create(){
+        return new this(...arguments);
+      }
+      static parseDrawCall(gl, drawCall = 'triangles'){
+        switch(drawCall){
+          case 'points': return gl.POINTS;
+          case 'lines': return gl.LINES;
+          case 'triangles': return gl.TRIANGLES;
+          case 'triangle_strip': return gl.TRIANGLE_STRIP;
+          case 'triangle_fan': return gl.TRIANGLE_FAN;
+          case 'line_loop': return gl.LINE_LOOP;
+          case 'line_strip': return gl.LINE_STRIP;
+        }
+        // fail safe
+        return gl.TRIANGLES;
+      }
+    }
+/*
+    // countは頂点数。
+    // あとからinstanceとかはいじれるね。divisorとか。
+    // ちょっとしたことなんだけど、bind/unbindが面倒なので、vaoに組み込んでしまおう。
+    // いちいちgl.bindV.....面倒なんだよ。
+    function createVAO(gl, count = 1, attrs = {}, indices = {}){
+      const vao = gl.createVertexArray();
+      // vboとiboに分けよう。
+      const vbos = {};
+      const ibos = {};
+
+      gl.bindVertexArray(vao);
+      for(const [name, params] of Object.entries(attrs)){
+        vbos[name] = registVBO(gl, params);
+      }
+      for(const [name, params] of Object.entries(indices)){
+        ibos[name] = registIBO(gl, count, params);
+      }
+      gl.bindVertexArray(null);
+
+      vao.vbos = vbos;
+      vao.ibos = ibos;
+      // 動的更新用
+      // vao.update = (name, target, data = null, options = {}) => { ~~~ }
+      // indexBufferを設定する関数
+      vao.setIndexBuffer = (name) => {
+        if(vao.ibos[name] === undefined) return;
+        registIBO(gl, count, {buf:vao.ibos[name]});
+      }
+      // bind/unbind.
+      vao.bind = () => { gl.bindVertexArray(vao); }
+      vao.unbind = () => { gl.bindVertexArray(null); }
+      return vao;
+    }
+
+    // 基本はdataとlocationだけでいいです。
+    // buf:nullの場合は新しく用意される。そうでなければこれが使われる。
+    // data:nullの場合は用意されない。bufferDataも実行されない。
+    // location:デフォルトは0.
+    // usage: 基本STATIC_DRAWですね。
+    // arrayType: 基本Float32Arrayですね。
+    // size: vやnなら3ですが、2や4の場合もあるでしょう。uvやcです。
+    // type: 基本FLOATですね。変わり種を使う場合はUNSIGNED_INTとかにするかも。cとか。
+    // normalize, stride, offset: インターリーブで異なる型を使う場合に必要になるかも。
+    // divisor:0がデフォなので0を設定しても問題ない。1以上を指定するとインスタンシングになる。
+    function registVBO(gl, params = {}){
+      const {
+        buf = null,
+        data = null, usage = gl.STATIC_DRAW, arrayType = Float32Array,
+        location = 0, size = 3, type = gl.FLOAT, normalize = false, stride = 0, offset = 0, divisor = 0
+      } = params;
+
+      //const arrayBuffer = (buf === null ? gl.createBuffer() : buf);
+      const vbo = (buf === null ? new VBOWrapper(gl) : buf);
+      //arrayBuffer.bind(gl.ARRAY_BUFFER);
+      //vbo.bind();
+
+      //gl.bindBuffer(gl.ARRAY_BUFFER, arrayBuffer.buf);
+      if(data !== null){
+        vbo.init(data, {usage, arrayType});
+      }
+
+      // dataに設定が無い場合は実行されない処理。
+      //const src = (data !== null ? new arrayType(data) : null);
+    //  if(src !== null){
+      //  gl.bufferData(gl.ARRAY_BUFFER, src, usage);
+        // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。ただしdataがnullでない場合。
+        //if(arrayOutput){ arrayBuffer.src = src; }
+  //    }
+
+      vbo.bind();
+      gl.vertexAttribPointer(location, size, type, normalize, stride, offset);
+      vbo.unbind();
+
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribDivisor(location, divisor);
+
+      //arrayBuffer.unbind(gl.ARRAY_BUFFER);
+      //gl.bindBuffer(gl.ARRAY_BUFFER, null); // こっちでヌルバすればいい
+
+      return vbo;
+      //return arrayBuffer;
+    }
+
+    // 基本はdataだけでいいですね。
+    // iboは特殊で、結局整数しか出てこないですから、通常配列想定で問題ないっす。
+    // dataが配列の長さの場合はあとからupdateすることで実行できる
+    // bufは一応nullで無い場合も許すか。その場合、他のデータで上書きできる。おそらく使う機会は無いけど。
+    // まあでも入れ物だけ用意しておいて差し替える？でもそれやるんだったら普通に複数用意するけどな...んー。
+    // data:nullの場合にはbindだけ実行する仕組みでもいいのかもしれない。
+    // usage: 基本STATIC_DRAWですね。いじらないですね。
+    // bind-nullでindexBufferが登録されていない状態を作ることのメリットはほぼ無いです
+    // なぜならvao前提の運用が主ですし、その場合vao解除でindexBufferも解除される
+    // vaoバインドの状況でindexBufferを利用するかどうかはドローコールで決めるのでわざわざ解除するメリットが無いです。
+    // たとえば複数のIBOを使い分ける場合、bufだけ指定してdataはnullとかするわけですね。
+    function registIBO(gl, count = 1, params = {}){
+      const {
+        buf = null,
+        data = null, usage = gl.STATIC_DRAW
+      } = params;
+
+      //const indexBuffer = (buf === null ? gl.createBuffer() : buf);
+      const ibo = (buf === null ? new IBOWrapper(gl) : buf);
+      //indexBuffer.bind(gl.ELEMENT_ARRAY_BUFFER);
+      //ibo.bind();
+
+      //gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer.buf);
+      if(data !== null){
+        const arrayType = (count <= 65536 ? Uint16Array : Uint32Array);
+        if(typeof(data) === 'number'){
+          // dataが配列の長さの場合
+          ibo.init(data*arrayType.BYTES_PER_ELEMENT, {usage, arrayType});
+        }else{
+          // dataが配列の場合
+          ibo.init(data, {usage, arrayType});
+        }
+        ibo.setParam(data, count);
+      }
+
+      //const src = (data !== null ? (count <= 65536 ? new Uint16Array(data) : new Uint32Array(data)) : null);
+
+      // 以下はsrc上書き時のみ
+      //if(src !== null){
+        //gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, src, usage);
+        //ibo.setParam(src, count);
+        //indexBuffer.length = data.length;
+        //indexBuffer.type = (count <= 65536 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT);
+
+        // arrayOutputがtrueの場合、作った型付配列にアクセス可能になる。
+        //if(arrayOutput){ indexBuffer.src = src; }
+      //}
+      ibo.bind();
+      //return indexBuffer;
+      return ibo;
+    }
+*/
+    // shader/uniform
+    //utils.createShaderProgram = createShaderProgram;
+    //utils.uniformX = uniformX; // projectXみたいでなんかいいね（馬鹿）
+    // uniform/program wrapper
+    utils.UniformWrapper = UniformWrapper;
+    utils.ProgramWrapper = ProgramWrapper;
+
+    // WebglBuffer wrapper & VAO
+    utils.WBOWrapper = WBOWrapper;
+    utils.VBOWrapper = VBOWrapper;
+    utils.IBOWrapper = IBOWrapper;
+    utils.UBOWrapper = UBOWrapper;
+    utils.VAOWrapper = VAOWrapper;
+    //utils.createVAO = createVAO;
+    //utils.registVBO = registVBO;
+    //utils.registIBO = registIBO;
+    //utils.registArrayBuffer = registArrayBuffer;
+    //utils.registIndexBuffer = registIndexBuffer;
+
+    return utils;
+  })();
+
+  // ------------------------------------------------------------------------------------------------------------------------------------------ //
   // foxApplication.
   // CameraControllerなどはここに属する。上記3つと違って切り売りができない。
   // 多分テッセレーションとかもここ？
@@ -8374,7 +9379,8 @@ available waveTables:
   const foxApplications = (function(){
     const applications = {};
 
-    const {createShaderProgram, uniformX} = webglUtils;
+    //const {createShaderProgram, uniformX} = webglUtils;
+    const {ProgramWrapper, VAOWrapper} = webglUtils;
     const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount} = foxUtils;
     const {Interaction, Inspector} = foxIA;
     const {Vecta, MT3, MT4, QCameraPerse, QCameraOrtho} = fox3Dtools;
@@ -11327,28 +12333,437 @@ available waveTables:
     // 単位行列
     Gltf.IDENTITY = new MT4();
 
+    // shader snipets. 順次追加予定。
+    const codeSnipets = {
+      // rotationMatrix. axisの周りにtだけ回転する。使い方はシェーダー内で右から掛けるだけ。
+      'rotationMatrix':`
+        mat3 rotationMatrix(in vec3 axis, in float t){
+          return mat3(
+            cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y,
+            (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x,
+            (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z
+          );
+        }
+      `,
+      'hsv2rgb':`
+        vec3 hsv2rgb(in vec3 color){
+          vec3 rgb = clamp(abs(mod(color.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+          rgb = rgb * rgb * (3.0 - 2.0 * rgb);
+          return color.z * mix(vec3(1.0), rgb, color.y);
+        }
+      `,
+      'overlay':`
+        vec3 overlay(in vec3 src, in vec3 dst){
+          vec3 result;
+            if(dst.r < 0.5){ result.r = 2.0*src.r*dst.r; }else{ result.r = 2.0*(src.r+dst.r-src.r*dst.r)-1.0; }
+            if(dst.g < 0.5){ result.g = 2.0*src.g*dst.g; }else{ result.g = 2.0*(src.g+dst.g-src.g*dst.g)-1.0; }
+            if(dst.b < 0.5){ result.b = 2.0*src.b*dst.b; }else{ result.b = 2.0*(src.b+dst.b-src.b*dst.b)-1.0; }
+          return result;
+        }
+      `,
+      'softLight':`
+        vec3 softLight(in vec3 src, in vec3 dst){
+          vec3 result;
+          if(src.r < 0.5){ result.r = 2.0*src.r*dst.r + dst.r*dst.r*(1.0-2.0*src.r); }
+          else{ result.r = 2.0*dst.r*(1.0-src.r) + sqrt(dst.r)*(2.0*src.r-1.0); }
+          if(src.g < 0.5){ result.g = 2.0*src.g*dst.g + dst.g*dst.g*(1.0-2.0*src.g); }
+          else{ result.g = 2.0*dst.g*(1.0-src.g) + sqrt(dst.g)*(2.0*src.g-1.0); }
+          if(src.b < 0.5){ result.b = 2.0*src.b*dst.b + dst.b*dst.b*(1.0-2.0*src.b); }
+          else{ result.b = 2.0*dst.b*(1.0-src.b) + sqrt(dst.b)*(2.0*src.b-1.0); }
+          return result;
+        }
+      `
+    };
+
+    function parseSourceCode(code){
+      let result = code;
+      // 全角スペースがあったら半角スペースにする
+      result = result.replaceAll("　", " ");
+      // タブがあったら半角スペース2つ分にする
+      result = result.replaceAll(/\t/g, "  ");
+      // まず改行記号をエスケープ変換して一行にする
+      result = result.replaceAll("\n", "\\n");
+      // スターコメントの中身を排除する
+      result = result.replaceAll(/(?<=\/\*).*?(?=\*\/)/g, "");
+      // 無意味な改行を追加し、行コメント記号から改行エスケープまでの部分を排除する。
+      result = result.concat("\\n").replaceAll(/(?<=\/\/).*?(?=\\n)/g, "");
+      // セミコロンは残す
+      // コメント記号の残骸を削除。半角スペースは残す。
+      result = result.replaceAll(/\/\*\*\//g,"").replaceAll(/\/\//g,"");
+      // おわり。
+      // \\nでsplitして配列を返す。その際、空文字列の行を排除する。trimは半角スペースのみの行を排除したいので。
+      const array = result.split("\\n").filter(s=>s.trim().length > 0);
+      return parseDeclarationArray(array);
+    }
+
+    // @と<>の抽出。内容ごとに分ける。
+    // 各々のセグメントは「@common/vs/fs」と「<...>」によりその内容を分けられる形。
+    // <...>の内容によっては単純に改行でつなげて文字列にして終わり（snipetなどの翻訳処理は後でやる...いわゆるマクロは別処理）
+    // 内容によってはオブジェクトを用意して当てはめる。
+
+    const PART_NAMES = ["common", "vs", "fs"];
+    const DEFINITION_NAMES = {
+      common:["varying"],
+      vs:["precision", "uniform", "attribute", "declaration", "global", "main", "post", "output"],
+      fs:["precision", "uniform", "declaration", "global", "outlet", "main", "post", "output"]
+    };
+
+    // 定義されたものだけ初期化する。つまり定義されていないものは据え置き。
+    // もしクリアしたい場合は<>だけ書いて中身を空にする
+    function parseDeclarationArray(array){
+      // @common,@vs,@fsそれぞれに分ける。
+      const result = {common:{}, vs:{}, fs:{}};
+
+      let currentPart = "";
+      let currentDefinition = "";
+      for(let i=0; i<array.length; i++){
+        const s = array[i];
+        const partCheck = s.trim().match(/(?<=^@).*(?=$)/);
+        if(partCheck !== null){
+          if(!PART_NAMES.includes(partCheck[0])){
+            console.error("invalid part name.");
+            break;
+          }
+          currentPart = partCheck[0];
+          continue;
+        }
+        const definitionCheck = s.trim().match(/(?<=^\<).*(?=\>)/);
+        if(definitionCheck !== null && currentPart !== ""){
+          const splittedName = definitionCheck[0].split("_");
+          const definitionName = splittedName[0];
+          const flag = (splittedName.length < 2 ? "IW" : splittedName[1]);
+          if(!DEFINITION_NAMES[currentPart].includes(definitionName)){
+            console.error("invalid definition name.");
+            break;
+          }
+          currentDefinition = definitionName;
+          // 未定義の場合に空配列で初期化
+          if(result[currentPart][currentDefinition] === undefined){
+            // フラグの種類はI,W,A,IAの4つで、記述が無ければWとなる。
+            result[currentPart][currentDefinition] = {flag:parseDescriptionFlag(flag), content:[]};
+          }
+          // 同じ行になんか後ろに書いてあれば、それを放り込む。
+          // 記述内に<や>があるのは問題ない。最初のこれは「冒頭の<」から「最初の>」までだし。
+          // そして数式において<>が現れることはない。もっというとreplaceAllではないので最初の<>しか消えない。全く問題ない。
+          const sameLineDescription = s.trim().replace(/(?<=^\<).*(?=\>)/, "").replace("<>", "");
+          if(sameLineDescription !== ""){
+            result[currentPart][currentDefinition].content.push(sameLineDescription);
+          }
+          continue;
+        }
+
+        if(currentPart === "") continue;
+        if(currentDefinition === "") continue;
+        result[currentPart][currentDefinition].content.push(s);
+      }
+      const parsedCommon = parseCommon(result.common);
+      const parsedVS = parseSeparate(result.vs);
+      const parsedFS = parseSeparate(result.fs);
+      return {common:parsedCommon, vs:parsedVS, fs:parsedFS};
+    }
+
+    function parseDescriptionFlag(flag){
+      // たとえばIWの場合は常に初期化する、常に上書きする。これがデフォルト。
+      // 「I」の場合は初期化するだけで、記述の変更は実行されない。
+      // attributeやuniformの場合はIだけ意味を持つ。元々あるのをどうするかという話。
+      // fsのfloatのprecisionはほぼ必須級なのでそこはそれ。最終的に使うかどうかは派生形次第。
+      const result = {init:true, writeMode:"write"};
+      result.init = (flag.match(/I/) !== null || flag.match(/i/) !== null);
+      const hasW = (flag.match(/W/) !== null || flag.match(/w/) !== null);
+      const hasA = (flag.match(/A/) !== null || flag.match(/a/) !== null);
+      if(hasW){
+        result.writeMode = "write";
+      }else if(hasA){
+        result.writeMode = "add";
+      }else{
+        result.writeMode = "none";
+      }
+      return result;
+    }
+
+    // 例：vec3 vHoge;
+    function parseCommon(data){
+      const result = {};
+      for(const [name, value] of Object.entries(data)){
+        switch(name){
+          case 'varying':
+            result.varying = {flag:value.flag, content:[]};
+            for(let i=0; i<value.content.length; i++){
+              result.varying.content.push(...parseTypeAndNameDefinition(value.content[i]));
+            }
+            break;
+        }
+      }
+      return result;
+    }
+    function parseSeparate(data){
+      const result = {};
+      // 末尾の改行やっぱあった方がいいわ
+      const createReducedText = (texts) => texts.reduce((s, t) => s.concat(t).concat('\n'), ``);
+
+      for(const [name, value] of Object.entries(data)){
+        switch(name){
+          case 'precision':
+            result.precision = {flag:value.flag, content:[]};
+            for(let i=0; i<value.content.length; i++){
+              result.precision.content.push(...parsePrecisionDefinition(value.content[i]));
+            }
+            break;
+          case 'uniform':
+            result.uniform = {flag:value.flag, content:[]};
+            for(let i=0; i<value.content.length; i++){
+              result.uniform.content.push(...parseTypeAndNameDefinition(value.content[i]));
+            }
+            break;
+          case 'attribute':
+            result.attribute = {flag:value.flag, content:[]};
+            for(let i=0; i<value.content.length; i++){
+              result.attribute.content.push(...parseAttributeDefinition(value.content[i]));
+            }
+            break;
+          case 'declaration':
+          case 'global':
+          case 'main':
+          case 'outlet':
+          case 'post':
+          case 'output':
+            // value.contentの各行において、「# これはコメントです～」->「// これはコメントです～」のように変換する
+            // 「color = vec4(1.0); # 初期化」->「color = vec4(1.0); // 初期化」
+            // #の後の半角スペースは必須。でないと「#define」や「#snipet」もいじられてしまう。
+            const reducedText = createReducedText(value.content);
+            const modifiedText = reducedText.replaceAll(/(?<=.*)# .*(?=$|\n)/g, (t) => t.replace('#', '//'));
+            result[name] = {flag:value.flag, content:modifiedText};
+            break;
+        }
+      }
+      return result;
+    }
+
+    // varyingとuniformで共用
+    // 例：「vec4 vColor; vec2 vTexCoord;」
+    // 例：「sampler2D uTexture; float uTime; vec3 uVectors[10];」
+    function parseTypeAndNameDefinition(definitions){
+      const result = [];
+      const splitted0 = definitions.split(";");
+      for(const definition of splitted0){
+        // 半角スペースが多くてもエラーが出ないようにする
+        const splitted1 = definition.trim().split(" ").filter(s=>s.trim().length > 0);
+        if(splitted1.length !== 2) continue;
+        result.push({type:splitted1[0], name:splitted1[1]});
+      }
+      return result;
+    }
+
+    // precision.
+    // 例：「high float; medium sampler2DArray;」
+    function parsePrecisionDefinition(definitions){
+      const result = [];
+      const splitted0 = definitions.split(";");
+      for(const definition of splitted0){
+        // 半角スペースが多くてもエラーが出ないようにする
+        const splitted1 = definition.trim().split(" ").filter(s=>s.trim().length > 0);
+        if(splitted1.length !== 2) continue;
+        result.push({precision:splitted1[0], type:splitted1[1]});
+      }
+      return result;
+    }
+
+    // attributeはロケーション必須。
+    // 例：「0 vec3 aPosition; 1 vec3 aNormal;」
+    function parseAttributeDefinition(definitions){
+      const result = [];
+      const splitted0 = definitions.split(";");
+      for(const definition of splitted0){
+        // 半角スペースが多くてもエラーが出ないようにする
+        const splitted1 = definition.trim().split(" ").filter(s=>s.trim().length > 0);
+        if(splitted1.length !== 3) continue;
+        result.push({location:Number(splitted1[0]), type:splitted1[1], name:splitted1[2]});
+      }
+      return result;
+    }
+
     // ShaderPrototype, RenderSystem.
     // ShaderとProgramで名前を分けよう。
+    // declaration: 定数などの宣言、UBOとかも。
+    // global: 関数定義など。snipetなど。
+    // main: 用意された変数の改変
+    // outlet: fsのみ。出力出口
+    // post: vsはミラー処理など。fsはポストエフェクト
+    // output: vsは知らん。fsは出力の仕方を変える
     class ShaderPrototype{
-      constructor(){
+      constructor(options = {}){
+        const {name = 'default'} = options;
         this.vs = "";
         this.fs = "";
-        this.program = null;
-        // code.
-        this.vsPrecision = "";
-        this.vsDeclaration = "";
-        this.vsGlobal = "";
-        this.vsMain = "";
-        this.fsPrecision = "";
-        this.fsDeclaration = "";
-        this.fsGlobal = "";
-        this.fsMain = "";
-        // config.
-        this.fsFloatPrecision = `high`;
-        this.colorInput = `out vec4 fragColor;`;
-        this.postProcess = ``; // 出力前にいじる用
-        this.colorOutput = `fragColor = color;`;
+        this.name = name;
+        this.programCount = 0;
+
+        // descriptor.
+        // 個々のShaderPrototypeにおいて上書きされる可能性がある。
+        // 具体的にはvsのoutputなど。
+        this.initialDescriptors = {
+          vs:{
+            declaration:"",
+            global:"",
+            main:"",
+            post:"",
+            output:"gl_Position = vec4(position, 1.0);"
+          },
+          fs:{
+            declaration:"",
+            global:"",
+            outlet:"out vec4 fragColor;",
+            main:"",
+            post:"",
+            output:"fragColor = color;"
+          }
+        }
+        this.descriptors = {vs:{}, fs:{}};
+        for(const key of Object.keys(this.initialDescriptors.vs)){
+          this.descriptors.vs[key] = "";
+        }
+        for(const key of Object.keys(this.initialDescriptors.fs)){
+          this.descriptors.fs[key] = "";
+        }
+        // このあとinitDescriptorを実行するが、ここで実行するとデフォルトを書き換えられないので、
+        // 実行は個別に行う。もちろん外部から実行することもできる。
+
+        // variales.
+        this.variables = {
+          precisions:{vs:{}, fs:{float:'high'}},
+          varyings:{},
+          attributes:{},
+          uniforms:{vs:{}, fs:{}}
+        }
+        // constやUBOなどは現時点ではdeclarationに書いてねっていう段階です。
       }
+      initDescriptors(target = "", name = ""){
+        // 引数無しの場合はすべて初期化
+        if(target === ""){
+          this.initDescriptors("vs");
+          this.initDescriptors("fs");
+          return this;
+        }
+        // targetがvsでもなく、fsでもない場合は、実行されない
+        if(target !== "vs" && target !== "fs"){
+          console.error("invalid target");
+          return this;
+        }
+
+        // 引数1個の場合はそれぞれすべて初期化
+        if(name === ""){
+          for(const key of Object.keys(this.descriptors[target])){
+            this.descriptors[target][key] = this.initialDescriptors[target][key];
+          }
+          return this;
+        }
+        if(this.descriptors[target][name] === undefined) return this;
+        // そうでなければ初期化リストで初期化
+        this.descriptors[target][name] = this.initialDescriptors[target][name];
+        return this;
+      }
+      setInitialDescriptors(code = ""){
+        // 同じように書いて、デスクリプタの初期状態をいじる。なおwriteModeやdeclaration系はあっても無視される。
+        const result = parseSourceCode(code);
+        // 記述があったもののみ上書きされる仕組み。
+        for(const key of Object.keys(result.vs)){
+          if(this.initialDescriptors.vs[key] === undefined){ continue; }
+          this.initialDescriptors.vs[key] = result.vs[key].content;
+        }
+        for(const key of Object.keys(result.fs)){
+          if(this.initialDescriptors.fs[key] === undefined){ continue; }
+          this.initialDescriptors.fs[key] = result.fs[key].content;
+        }
+        return this;
+      }
+      write(code = "", options = {}){
+        const {showResult = false} = options;
+        // 初期化は定義されているもののみに対して行う
+        // <>定義のみで中身が空っぽならば初期化だけされる感じ。今後追加バージョンも用意するかも（attribute_aとか_wとか）
+        const result = parseSourceCode(code);
+        if(showResult){ console.log(result); }
+
+        // initフラグならば初期化する。あとはwriteModeに従って上書きか追記。
+        // たとえば初期化してから追記してもいいしそのまま追記でもいい。
+        const modifyText = (s, t, mode) => {
+          switch(mode){
+            case "write": return t; // writeならばtで上書き
+            case "add": return s + t; // addならば元の文章sにtを追記
+          }
+          // "none"ならば据え置き。sをそのまま返す
+          return s;
+        }
+
+        // descriptors
+        for(const key of Object.keys(this.descriptors.vs)){
+          const descriptor = result.vs[key];
+          if(descriptor !== undefined){
+            const flag = descriptor.flag;
+            // いずれここは追加記述も出来るようになるかも？
+            if(flag.init){ this.initDescriptors('vs', key); }
+            this.descriptors.vs[key] = modifyText(this.descriptors.vs[key], descriptor.content, flag.writeMode);
+          }
+        }
+        for(const key of Object.keys(this.descriptors.fs)){
+          const descriptor = result.fs[key];
+          if(descriptor !== undefined){
+            const flag = descriptor.flag;
+            // いずれここは追加記述も出来るようになるかも？
+            if(flag.init){ this.initDescriptors('fs', key); }
+            this.descriptors.fs[key] = modifyText(this.descriptors.fs[key], descriptor.content, flag.writeMode);
+          }
+        }
+
+        // こっちはinitフラグのみ意味を持つ。なぜなら同じ名前、もしくは型の場合は自動上書きなので。
+        const {varying:commonVarying} = result.common;
+        const {precision:vsPrecision, attribute:vsAttribute, uniform:vsUniform} = result.vs;
+        const {precision:fsPrecision, uniform:fsUniform} = result.fs;
+
+        // varyings
+        if(commonVarying !== undefined){
+          if(commonVarying.flag.init){ this.variables.varyings = {}; }
+          for(const varying of commonVarying.content){
+            this.variables.varyings[varying.name] = varying.type;
+          }
+        }
+        // precisions (vs)
+        if(vsPrecision !== undefined){
+          if(vsPrecision.flag.init){ this.variables.precisions.vs = {}; }
+          for(const precision of vsPrecision.content){
+            this.variables.precisions.vs[precision.type] = precision.precision;
+          }
+        }
+        // attributes
+        if(vsAttribute !== undefined){
+          if(vsAttribute.flag.init){ this.variables.attributes = {}; }
+          for(const attribute of vsAttribute.content){
+            this.variables.attributes[attribute.name] = {location:attribute.location, type:attribute.type};
+          }
+        }
+        // uniforms (vs)
+        if(vsUniform !== undefined){
+          if(vsUniform.flag.init){ this.variables.uniforms.vs = {}; }
+          for(const uniform of vsUniform.content){
+            this.variables.uniforms.vs[uniform.name] = uniform.type;
+          }
+        }
+        // precisions (fs)
+        if(fsPrecision !== undefined){
+          if(fsPrecision.flag.init){ this.variables.precisions.fs = {float:'high'}; }
+          for(const precision of fsPrecision.content){
+            this.variables.precisions.fs[precision.type] = precision.precision;
+          }
+        }
+        // uniforms (fs)
+        if(fsUniform !== undefined){
+          if(fsUniform.flag.init){ this.variables.uniforms.fs = {}; }
+          for(const uniform of fsUniform.content){
+            this.variables.uniforms.fs[uniform.name] = uniform.type;
+          }
+        }
+        return this;
+      }
+      /*
       precision(target = "vs", code = "", mode = 'w'){
         const text = this[`${target}Precision`];
         this[`${target}Precision`] = ShaderPrototype.modifyCode(code, text, mode);
@@ -11369,8 +12784,14 @@ available waveTables:
         this[`${target}Main`] = ShaderPrototype.modifyCode(code, text, mode);
         return this;
       }
+      post(code = "", mode = "w"){
+        // postProcessだけこれでいじる。
+        const text = this.postProcess;
+        this.postProcess = ShaderPrototype.modifyCode(code, text, mode);
+        return this;
+      }
       config(options = {}){
-        const keywords = ['fsFloatPrecision', 'colorInput', 'colorOutput', 'postProcess'];
+        const keywords = ['fsFloatPrecision', 'colorInput', 'colorOutput'];
         // いろいろ
         for(const keyword of keywords){
           if(options[keyword] !== undefined){
@@ -11379,56 +12800,149 @@ available waveTables:
         }
         return this;
       }
+      addAttribute(location, type, name){
+        if(typeof(arguments[0]) === 'object'){
+          const {location:loc = 0, type:t = 'vec3', name:n = 'aHoge'} = arguments[0];
+          return this.addAttribute(loc, t, n);
+        }
+        this.attributes[name] = {location, type};
+        return this;
+      }
+      addVarying(type, name){
+        if(typeof(arguments[0]) === 'object'){
+          const {type:t = 'vec3', name:n = 'vHoge'} = arguments[0];
+          return this.addVarying(t, n);
+        }
+        this.varyings[name] = {type};
+        return this;
+      }
+      addUniform(target, type, name){
+        if(typeof(arguments[0]) === 'object'){
+          const {target:tgt = 'vs', type:t = 'vec3', name:n = 'uHoge'} = arguments[0];
+          return this.addUniform(tgt, t, n);
+        }
+        this.uniforms[name] = {target, type};
+        return this;
+      }
+      */
+      createPreDeclaration(){
+        const result = {
+          vs:{precision:``, varying:``, attribute:``, uniform:``},
+          fs:{precision:``, varying:``, uniform:``}
+        };
+        for(const [type, precision] of Object.entries(this.variables.precisions.vs)){
+          result.vs.precision += `precision ${precision}p ${type};\n`;
+        }
+        for(const [type, precision] of Object.entries(this.variables.precisions.fs)){
+          result.fs.precision += `precision ${precision}p ${type};\n`;
+        }
+        for(const [name, type] of Object.entries(this.variables.varyings)){
+          result.vs.varying += `out ${type} ${name};\n`;
+          result.fs.varying += `in ${type} ${name};\n`;
+        }
+        for(const [name, value] of Object.entries(this.variables.attributes)){
+          result.vs.attribute += `layout (location = ${value.location}) in ${value.type} ${name};\n`;
+        }
+        for(const [name, type] of Object.entries(this.variables.uniforms.vs)){
+          result.vs.uniform += `uniform ${type} ${name};\n`;
+        }
+        for(const [name, type] of Object.entries(this.variables.uniforms.fs)){
+          result.fs.uniform += `uniform ${type} ${name};\n`;
+        }
+        return result;
+        /*
+        const declaration = {};
+        declaration.vs = ``;
+        declaration.fs = ``;
+        for(const [key, value] of Object.entries(this.attributes)){
+          declaration.vs += `layout (location = ${value.location}) in ${value.type} ${key};\n`;
+        }
+        for(const [key, value] of Object.entries(this.varyings)){
+          declaration.vs += `out ${value.type} ${key};\n`;
+          declaration.fs += `in ${value.type} ${key};\n`;
+        }
+        for(const [key, value] of Object.entries(this.uniforms)){
+          declaration[value.target] += `uniform ${value.type} ${key};\n`;
+        }
+        return declaration;*/
+      }
       createShader(){
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
+
         this.vs =
         `#version 300 es
-        ${this.vsPrecision}
+        ${decl.vs.precision}
 
-        ${this.vsDeclaration}
+        ${v.declaration}
 
-        ${this.vsGlobal}
+        ${decl.vs.attribute}
+        ${decl.vs.uniform}
+        ${decl.vs.varying}
+
+        ${v.global}
 
         void main(){
           vec3 position = vec3(0.0);
-          ${this.vsMain}
-          gl_Position = vec4(position, 1.0);
+          ${v.main}
+          ${v.post}
+          ${v.output}
         }
         `;
+
         this.fs =
         `#version 300 es
-        precision ${this.fsFloatPrecision}p float;
-        ${this.fsPrecision}
+        ${decl.fs.precision}
 
-        ${this.fsDeclaration}
+        ${f.declaration}
 
-        ${this.fsGlobal}
+        ${decl.fs.uniform}
+        ${decl.fs.varying}
 
-        ${this.colorInput}
+        ${f.global}
+
+        ${f.outlet}
 
         void main(){
           vec4 color = vec4(1.0);
 
-          ${this.fsMain}
+          ${f.main}
 
-          ${this.postProcess}
-          ${this.colorOutput}
+          ${f.post}
+          ${f.output}
         }
         `;
       }
       createProgram(gl, params = {}){
+        const defaultName = `${this.name}_${this.programCount++}`;
         const {
-          name = "", layout = {}, outVaryings = [], separate = true,
-          showVertexShader = false, showFragmentShader = false
+          name = defaultName, layout = {}, outVaryings = [], separate = true, uboLayout = {},
+          showVertexShader = false, showFragmentShader = false,
+          showUniforms = false, showAttributes = false
         } = params;
 
-        if(showVertexShader){ console.log(this.vs); }
-        if(showFragmentShader){ console.log(this.fs); }
+        // ここで「#snipet hoge;」を変換する。vsもfsも両方。convertですね。
+        // まあmodifyか。snipet以外にもなんかやりたかったら追加しましょう。
+        const modifiedVertexShaderSource = ShaderPrototype.modifyShaderSource(this.vs);
+        const modifiedFragmentShaderSource = ShaderPrototype.modifyShaderSource(this.fs);
 
-        this.program = createShaderProgram(gl, {
-          vs:this.vs, fs:this.fs, name, layout, outVaryings, separate
+        // modifyしたあとで出力する
+        if(showVertexShader){ console.log(modifiedVertexShaderSource); }
+        if(showFragmentShader){ console.log(modifiedFragmentShaderSource); }
+/*
+        const program = createShaderProgram(gl, {
+          vs:modifiedVertexShaderSource, fs:modifiedFragmentShaderSource,
+          name, layout, outVaryings, separate
         });
-        return this;
+*/
+        const program = ProgramWrapper.create(gl, {
+          vs:modifiedVertexShaderSource, fs:modifiedFragmentShaderSource,
+          name, layout, outVaryings, separate, uboLayout
+        });
+        program.createProgram({showUniforms, showAttributes});
+        return program;
       }
+      /*
       static modifyCode(code = "", text = "", mode = 'w'){
         let result = text;
         switch(mode){
@@ -11438,6 +12952,21 @@ available waveTables:
             result += code; break;
         }
         return result;
+      }
+      */
+      static modifyShaderSource(source = ""){
+        // 他にもあるかもしれないのでその辺
+        // 「#snipet ~~~;」を探す
+        // 「~~~」をsnipetsで置き換える。おわり。
+        const modifiedShaderSource = source.replaceAll(/#snipet .+;/g, (target) => {
+      		const splitted = target.split(" "); // 「 」の後ろを取る
+      		if(splitted.length < 2){ console.error("文字数不足"); return ""; }
+      		const name = splitted[1].replace(";", ""); // ;を切る
+      		const snipet = codeSnipets[name];
+      		if(snipet === undefined){ console.error("snipet未定義"); return ""; }
+      		return snipet;
+      	});
+        return modifiedShaderSource;
       }
     }
 
@@ -11454,9 +12983,12 @@ available waveTables:
     // textureから取るときとかそうしますし。
     class PlaneShader extends ShaderPrototype{
       constructor(options = {}){
-        super();
+        super(options);
         const {align = 'leftUp'} = options;
         this.align = align;
+
+        this.initialDescriptors.vs.output = `gl_Position = vec4(original_uv, depth, 1.0);`;
+        this.initDescriptors();
       }
       createShader(){
         // 純粋な板ポリ芸を書く。vUvをvaryingとして渡す。以下略。いじってもいい。基本は左上(0,0)で右下(1,1)です。uvですし。
@@ -11466,18 +12998,24 @@ available waveTables:
         // uvはvUvとしてfsに送られます。
         // fsMainProcessでいじれるプリセットはvec4のcolorのみです。
         // いずれもプリセットだけなので、Globalであれこれして導入したものについては自由にあれこれできます。
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
         this.vs =
         `#version 300 es
-        ${this.vsPrecision}
+        ${decl.vs.precision}
 
         const vec2[4] pos = vec2[](
           vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0)
         );
         out vec2 vUv;
 
-        ${this.vsDeclaration}
+        ${v.declaration}
 
-        ${this.vsGlobal}
+        ${decl.vs.attribute}
+        ${decl.vs.uniform}
+        ${decl.vs.varying}
+
+        ${v.global}
 
         void main(){
           vec2 uv = pos[gl_VertexID];
@@ -11486,33 +13024,36 @@ available waveTables:
 
           ${PlaneShader.aligns[this.align]}
 
-          ${this.vsMain}
+          ${v.main}
 
           vUv = uv; // uvをいじれるようにする
-          gl_Position = vec4(original_uv, depth, 1.0);
+          ${v.post}
+          ${v.output}
         }
         `;
         this.fs =
         `#version 300 es
-        precision ${this.fsFloatPrecision}p float;
-        ${this.fsPrecision}
+        ${decl.fs.precision}
+
+        ${f.declaration}
 
         in vec2 vUv;
 
-        ${this.fsDeclaration}
+        ${decl.fs.uniform}
+        ${decl.fs.varying}
 
-        ${this.fsGlobal}
+        ${f.global}
 
-        ${this.colorInput}
+        ${f.outlet}
 
         void main(){
           vec2 uv = vUv;
           vec4 color = vec4(1.0);
 
-          ${this.fsMain}
+          ${f.main}
 
-          ${this.postProcess}
-          ${this.colorOutput}
+          ${f.post}
+          ${f.output}
         }
         `;
       }
@@ -11532,53 +13073,220 @@ available waveTables:
       `
     };
 
+    class PointShader extends ShaderPrototype{
+      constructor(options = {}){
+        super(options);
+        // outputのデフォルトをクリアしておこう。
+        this.initialDescriptors.vs.output = "";
+        this.initDescriptors();
+      }
+      createShader(){
+        // ほぼプレーンに近いですが、点関連の変数を扱いやすくしておきます。
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
+
+        this.vs =
+        `#version 300 es
+        ${decl.vs.precision}
+
+        ${v.declaration}
+
+        ${decl.vs.attribute}
+        ${decl.vs.uniform}
+        ${decl.vs.varying}
+
+        ${v.global}
+
+        void main(){
+          float pointSize = 1.0; // mainでいじってください
+          ${v.main}
+          ${v.post}
+          ${v.output}
+          gl_PointSize = pointSize;
+        }
+        `;
+
+        this.fs =
+        `#version 300 es
+        ${decl.fs.precision}
+
+        ${f.declaration}
+
+        ${decl.fs.uniform}
+        ${decl.fs.varying}
+
+        ${f.global}
+
+        ${f.outlet}
+
+        void main(){
+          vec2 pointCoord = gl_PointCoord; // 好きに使って。
+          vec4 color = vec4(1.0);
+
+          ${f.main}
+
+          ${f.post}
+          ${f.output}
+        }
+        `;
+      }
+    }
+
+    class TFFShader extends ShaderPrototype{
+      constructor(options = {}){
+        super(options);
+        // ラスタライザを無効化「しない」場合はfalseにしてください。まあ二重否定わかりづらいっすね
+        // あとuseOutVaryingsはフラグメントシェーダでそれを使うかどうかです。これも基本使わないっすね
+        const {rasterizerDiscard = true, useOutVaryings = false} = options;
+        this.rasterizerDiscard = rasterizerDiscard;
+        this.useOutVaryings = useOutVaryings;
+        // outputのデフォルトだけでなく全部クリアしよう。fsのoutletとoutputも基本不要なので。使うなら作ってくれ。
+        this.initialDescriptors.vs.output = "";
+        this.initialDescriptors.fs.outlet = "";
+        this.initialDescriptors.fs.output = "";
+        this.initDescriptors();
+      }
+      createShader(){
+        // ほぼプレーンに近いですね。しかしpositionやcolorは仕事しない場合もあるんで、まあシンプルです。究極にプレーン。
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
+
+        this.vs =
+        `#version 300 es
+        ${decl.vs.precision}
+
+        ${v.declaration}
+
+        ${decl.vs.attribute}
+        ${decl.vs.uniform}
+        ${decl.vs.varying}
+
+        ${v.global}
+
+        void main(){
+          ${v.main}
+          ${v.post}
+          ${v.output}
+        }
+        `;
+
+        // ラスタライザが死んでるならoutletとoutputは不要っすね
+        // outVaryingsもラスタライザが死んでるなら仕事ないっすね
+        this.fs =
+        `#version 300 es
+        ${(this.rasterizerDiscard ? "" : decl.fs.precision)}
+
+        ${f.declaration}
+
+        ${decl.fs.uniform}
+        ${(!this.rasterizerDiscard && this.useOutVaryings ? decl.fs.varying : "")}
+
+        ${f.global}
+
+        ${(this.rasterizerDiscard ? "" : f.outlet)}
+
+        void main(){
+          ${f.main}
+
+          ${f.post}
+          ${(this.rasterizerDiscard ? "" : f.output)}
+        }
+        `;
+      }
+    }
+
     // 一応共通部分作るか
+    // currentShaderの役割：programを作るまで
+    // currentProgramの役割：setUniformなどの都合
     class RenderSystem{
       constructor(gl){
         this.gl = gl;
         this.shaders = {};
-        this.shaderFactory = () => {};
-        this.currentShader = null;
+        this.programs = {}; // こういうことですね。programsを別途用意し、マルチ出力を可能にする。
+        this.shaderFactory = (options) => {};
+        this.currentShader = null; // やっぱ使うか。addShaderで登録される。getShaderの際にも登録される。createShader,createProgramで参照。
+        this.currentProgram = null; // currentProgramだけ残そう。useProgramで起動、clearProgramで破棄。ステートマシンの委譲。
       }
-      addShader(name, options = {}){
-        // ここで作ったものをセットする
-        this.shaders[name] = this.shaderFactory(options);
+      addShader(options = {}){
+        // nameはoptionsに含めよう。shaderにも同じ名前を付けたいので。
+        // なお同じ名前の場合、新しいshaderで初期化される。
+        const {name = 'default'} = options;
+        const shader = this.shaderFactory(options);
+        this.shaders[name] = shader;
+        // shader作ったらcurrentにset.
+        this.currentShader = shader;
+        return this;
+      }
+      setShader(name = 'default'){
+        // currentにsetするだけの関数
+        if(this.shaders[name] === undefined){ console.log('shader not found'); return this; }
         this.currentShader = this.shaders[name];
         return this;
       }
-      setShader(name){
-        this.currentShader = this.shaders[name];
-        return this;
+      getShader(name = ''){
+        // 取得するだけの関数。指定が無ければcurrentが返る
+        if(name === ''){ return this.currentShader; }
+        if(this.shaders[name] === undefined){ console.log('shader not found'); return null; }
+        return this.shaders[name];
       }
-      getShader(){
-        return this.currentShader;
+      getProgram(name = ''){
+        // 取得するだけの関数。指定が無ければcurrentが返る
+        if(name === ''){ return this.currentProgram; }
+        if(this.programs[name] === undefined){ console.log('program not found'); return null; }
+        return this.programs[name];
       }
-      getProgram(){
-        return this.currentShader.program;
-      }
-      deleteShader(name){
+      deleteShader(name = 'default'){
+        if(this.shaders[name] === undefined){ console.log('shader not found'); return this; }
         // nameのやつを消す。
         delete this.shaders[name];
         return this;
       }
-      createShader(){
-        this.currentShader.createShader();
+      deleteProgram(name = 'default_0'){
+        if(this.programs[name] === undefined){ console.log('program not found'); return this; }
+        // nameのやつを消す。
+        delete this.programs[name];
+        return this;
+      }
+      createShader(name = ''){
+        // 指定が無ければcurrentでshaderを作る。中身を確定させる。
+        if(name === ''){
+          this.currentShader.createShader();
+          return this;
+        }
+        this.shaders[name].createShader();
         return this;
       }
       createProgram(params = {}){
-        this.currentShader.createProgram(this.gl, params);
+        // currentに対してprogramを作る。nameはparamsに含める
+        const program = this.currentShader.createProgram(this.gl, params);
+        this.programs[program.name] = program;
         return this;
       }
-      useProgram(){
-        this.gl.useProgram(this.currentShader.program);
+      useProgram(name = 'default_0'){
+        // 以前はcurrentShaderに付随するprogramを起動させるものだったが、それだとshader:programで1:1になってしまう。
+        // それを避けるためにこのような仕組みになった。
+        // 1つしかprogramが存在しないならば、名前はdefault_0で確定なので、指定は必要ない。そうでないなら指定する。
+        if(this.programs[name] === undefined){ console.log('program not found'); return null; }
+        const program = this.programs[name];
+        // currentを切り替える
+        this.currentProgram = program;
+        program.use();
+        //this.gl.useProgram(program);
         return this;
       }
       clearProgram(){
         this.gl.useProgram(null);
+        this.currentProgram = null;
         return this;
       }
       flush(){
         this.gl.flush();
+        return this;
+      }
+      setUniform(){
+        // uniformXの簡易処理を実行する。引数はglとprogram以外のすべてで、uniformXの順番通り。
+        //uniformX(this.gl, this.currentProgram, ...arguments);
+        this.currentProgram.setUniform(...arguments);
         return this;
       }
     }
@@ -11587,12 +13295,65 @@ available waveTables:
       constructor(gl){
         super(gl);
         this.shaderFactory = (options) => { return new PlaneShader(options); };
-        this.addShader('default');
+        this.addShader();
       }
       render(options = {}){
         // triangle_stripで板ポリ芸。optionsは未定。
         const gl = this.gl;
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
+    }
+
+    class RenderPoints extends RenderSystem{
+      constructor(gl){
+        super(gl);
+        this.shaderFactory = (options) => { return new PointShader(options); };
+        this.addShader();
+      }
+      render(options = {}){
+        // pointsで点描画。optionはoffsetとcount.
+        const {offset = 0, count = 1} = options;
+        const gl = this.gl;
+        gl.drawArrays(gl.POINTS, offset, count);
+      }
+    }
+
+    class RenderTFF extends RenderSystem{
+      constructor(gl){
+        super(gl);
+        this.shaderFactory = (options) => { return new TFFShader(options); };
+        this.addShader();
+      }
+      render(options = {}){
+        // ラスタライザをこっちでも指定しようか
+        // というのも結局デフォルトでtrueなのはこっちも一緒なんでね
+        // なおArrays描画しかできないのでoffsetとcountだけでいいっす
+        // わざわざプログラムから取得してあれこれするのも面倒だろう。まあプログラムに付与できるのが一番だが...
+        // 付与してもいいんだけど無効化する機会がそもそもほぼ皆無なんで、そしてTFFでは基本無効化するんで、特に不便ではないだろ。
+
+        // tffLayoutは最大長さ4の配列で、使わない場合はnullを指定します。てか欠番できたっけ？まあいいか。
+        const {
+          tffLayout = [],
+          rasterizerDiscard = true, drawCall = 'points',
+          offset = 0, count = 1} = options;
+        const gl = this.gl;
+        const drawCallConstant = VAOWrapper.parseDrawCall(gl, drawCall);
+
+        for(let i=0; i<4; i++){
+          if(i >= tffLayout.length){ break; }
+          if(tffLayout[i] === null) continue;
+          tffLayout[i].bindBufferBaseTFF(i);
+        }
+        gl.beginTransformFeedback(drawCallConstant);
+        if(rasterizerDiscard){ gl.enable(gl.RASTERIZER_DISCARD); }
+        gl.drawArrays(drawCallConstant, offset, count);
+        if(rasterizerDiscard){ gl.disable(gl.RASTERIZER_DISCARD); }
+        gl.endTransformFeedback();
+        for(let i=0; i<4; i++){
+          if(i >= tffLayout.length){ break; }
+          if(tffLayout[i] === null) continue;
+          tffLayout[i].unbindBufferBaseTFF(i);
+        }
       }
     }
 
@@ -11604,41 +13365,49 @@ available waveTables:
     // normalはデフォルトでは不使用。
     class NoLightShader extends ShaderPrototype{
       constructor(options = {}){
-        super();
+        super(options);
         const {useNormal = false} = options;
         this.useNormal = useNormal;
+
+        this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
+        this.initDescriptors();
       }
       createShader(){
         // noLightなのでpositionとnormalだけであとは...あってもいいけどライティングはしない
         // normalがあるかどうかで微妙な違いはあるけど。
         // positionは0番,normalは1番で固定。
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
         this.vs =
         `#version 300 es
-        ${this.vsPrecision}
+        ${decl.vs.precision}
+
+        ${v.declaration}
 
         layout (location = 0) in vec3 aPosition;
         ${(this.useNormal ? 'layout (location = 1) in vec3 aNormal;' : '')}
+        ${decl.vs.attribute}
 
         // positionの生データ,model変換後のposition,modelView変換後のposition
         out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
         // normalの生データ,model変換後のnormal,modelView変換後のnormal
         ${(this.useNormal ? 'out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;' : '')}
+        ${decl.vs.varying}
 
         uniform mat4 uModelMatrix;
         uniform mat4 uModelViewMatrix;
         uniform mat4 uProjMatrix;
         ${(this.useNormal ? 'uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;' : '')}
+        ${decl.vs.uniform}
 
-        ${this.vsDeclaration}
-
-        ${this.vsGlobal}
+        ${v.global}
 
         void main(){
           vec3 position = aPosition;
           ${(this.useNormal ? 'vec3 normal = aNormal;' : '')}
 
           // position,normalを改変するためのプリプロセス
-          ${this.vsMain}
+          ${v.main}
 
           // local -> model変換 -> global -> view変換 -> view
           vLocalPosition = position;
@@ -11657,36 +13426,40 @@ available waveTables:
           ${(this.useNormal ? 'vGlobalNormal = normalize(normal * uModelNormalMatrix);' : '')}
           ${(this.useNormal ? 'vViewNormal = normalize(normal * uNormalMatrix);' : '')}
 
-          gl_Position = normalDeviceCoordinate;
+          ${v.post}
+
+          ${v.output}
         }
         `;
 
         // 色は自由に決めてね
         this.fs =
         `#version 300 es
-        precision ${this.fsFloatPrecision}p float;
-        ${this.fsPrecision}
+        ${decl.fs.precision}
+
+        ${f.declaration}
 
         in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
         ${(this.useNormal ? 'in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;' : '')}
+        ${decl.fs.varying}
 
-        ${this.fsDeclaration}
+        ${decl.fs.uniform}
 
-        ${this.fsGlobal}
+        ${f.global}
 
-        ${this.colorInput}
+        ${f.outlet}
 
         void main(){
           vec4 color = vec4(1.0);
 
           // materialColorは無く、直接colorをいじる。
-          ${this.fsMain}
+          ${f.main}
 
           // 本来はここでライティング処理
 
           // そのあとポストプロセス（透明度とか？）
-          ${this.postProcess}
-          ${this.colorOutput}
+          ${f.post}
+          ${f.output}
         }
         `;
       }
@@ -11697,36 +13470,50 @@ available waveTables:
     // あー、3種類全部要るんだ。まあ用意してからでいいか。面倒だけど仕方ないね。
     class StandardLightingShader extends ShaderPrototype{
       constructor(options = {}){
-        super();
+        super(options);
+        const {lightCounts = {}} = options;
+        const {directional = 4, point = 4, spot = 4} = lightCounts;
+        this.directionalLightCount = directional;
+        this.pointLightCount = point;
+        this.spotLightCount = spot;
+
+        this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
+        this.initDescriptors();
       }
       createShader(){
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
+
         this.vs =
         `#version 300 es
-        ${this.vsPrecision}
+        ${decl.vs.precision}
+
+        ${v.declaration}
 
         layout (location = 0) in vec3 aPosition;
         layout (location = 1) in vec3 aNormal;
+        ${decl.vs.attribute}
 
         // positionの生データ,model変換後のposition,modelView変換後のposition
         out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
         // normalの生データ,model変換後のnormal,modelView変換後のnormal
         out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;
+        ${decl.vs.varying}
 
         uniform mat4 uModelMatrix;
         uniform mat4 uModelViewMatrix;
         uniform mat4 uProjMatrix;
         uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;
+        ${decl.vs.uniform}
 
-        ${this.vsDeclaration}
-
-        ${this.vsGlobal}
+        ${v.global}
 
         void main(){
           vec3 position = aPosition;
           vec3 normal = aNormal;
 
           // position,normalを改変するためのプリプロセス
-          ${this.vsMain}
+          ${v.main}
 
           // local -> model変換 -> global -> view変換 -> view
           vLocalPosition = position;
@@ -11752,18 +13539,18 @@ available waveTables:
         // 仕様上はきちんとfalseを入れます。システムサイドでいじる。
         this.fs =
         `#version 300 es
-        precision ${this.fsFloatPrecision}p float;
-        ${this.fsPrecision}
+        ${decl.fs.precision}
+
+        ${f.declaration}
 
         in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
         in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;
-
-        ${this.fsDeclaration}
+        ${decl.fs.varying}
 
         // ----------------------- StandardLight -----------------------//
-        const int DIRECTIONAL_LIGHT_COUNT_MAX = 16;
-        const int POINT_LIGHT_COUNT_MAX = 16;
-        const int SPOT_LIGHT_COUNT_MAX = 16;
+        #define DIRECTIONAL_LIGHT_COUNT_MAX ${this.directionalLightCount}
+        #define POINT_LIGHT_COUNT_MAX ${this.pointLightCount}
+        #define SPOT_LIGHT_COUNT_MAX ${this.spotLightCount}
 
         struct punctualLight{
           vec3 diffuse;
@@ -11772,7 +13559,7 @@ available waveTables:
 
         // 方向
         struct directionalLight{
-          vec3 viewLightDirection;
+          vec3 direction;
           vec3 diffuseColor;
           vec3 specularColor;
           float specularPower;
@@ -11780,7 +13567,7 @@ available waveTables:
 
         // 位置と距離
         struct pointLight{
-          vec3 viewLightPosition;
+          vec3 position;
           float distance;
           float decay;
           vec3 diffuseColor;
@@ -11790,8 +13577,8 @@ available waveTables:
 
         // 位置と方向と距離
         struct spotLight{
-          vec3 viewLightDirection;
-          vec3 viewLightPosition;
+          vec3 direction;
+          vec3 position;
           float distance;
           float decay;
           float coneCos;
@@ -11800,9 +13587,24 @@ available waveTables:
           float specularPower;
         };
 
+        // punctual light
+        uniform directionalLight uDirectionalLights[DIRECTIONAL_LIGHT_COUNT_MAX];
+        uniform pointLight uPointLights[POINT_LIGHT_COUNT_MAX];
+        uniform spotLight uSpotLights[SPOT_LIGHT_COUNT_MAX];
+
+        // light count
+        uniform int uDirectionalLightCount;
+        uniform int uPointLightCount;
+        uniform int uSpotLightCount;
+
+        uniform bool uNoLight;
+        uniform vec3 uAmbientColor;
+
+        ${decl.fs.uniform}
+
         punctualLight directional(in directionalLight light, in vec3 fromPointToEye, in vec3 viewNormal){
           // diffuse.
-          vec3 l = normalize(light.viewLightDirection);
+          vec3 l = normalize(light.direction);
           float diffuseFactor = max(0.1, dot(l, viewNormal));
 
           // specular.
@@ -11818,12 +13620,12 @@ available waveTables:
 
         punctualLight point(in pointLight light, in vec3 fromPointToEye, in vec3 viewPosition, in vec3 viewNormal){
           // distance factor.
-          float d = length(light.viewLightPosition - viewPosition);
+          float d = length(light.position - viewPosition);
           // 逆二乗則にしよう。それでdecayは係数にしよう。デフォルトは1で。
           float distanceFactor = light.decay * min(1.0, pow(light.distance/(1e-6 + d), 2.0));
 
           //  diffuse.
-          vec3 l = normalize(light.viewLightPosition - viewPosition);
+          vec3 l = normalize(light.position - viewPosition);
           float diffuseFactor = max(0.1, dot(l, viewNormal));
 
           // specular.
@@ -11840,16 +13642,16 @@ available waveTables:
 
         punctualLight spot(in spotLight light, in vec3 fromPointToEye, in vec3 viewPosition, in vec3 viewNormal){
           // distance factor.
-          float d = length(light.viewLightPosition - viewPosition);
+          float d = length(light.position - viewPosition);
           // 逆二乗則にしよう。それでdecayは係数にしよう。デフォルトは1で。
           float distanceFactor = light.decay * min(1.0, pow(light.distance/(1e-6 + d), 2.0));
 
           // diffuse.
-          vec3 l = normalize(light.viewLightPosition - viewPosition);
+          vec3 l = normalize(light.position - viewPosition);
           float diffuseFactor = max(0.1, dot(l, viewNormal));
 
           // angle factor
-          vec3 ld = normalize(light.viewLightDirection);
+          vec3 ld = normalize(light.direction);
           float angleFactor = smoothstep(light.coneCos, 1.0, dot(l, ld));
 
           // specular.
@@ -11863,20 +13665,11 @@ available waveTables:
           c.specular = factor * light.specularColor * specularFactor;
           return c;
         }
-
-        uniform int uDirectionalLightCount;
-        uniform directionalLight uDirectionalLights[DIRECTIONAL_LIGHT_COUNT_MAX];
-        uniform int uPointLightCount;
-        uniform pointLight uPointLights[POINT_LIGHT_COUNT_MAX];
-        uniform int uSpotLightCount;
-        uniform spotLight uSpotLights[SPOT_LIGHT_COUNT_MAX];
-        uniform bool uNoLight;
-        uniform vec3 uAmbientColor;
         // ----------------------- StandardLightここまで -----------------------//
 
-        ${this.fsGlobal}
+        ${f.global}
 
-        ${this.colorInput}
+        ${f.outlet}
 
         void main(){
           vec3 viewPosition = vViewPosition;
@@ -11890,7 +13683,7 @@ available waveTables:
           vec3 materialColor = vec3(1.0);
 
           // materialColorをいじるパート
-          ${this.fsMain}
+          ${f.main}
 
           vec3 diffuse = vec3(0.0);
           vec3 specular = vec3(0.0);
@@ -11922,8 +13715,8 @@ available waveTables:
           }
 
           // そのあとポストプロセス（透明度とか？）
-          ${this.postProcess}
-          ${this.colorOutput}
+          ${f.post}
+          ${f.output}
         }
         `;
       }
@@ -11934,36 +13727,50 @@ available waveTables:
     // Standardと仕組みが違うんですが、ここだけ...
     class PBRLightingShader extends ShaderPrototype{
       constructor(options = {}){
-        super();
+        super(options);
+        const {lightCounts = {}} = options;
+        const {directional = 4, point = 4, spot = 4} = lightCounts;
+        this.directionalLightCount = directional;
+        this.pointLightCount = point;
+        this.spotLightCount = spot;
+
+        this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
+        this.initDescriptors();
       }
       createShader(){
+        const decl = this.createPreDeclaration();
+        const {vs:v, fs:f} = this.descriptors;
+
         this.vs =
         `#version 300 es
-        ${this.vsPrecision}
+        ${decl.vs.precision}
+
+        ${v.declaration}
 
         layout (location = 0) in vec3 aPosition;
         layout (location = 1) in vec3 aNormal;
+        ${decl.vs.attribute}
 
         // positionの生データ,model変換後のposition,modelView変換後のposition
         out vec3 vLocalPosition; out vec3 vGlobalPosition; out vec3 vViewPosition; out vec4 vNormalDeviceCoordinate;
         // normalの生データ,model変換後のnormal,modelView変換後のnormal
         out vec3 vLocalNormal; out vec3 vGlobalNormal; out vec3 vViewNormal;
+        ${decl.vs.varying}
 
         uniform mat4 uModelMatrix;
         uniform mat4 uModelViewMatrix;
         uniform mat4 uProjMatrix;
         uniform mat3 uNormalMatrix; uniform mat3 uModelNormalMatrix;
+        ${decl.vs.uniform}
 
-        ${this.vsDeclaration}
-
-        ${this.vsGlobal}
+        ${v.global}
 
         void main(){
           vec3 position = aPosition;
           vec3 normal = aNormal;
 
           // position,normalを改変するためのプリプロセス
-          ${this.vsMain}
+          ${v.main}
 
           // local -> model変換 -> global -> view変換 -> view
           vLocalPosition = position;
@@ -11980,19 +13787,20 @@ available waveTables:
           vGlobalNormal = normalize(normal * uModelNormalMatrix);
           vViewNormal = normalize(normal * uNormalMatrix);
 
-          gl_Position = normalDeviceCoordinate;
+          ${v.post}
+          ${v.output}
         }
         `;
 
         this.fs =
         `#version 300 es
-        precision ${this.fsFloatPrecision}p float;
-        ${this.fsPrecision}
+        ${decl.fs.precision}
+
+        ${f.declaration}
 
         in vec3 vLocalPosition; in vec3 vGlobalPosition; in vec3 vViewPosition; in vec4 vNormalDeviceCoordinate;
         in vec3 vLocalNormal; in vec3 vGlobalNormal; in vec3 vViewNormal;
-
-        ${this.fsDeclaration}
+        ${decl.fs.varying}
 
         // ----------------------- PBRLight -----------------------//
         // 使うものだけ
@@ -12001,7 +13809,9 @@ available waveTables:
         #define EPSILON 1e-6
         #define saturate(a) clamp( a, 0.0, 1.0 ) // 計算で使う
 
-        #define LIGHT_MAX 16
+        #define DIRECTIONAL_LIGHT_COUNT_MAX ${this.directionalLightCount}
+        #define POINT_LIGHT_COUNT_MAX ${this.pointLightCount}
+        #define SPOT_LIGHT_COUNT_MAX ${this.spotLightCount}
 
         // 入射光
         struct IncidentLight {
@@ -12040,13 +13850,13 @@ available waveTables:
         // 点光源とスポットライトもモデルビューで位置をビューに落としておくこと
 
         // 平行光
-        struct DirectionalLight {
+        struct directionalLight {
           vec3 direction;
           vec3 color;
         };
 
         // 点光源
-        struct PointLight {
+        struct pointLight {
           vec3 position;
           vec3 color;
           float distance;
@@ -12059,7 +13869,7 @@ available waveTables:
         // coneCosぎりぎりで0ですね
         // smoothstepってのはそういうこと
         // なお送る前にcosに変換していますね...
-        struct SpotLight {
+        struct spotLight {
           vec3 position;
           vec3 direction;
           vec3 color;
@@ -12069,16 +13879,24 @@ available waveTables:
           float penumbraCos;
         };
 
-        // punctual light 3兄弟
-        // だんご！！
-        uniform DirectionalLight uDirectionalLights[LIGHT_MAX];
-        uniform PointLight uPointLights[LIGHT_MAX];
-        uniform SpotLight uSpotLights[LIGHT_MAX];
+        // punctual light
+        uniform directionalLight uDirectionalLights[DIRECTIONAL_LIGHT_COUNT_MAX];
+        uniform pointLight uPointLights[POINT_LIGHT_COUNT_MAX];
+        uniform spotLight uSpotLights[SPOT_LIGHT_COUNT_MAX];
 
-        // ライトの数をユニフォーム変数として登録してるね。
+        // light count
         uniform int uDirectionalLightCount;
         uniform int uPointLightCount;
         uniform int uSpotLightCount;
+
+        // albedoはmaterialColor扱いにする形で。あとambientにしよう。
+        uniform float uMetallic;
+        uniform float uRoughness;
+
+        uniform vec3 uAmbientColor;
+        uniform bool uNoLight;
+
+        ${decl.fs.uniform}
 
         // 光が届くときにtrueを返す。pointLightとspotLightで使う
         bool testLightInRange(const in float lightDistance, const in float cutoffDistance) {
@@ -12097,10 +13915,10 @@ available waveTables:
 
         // 平行光の放射照度ファクター
         // 平行なので必ず届くし、色と方向があるだけ。
-        void getDirectionalDirectLightIrradiance(const in DirectionalLight directionalLight, const in GeometricContext geometry, out IncidentLight directLight) {
-          directLight.color = directionalLight.color;
+        void getDirectionalDirectLightIrradiance(const in directionalLight light, const in GeometricContext geometry, out IncidentLight directLight) {
+          directLight.color = light.color;
 
-          directLight.direction = directionalLight.direction;
+          directLight.direction = light.direction;
 
           directLight.visible = true;
         }
@@ -12108,14 +13926,14 @@ available waveTables:
         // 点光源の放射照度ファクター
         // 位置により届くかどうかや減衰の度合いが決まる
         // より点光源らしいふるまいとなっている
-        void getPointDirectLightIrradiance(const in PointLight pointLight, const in GeometricContext geometry, out IncidentLight directLight) {
-          vec3 L = pointLight.position - geometry.position;
+        void getPointDirectLightIrradiance(const in pointLight light, const in GeometricContext geometry, out IncidentLight directLight) {
+          vec3 L = light.position - geometry.position;
           directLight.direction = normalize(L);
 
           float lightDistance = length(L);
-          if (testLightInRange(lightDistance, pointLight.distance)) {
-            directLight.color = pointLight.color;
-            directLight.color *= punctualLightIntensityToIrradianceFactor(lightDistance, pointLight.distance, pointLight.decay);
+          if (testLightInRange(lightDistance, light.distance)) {
+            directLight.color = light.color;
+            directLight.color *= punctualLightIntensityToIrradianceFactor(lightDistance, light.distance, light.decay);
             directLight.visible = true;
           } else {
             directLight.color = vec3(0.0);
@@ -12126,17 +13944,17 @@ available waveTables:
         // coneCosで0, penumbraCosで1ですね。間で0～1ですね。つまり充分傘の内側に
         // 居れば1だということ。
 
-        void getSpotDirectLightIrradiance(const in SpotLight spotLight, const in GeometricContext geometry, out IncidentLight directLight) {
-          vec3 L = spotLight.position - geometry.position;
+        void getSpotDirectLightIrradiance(const in spotLight light, const in GeometricContext geometry, out IncidentLight directLight) {
+          vec3 L = light.position - geometry.position;
           directLight.direction = normalize(L);
 
           float lightDistance = length(L);
-          float angleCos = dot(directLight.direction, spotLight.direction);
+          float angleCos = dot(directLight.direction, light.direction);
 
-          if (all(bvec2(angleCos > spotLight.coneCos, testLightInRange(lightDistance, spotLight.distance)))) {
-            float spotEffect = smoothstep(spotLight.coneCos, spotLight.penumbraCos, angleCos);
-            directLight.color = spotLight.color;
-            directLight.color *= spotEffect * punctualLightIntensityToIrradianceFactor(lightDistance, spotLight.distance, spotLight.decay);
+          if (all(bvec2(angleCos > light.coneCos, testLightInRange(lightDistance, light.distance)))) {
+            float spotEffect = smoothstep(light.coneCos, light.penumbraCos, angleCos);
+            directLight.color = light.color;
+            directLight.color *= spotEffect * punctualLightIntensityToIrradianceFactor(lightDistance, light.distance, light.decay);
             directLight.visible = true;
           } else {
             directLight.color = vec3(0.0);
@@ -12202,18 +14020,11 @@ available waveTables:
           reflectedLight.directDiffuse += irradiance * DiffuseBRDF(material.diffuseColor);
           reflectedLight.directSpecular += irradiance * SpecularBRDF(directLight, geometry, material.specularColor, material.specularRoughness);
         }
-
-        // albedoはmaterialColor扱いにする形で。あとambientにしよう。
-        uniform float uMetallic;
-        uniform float uRoughness;
-
-        uniform vec3 uAmbientColor;
-        uniform bool uNoLight;
         // ----------------------- PBRLightここまで -----------------------//
 
-        ${this.fsGlobal}
+        ${f.global}
 
-        ${this.colorInput}
+        ${f.outlet}
         void main(){
           // この辺はStandardLightと一緒ですが、実は逆で、こっちからあっちに逆輸入したんですよね。
           GeometricContext geometry;
@@ -12228,7 +14039,7 @@ available waveTables:
           vec3 albedo = vec3(1.0);
 
           // albedoをいじるパート
-          ${this.fsMain}
+          ${f.main}
 
           vec3 diffuse = vec3(0.0);
           vec3 specular = vec3(0.0);
@@ -12253,14 +14064,14 @@ available waveTables:
             ReflectedLight reflectedLight = ReflectedLight(vec3(0.0), vec3(0.0));
 
             // directional light
-            for (int i=0; i<LIGHT_MAX; ++i) {
+            for (int i=0; i<DIRECTIONAL_LIGHT_COUNT_MAX; ++i) {
               if (i >= uDirectionalLightCount) break;
               getDirectionalDirectLightIrradiance(uDirectionalLights[i], geometry, directLight);
               RE_Direct(directLight, geometry, material, reflectedLight);
             }
 
             // point light
-            for (int i=0; i<LIGHT_MAX; ++i) {
+            for (int i=0; i<POINT_LIGHT_COUNT_MAX; ++i) {
               if (i >= uPointLightCount) break;
               getPointDirectLightIrradiance(uPointLights[i], geometry, directLight);
               if (directLight.visible) {
@@ -12269,7 +14080,7 @@ available waveTables:
             }
 
             // spot light
-            for (int i=0; i<LIGHT_MAX; ++i) {
+            for (int i=0; i<SPOT_LIGHT_COUNT_MAX; ++i) {
               if (i >= uSpotLightCount) break;
               getSpotDirectLightIrradiance(uSpotLights[i], geometry, directLight);
               if (directLight.visible) {
@@ -12283,19 +14094,21 @@ available waveTables:
           }
 
           // そのあとポストプロセス（透明度とか？）
-          ${this.postProcess}
-          ${this.colorOutput}
+          ${f.post}
+          ${f.output}
         }
         `
       }
     }
 
-    // カメラとオビコンが備わっているのです。そこら辺はまあ、いろいろいじれるようにしたいところ。
-    // ドローコール要らないかもな。カメラだけいろいろやってくれればいいよ。
-    // プログラムだけ用意してくれれば良いかなって感じですかね...
-    // めんどうだろ。だからドローコールやVAOは直接用意すればいいよ。
+    // カメラ部分を分離して、組み込む形にする。
+    // キャンバスもカメラでしか使わないのでこっちでやる
+    // Render3Dのupdateは廃止し、viewMatrixの準備はsetMatricesでやる。そうしないと複数のRender3Dを使い分ける際に不便。
+    // こっちでupdateする。autoResetもこっちで一元管理する。
+    // さらにactiveを用意してactiveでない場合はautoReset内のリセットイベントが発生しないようにする
+    // カメラの切り替え用。
 
-    // canvasは必須でいいと思う。
+    // canvasは必須ではないがccを楽に用意するなら必須
     // リサイズやリセットはccを外部的に用意すればいかようにもできる
     // easySetting:デフォルトはnoneで、perse, ortho, axis, freeを指定する。
     // /で区切る。
@@ -12320,14 +14133,17 @@ available waveTables:
     // たとえばcamだけきちんと用意してccは軸とか適当でいいよ...いつものy上でいいよ...の場合、'free'とか'axis'で済む。
     // z上とかがいい場合はきちんと用意しましょう！！
     // 文字列の指定の仕方によってはnullになるんで、その場合は上記のどれかになる。
-    class Render3D extends RenderSystem{
-      constructor(gl, params = {}){
-        super(gl);
+    class CameraSystem{
+      constructor(params = {}){
+        // cvsは必須ではない。ただアスペクト比が考慮されないところだけが問題。
+        // それが困る場合はきちんとカメラを整備する。
         const {
-          cvs = null, cam = null, cc = null, easySetting = 'default',
+          cvs = null,
+          cam = null, cc = null, easySetting = 'default',
           autoReset = false
         } = params;
         this.cvs = cvs;
+
         // camに文字列を許す。ただしデフォルトの場合だけね。
         if(typeof(cam) === 'string'){
           // 変な文字列の場合はnull.
@@ -12339,7 +14155,7 @@ available waveTables:
         if(this.cam !== null && typeof(cc) === 'string'){
           // 変な文字列の場合はnull.
           if(cc === 'none' || cc === 'axis' || cc === 'free'){
-            this.cc = new CameraController(cvs, {}, {
+            this.cc = new CameraController(this.cvs, {}, {
               cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:cc
             });
           }else{
@@ -12348,7 +14164,7 @@ available waveTables:
         }else{
           this.cc = cc;
         }
-        const easySettingKey = Render3D.createEasySettingKey(easySetting);
+        const easySettingKey = CameraSystem.createEasySettingKey(easySetting);
 
         if(this.cam === null){
           if(this.cc === null){
@@ -12358,7 +14174,7 @@ available waveTables:
             // fov:Math.PI/3, aspect:WIW/WIH, near:0.01, far:400
             this.cam = (easySettingKey.cam === 'perse' ? new QCameraPerse() : new QCameraOrtho());
             if(easySettingKey.cc !== 'none'){
-              this.cc = new CameraController(cvs, {}, {
+              this.cc = new CameraController(this.cvs, {}, {
                 cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:easySettingKey.cc
               });
             }
@@ -12368,7 +14184,7 @@ available waveTables:
             this.cam = new QCameraPerse();
             if(this.cc === 'axis' || this.cc === 'free'){
               const rotationMode = this.cc;
-              this.cc = new CameraController(cvs, {}, {
+              this.cc = new CameraController(this.cvs, {}, {
                 cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:rotationMode
               });
             }else{
@@ -12377,14 +14193,14 @@ available waveTables:
           }
         }
 
-        this.modelMatrix = new MT4();
-        this.viewMatrix = this.cam.getView();
-        this.modelViewMatrix = this.viewMatrix.multM(this.modelMatrix, true);
+        this.active = true;
         this.autoReset = (this.cc !== null && autoReset);
         if(this.autoReset){
           this.resetter = {duration:20, current:20};
-          const IR = new Inspector(cvs, {dblclick:true});
+          const IR = new Inspector(this.cvs, {dblclick:true});
           this.cameraReset = ()=>{
+            // activeでない場合、cameraResetは機能しないとする。
+            if(!this.active) return;
             if(this.resetter.current === this.resetter.duration){
               this.cam.saveState("tmp");
               this.cc.pause();
@@ -12395,12 +14211,24 @@ available waveTables:
           IR.add("dbltap", this.cameraReset);
         }
       }
-      model(){
-        // 好きに。
-        return this.modelMatrix;
+      activate(){
+        this.active = true;
+        return this;
+      }
+      inActivate(){
+        this.active = false;
+        return this;
+      }
+      getCam(){
+        return this.cam;
+      }
+      getCC(){
+        return this.cc;
       }
       update(){
-        // CameraControllerのupdateとビュー行列の更新
+        if(!this.active) return;
+        // CameraControllerのupdate
+        // ビュー行列の更新はRender3Dに委譲
         // autoResetの場合はダブルクリックでリセットする
         if(this.autoReset){
           if(this.resetter.current < this.resetter.duration){
@@ -12415,22 +14243,7 @@ available waveTables:
         }
         // ccを使わない場合は何もしない。
         if(this.cc !== null){ this.cc.update(); }
-
-        this.viewMatrix.set(this.cam.getView());
-        return this;
-      }
-      setMatrices(){
-        const gl = this.gl;
-        const pg = this.currentShader.program;
-        this.modelViewMatrix.set(this.viewMatrix).multM(this.modelMatrix);
-
-        uniformX(gl, pg, "matrix4fv", "uProjMatrix", this.cam.getProj().m);
-        uniformX(gl, pg, "matrix4fv", "uModelMatrix", this.modelMatrix.m);
-        uniformX(gl, pg, "matrix4fv", "uModelViewMatrix", this.modelViewMatrix.m);
-        uniformX(gl, pg, "matrix3fv", "uNormalMatrix", this.modelViewMatrix.getInverseTranspose3x3());
-        uniformX(gl, pg, "matrix3fv", "uModelNormalMatrix", this.modelMatrix.getInverseTranspose3x3());
-
-        return this;
+        return;
       }
       static createEasySettingKey(key = 'default'){
         if(key === 'default'){ return {cam:'perse', cc:'none'}; }
@@ -12448,13 +14261,187 @@ available waveTables:
       }
     }
 
+    // カメラとオビコンはCameraSystemという形で別途用意して組み込む
+    // そうしないと複数のRender3Dを使い分ける際に不便なので
+    class Render3D extends RenderSystem{
+      constructor(gl, params = {}){
+        super(gl);
+        const {
+          cameraSystem = null
+        } = params;
+        this.cameraSystem = (cameraSystem === null ? new CameraSystem() : cameraSystem);
+        this.cam = this.cameraSystem.getCam();
+
+        this.modelMatrix = new MT4();
+        this.viewMatrix = this.cam.getView();
+        this.modelViewMatrix = this.viewMatrix.multM(this.modelMatrix, true);
+      }
+      model(){
+        // 好きに。
+        return this.modelMatrix;
+      }
+      setMatrices(){
+        const gl = this.gl;
+        const pg = this.currentProgram;
+        //const pg = this.currentShader.program;
+        // viewMatrixはsetMatricesでやろう
+        this.viewMatrix.set(this.cam.getView());
+        this.modelViewMatrix.set(this.viewMatrix).multM(this.modelMatrix);
+
+        pg.setUniform("uProjMatrix", this.cam.getProj());
+        pg.setUniform("uModelMatrix", this.modelMatrix);
+        pg.setUniform("uModelViewMatrix", this.modelViewMatrix);
+        pg.setUniform("uNormalMatrix", this.modelViewMatrix.getInverseTranspose3x3());
+        pg.setUniform("uModelNormalMatrix", this.modelMatrix.getInverseTranspose3x3());
+
+        return this;
+      }
+    }
+
     class NoLightRender3D extends Render3D{
       constructor(gl, params = {}){
         super(gl, params);
         this.shaderFactory = (options) => { return new NoLightShader(options); }
-        this.addShader('default');
+        this.addShader();
       }
     }
+
+    // ------------------------light----------------------- //
+    class PunctualLight{
+      constructor(){
+        this.active = true;
+        this.viewMode = false; // trueにするとビュー補正をやめる。やめるので、ビュー視点での設定になる。directionとposition両方。
+      }
+      activate(){
+        this.active = true;
+      }
+      inActivate(){
+        this.active = false;
+      }
+      switchActiveState(){
+        this.active = !this.active;
+      }
+      isActive(){
+        return this.active;
+      }
+      setViewMode(isViewMode = false){
+        // true/falseで切り替え
+        this.viewMode = isViewMode;
+      }
+      setParam(params = {}){
+        // constructorで自クラスにアクセスできる。もちろんパラメータも抽出できる。
+        for(const key of this.constructor.Parameters){
+          if(params[key] === undefined) continue;
+          this[`set_${key}`] = params[key];
+        }
+        return this;
+      }
+      setLight(pg, params = {}){
+        const {cam = null, name = 'uLight'} = params;
+        const prevDirection = (this.direction instanceof Vecta ? this.direction.copy() : null);
+        const prevPosition = (this.position instanceof Vecta ? this.position.copy() : null);
+
+        if(cam !== null && !this.viewMode){
+          const view = cam.getView();
+          if(prevDirection !== null){ view.multN(this.direction); }
+          if(prevPosition !== null){ view.multV(this.position); }
+        }
+        pg.setUniform(name, this);
+        if(prevDirection !== null){ this.direction.set(prevDirection); }
+        if(prevPosition !== null){ this.position.set(prevPosition); }
+      }
+      set set_direction(value){ this.direction = Vecta.create(value); }
+      set set_position(value){ this.position = Vecta.create(value); }
+      set set_distance(value){ this.distance = value; }
+      set set_decay(value){ this.decay = value; }
+      set set_coneCos(value){ this.coneCos = value; }
+      set set_penumbraCos(value){ this.penumbraCos = value; }
+      set set_color(value){ this.color = coulour3(value); }
+      set set_diffuseColor(value){ this.diffuseColor = coulour3(value); }
+      set set_specularColor(value){ this.specularColor = coulour3(value); }
+      set set_specularPower(value){ this.specularPower = value; }
+    }
+
+    class StandardDirectionalLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.direction = Vecta.create(0,0,1);
+        this.diffuseColor = [0.5,0.5,0.5];
+        this.specularColor = [1,1,1];
+        this.specularPower = 20;
+        this.setParam(params);
+      }
+    }
+    StandardDirectionalLight.Parameters = ['direction', 'diffuseColor', 'specularColor', 'specularPower'];
+
+    class StandardPointLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.position = Vecta.create(0,0,3);
+        this.distance = 3;
+        this.decay = 1;
+        this.diffuseColor = [0.5, 0.5, 0.5];
+        this.specularColor = [1,1,1];
+        this.specularPower = 20;
+        this.setParam(params);
+      }
+    }
+    StandardPointLight.Parameters = ['position', 'distance', 'decay', 'diffuseColor', 'specularColor', 'specularPower'];
+
+    class StandardSpotLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.direction = Vecta.create(0,0,1);
+        this.position = Vecta.create(0,0,6);
+        this.distance = 6;
+        this.decay = 1;
+        this.coneCos = 0.95;
+        this.diffuseColor = [0.5, 0.5, 0.5];
+        this.specularColor = [1,1,1];
+        this.specularPower = 20;
+        this.setParam(params);
+      }
+    }
+    StandardSpotLight.Parameters = ['direction', 'position', 'distance', 'decay', 'coneCos', 'diffuseColor', 'specularColor', 'specularPower'];
+
+    class PBRDirectionalLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.direction = Vecta.create(0,0,1);
+        this.color = [0.5, 0.5, 0.5];
+        this.setParam(params);
+      }
+    }
+    PBRDirectionalLight.Parameters = ['direction', 'color'];
+
+    class PBRPointLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.position = Vecta.create(0,0,3);
+        this.distance = 20;
+        this.decay = 1;
+        this.color = [0.5,0.5,0.5];
+        this.setParam(params);
+      }
+    }
+    PBRPointLight.Parameters = ['position', 'distance', 'decay', 'color'];
+
+    class PBRSpotLight extends PunctualLight{
+      constructor(params = {}){
+        super();
+        this.direction = Vecta.create(0,0,1);
+        this.position = Vecta.create(0,0,3);
+        this.distance = 10;
+        this.decay = 1;
+        this.coneCos = 0.5;
+        this.penumbraCos = 1;
+        this.color = [0.5, 0.5, 0.5];
+        this.setParam(params);
+      }
+    }
+    PBRSpotLight.Parameters = ['direction', 'position', 'distance', 'decay', 'coneCos', 'penumbraCos', 'color']
+
+    // lighting Renderers.
 
     class LightRender3D extends Render3D{
       constructor(gl, params = {}){
@@ -12467,13 +14454,41 @@ available waveTables:
         this.ambientLight = [0.1, 0.1, 0.1];
         this.useLight = true;
       }
-      light(type = "directional", slotIndex = 0, params = {}){
-        return this;
-      }
       setAmbient(...args){
         this.ambientLight = coulour3(...args);
         return this;
       }
+      setDirectional(l, slotIndex = 0){
+        // 同じスロットの場合は上書き
+        this.lights.directional[slotIndex] = l;
+        return this;
+      }
+      setPoint(l, slotIndex = 0){
+        this.lights.point[slotIndex] = l;
+        return this;
+      }
+      setSpot(l, slotIndex = 0){
+        this.lights.spot[slotIndex] = l;
+        return this;
+      }
+      /*
+      light(type = "directional", slotIndex = 0, params = {}){
+        if(this.lights[type][slotIndex] === null){
+          // createLightの各々の項目の内容がレンダラーにより異なるので、
+          // そこら辺の多様性を表現するためにthis.constructorを用いている。そこ以外すべて同じなので無駄を省きたい。
+          // rendererをconstructorで渡し、それぞれが持つ静的メソッドを用いている。
+          this.lights[type][slotIndex] = LightRender3D.createLight(this.constructor, type, params);
+        }else{
+          LightRender3D.configLight(this.lights[type][slotIndex], params);
+        }
+        const l = this.lights[type][slotIndex];
+        // 方向表現を文字列でも可能にする
+        if(l.direction !== undefined){
+          l.direction = LightRender3D.perseLightDirection(l.direction, this.cam);
+        }
+        return this;
+      }
+      */
       lightOn(){
         this.useLight = true;
         return this;
@@ -12486,10 +14501,123 @@ available waveTables:
         this.useLight = !this.useLight;
         return this;
       }
+      setPunctualLights(){
+        const {cam} = this;
+        //const {gl, viewMatrix} = this;
+        const pg = this.currentProgram;
+
+        let directionalLightCount = 0;
+        for(let i=0; i<this.lights.directional.length; i++){
+          const l = this.lights.directional[i];
+          if(l === null) continue;
+          if(!l.isActive()) continue;
+          l.setLight(pg, {cam, name:`uDirectionalLights[${directionalLightCount}]`});
+          //if(!l.use) continue;
+          //const curDirection = l.direction.copy();
+          //viewMatrix.multN(l.direction);
+          //pg.setUniform(`uDirectionalLights[${directionalLightCount}]`, l);
+          //l.direction.set(curDirection);
+          directionalLightCount++;
+        }
+        pg.setUniform("uDirectionalLightCount", directionalLightCount);
+
+        let pointLightCount = 0;
+        for(let i=0; i<this.lights.point.length; i++){
+          const l = this.lights.point[i];
+          if(l === null) continue;
+          if(!l.isActive()) continue;
+          l.setLight(pg, {cam, name:`uPointLights[${pointLightCount}]`});
+          //if(!l.use) continue;
+          //const curPosition = l.position.copy();
+          //viewMatrix.multV(l.position);
+          //pg.setUniform(`uPointLights[${pointLightCount}]`, l);
+          //l.position.set(curPosition);
+          pointLightCount++;
+        }
+        pg.setUniform("uPointLightCount", pointLightCount);
+
+        let spotLightCount = 0;
+        for(let i=0; i<this.lights.spot.length; i++){
+          const l = this.lights.spot[i];
+          if(l === null) continue;
+          if(!l.isActive()) continue;
+          l.setLight(pg, {cam, name:`uSpotLights[${spotLightCount}]`});
+          //if(!l.use) continue;
+          //const curDirection = l.direction.copy();
+          //const curPosition = l.position.copy();
+          //viewMatrix.multN(l.direction);
+          //viewMatrix.multV(l.position);
+          //pg.setUniform(`uSpotLights[${spotLightCount}]`, l);
+          //l.direction.set(curDirection);
+          //l.position.set(curPosition);
+          spotLightCount++;
+        }
+        pg.setUniform("uSpotLightCount", spotLightCount);
+      }
       setLights(){
         // uniform関連
         return this;
       }
+      /*
+      static perseLightDirection(direction, cam){
+        // 基本これ
+        if(direction instanceof Vecta){ return direction; }
+        // 配列OK
+        if(Array.isArray(direction)){
+          return Vecta.create(direction);
+        }
+        // 文字列
+        // つまりこれをやめる
+        if(typeof(direction) === 'string'){
+          switch(direction){
+            case 'x': return Vecta.create(1,0,0);
+            case 'y': return Vecta.create(0,1,0);
+            case 'z': return Vecta.create(0,0,1);
+            case 'front':
+            case 'view_z':
+              return cam.front.copy();
+            case 'side':
+            case 'view_x':
+              return cam.side.copy();
+            case 'up':
+            case 'view_y':
+              return cam.up.copy();
+          }
+        }
+        // default.
+        return Vecta.create(0,0,1);
+      }
+      static createLight(renderer, type = "directional", params = {}){
+        // rendererはStandardLightRender3DだったりPBRLightRender3Dだったりいろいろ。
+        switch(type){
+          case 'directional':
+            return renderer.createDirectionalLight(params);
+          case 'point':
+            return renderer.createPointLight(params);
+          case 'spot':
+            return renderer.createSpotLight(params);
+        }
+        return {};
+      }
+      static configLight(target, params = {}){
+        for(const [key, value] of Object.entries(params)){
+          // directionの場合、色の場合、Vectaの場合、それ以外。
+          if(key === 'direction'){
+            // directionの場合は後でいじる
+            target[key] = value;
+          }else if(key === 'diffuseColor' || key === 'specularColor' || key === 'color'){
+            // Standardならdiffuse/specularColor, PBRならcolor.
+            target[key] = coulour3(value);
+          }else if(target[key] instanceof Vecta){
+            // positionなどのVectaの値
+            target[key].set(value);
+          }else{
+            // それ以外
+            target[key] = value;
+          }
+        }
+      }
+      */
     }
 
     /*
@@ -12505,78 +14633,26 @@ available waveTables:
       constructor(gl, params = {}){
         super(gl, params);
         this.shaderFactory = (options) => { return new StandardLightingShader(options); };
-        this.addShader('default');
+        this.addShader();
       }
-      light(type = "directional", slotIndex = 0, params = {}){
-        if(this.lights[type][slotIndex] === null){
-          this.lights[type][slotIndex] = StandardLightRender3D.createLight(type, params);
-        }else{
-          StandardLightRender3D.configLight(this.lights[type][slotIndex], params);
-        }
+      easyLight(viewMode = true){
+        // viewModeのライトを勝手に作る。白色のdirectional. 面倒な場合のため。
+        const l = new StandardDirectionalLight();
+        l.setViewMode(viewMode);
+        this.setDirectional(l, 0);
         return this;
       }
       setLights(){
-        const {gl, viewMatrix} = this;
-        const pg = this.currentShader.program;
+        if(this.useLight){ this.setPunctualLights(); }
 
-        let directionalLightCount = 0;
-        for(let i=0; i<this.lights.directional.length; i++){
-          const l = this.lights.directional[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const direction = l.direction.copy();
-          viewMatrix.multN(direction);
-          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].viewLightDirection`, ...direction.array());
-          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].diffuseColor`, ...l.diffuseColor);
-          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].specularColor`, ...l.specularColor);
-          uniformX(gl, pg, "1f", `uDirectionalLights[${directionalLightCount}].specularPower`, l.specularPower);
-          directionalLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uDirectionalLightCount", directionalLightCount);
+        const pg = this.currentProgram;
 
-        let pointLightCount = 0;
-        for(let i=0; i<this.lights.point.length; i++){
-          const l = this.lights.point[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const position = l.position.copy();
-          viewMatrix.multV(position);
-          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].viewLightPosition`, ...position.array());
-          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].distance`, l.distance);
-          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].decay`, l.decay);
-          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].diffuseColor`, ...l.diffuseColor);
-          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].specularColor`, ...l.specularColor);
-          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].specularPower`, l.specularPower);
-          pointLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uPointLightCount", pointLightCount);
-
-        let spotLightCount = 0;
-        for(let i=0; i<this.lights.spot.length; i++){
-          const l = this.lights.spot[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const direction = l.direction.copy();
-          const position = l.position.copy();
-          viewMatrix.multN(direction);
-          viewMatrix.multV(position);
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].viewLightDirection`, ...direction.array());
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].viewLightPosition`, ...position.array());
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].distance`, l.distance);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].decay`, l.decay);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].coneCos`, l.coneCos);
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].diffuseColor`, ...l.diffuseColor);
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].specularColor`, ...l.specularColor);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].specularPower`, l.specularPower);
-          spotLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uSpotLightCount", spotLightCount);
-
-        uniformX(gl, pg, "1i", "uNoLight", !this.useLight);
-        uniformX(gl, pg, "3f", "uAmbientColor", ...this.ambientLight);
+        pg.setUniform("uNoLight", !this.useLight);
+        pg.setUniform("uAmbientColor", this.ambientLight);
 
         return this;
       }
+      /*
       static createDirectionalLight(params = {}){
         const l = {};
         const {
@@ -12585,7 +14661,7 @@ available waveTables:
           diffuseColor = [0.5,0.5,0.5], specularColor = [1,1,1], specularPower = 20
         } = params;
         l.use = use;
-        l.direction = Vecta.create(direction);
+        l.direction = direction;
         l.diffuseColor = coulour3(diffuseColor);
         l.specularColor = coulour3(specularColor);
         l.specularPower = specularPower;
@@ -12615,8 +14691,9 @@ available waveTables:
           diffuseColor = [0.5,0.5,0.5], specularColor = [1,1,1], specularPower = 20
         } = params;
         l.use = use;
-        l.direction = Vecta.create(direction);
+        l.direction = direction;
         l.position = Vecta.create(position);
+        l.distance = distance; // こっちも忘れてたわ。
         l.decay = decay;
         l.coneCos = coneCos;
         l.diffuseColor = coulour3(diffuseColor);
@@ -12624,29 +14701,7 @@ available waveTables:
         l.specularPower = specularPower;
         return l;
       }
-      static createLight(type = "directional", params = {}){
-        switch(type){
-          case 'directional':
-            return this.createDirectionalLight(params);
-          case 'point':
-            return this.createPointLight(params);
-          case 'spot':
-            return this.createSpotLight(params);
-        }
-        return {};
-      }
-      static configLight(target, params = {}){
-        for(const [key, value] of Object.entries(params)){
-          // Vectaの場合、色の場合、それ以外。
-          if(target[key] instanceof Vecta){
-            target[key].set(value);
-          }else if(key === 'diffuseColor' || key === 'specularColor'){
-            target[key] = coulour3(value);
-          }else{
-            target[key] = value;
-          }
-        }
-      }
+      */
     }
 
     // PBRLight
@@ -12654,7 +14709,7 @@ available waveTables:
       constructor(gl, params = {}){
         super(gl, params);
         this.shaderFactory = (options) => { return new PBRLightingShader(options); };
-        this.addShader('default');
+        this.addShader();
         this.pbrParams = {metallic:0.5, roughness:0.5};
       }
       metallic(v = 0.5){
@@ -12665,74 +14720,27 @@ available waveTables:
         this.pbrParams.roughness = v;
         return this;
       }
-      light(type = "directional", slotIndex = 0, params = {}){
-        if(this.lights[type][slotIndex] === null){
-          this.lights[type][slotIndex] = PBRLightRender3D.createLight(type, params);
-        }else{
-          PBRLightRender3D.configLight(this.lights[type][slotIndex], params);
-        }
+      easyLight(viewMode = true){
+        // viewModeのライトを勝手に作る。白色のdirectional. 面倒な場合のため。
+        const l = new PBRDirectionalLight();
+        l.setViewMode(viewMode);
+        this.setDirectional(l, 0);
         return this;
       }
       setLights(){
-        const {gl, viewMatrix} = this;
-        const pg = this.currentShader.program;
+        if(this.useLight){ this.setPunctualLights(); }
 
-        let directionalLightCount = 0;
-        for(let i=0; i<this.lights.directional.length; i++){
-          const l = this.lights.directional[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const direction = l.direction.copy();
-          viewMatrix.multN(direction);
-          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].direction`, ...direction.array());
-          uniformX(gl, pg, "3f", `uDirectionalLights[${directionalLightCount}].color`, ...l.color);
-          directionalLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uDirectionalLightCount", directionalLightCount);
+        const pg = this.currentProgram;
 
-        let pointLightCount = 0;
-        for(let i=0; i<this.lights.point.length; i++){
-          const l = this.lights.point[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const position = l.position.copy();
-          viewMatrix.multV(position);
-          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].position`, ...position.array());
-          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].distance`, l.distance);
-          uniformX(gl, pg, "1f", `uPointLights[${pointLightCount}].decay`, l.decay);
-          uniformX(gl, pg, "3f", `uPointLights[${pointLightCount}].color`, ...l.color);
-          pointLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uPointLightCount", pointLightCount);
+        pg.setUniform("uNoLight", !this.useLight);
+        pg.setUniform("uAmbientColor", this.ambientLight);
 
-        let spotLightCount = 0;
-        for(let i=0; i<this.lights.spot.length; i++){
-          const l = this.lights.spot[i];
-          if(l === null) continue;
-          if(!l.use) continue;
-          const direction = l.direction.copy();
-          const position = l.position.copy();
-          viewMatrix.multN(direction);
-          viewMatrix.multV(position);
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].direction`, ...direction.array());
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].position`, ...position.array());
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].distance`, l.distance);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].decay`, l.decay);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].coneCos`, l.coneCos);
-          uniformX(gl, pg, "1f", `uSpotLights[${spotLightCount}].penumbraCos`, l.penumbraCos);
-          uniformX(gl, pg, "3f", `uSpotLights[${spotLightCount}].color`, ...l.color);
-          spotLightCount++;
-        }
-        uniformX(gl, pg, "1i", "uSpotLightCount", spotLightCount);
-
-        uniformX(gl, pg, "1i", "uNoLight", !this.useLight);
-        uniformX(gl, pg, "3f", "uAmbientColor", ...this.ambientLight);
-
-        uniformX(gl, pg, "1f", "uMetallic", this.pbrParams.metallic);
-        uniformX(gl, pg, "1f", "uRoughness", this.pbrParams.roughness);
+        pg.setUniform("uMetallic", this.pbrParams.metallic);
+        pg.setUniform("uRoughness", this.pbrParams.roughness);
 
         return this;
       }
+      /*
       static createDirectionalLight(params = {}){
         const l = {};
         const {
@@ -12741,7 +14749,7 @@ available waveTables:
           color = [0.5,0.5,0.5]
         } = params;
         l.use = use;
-        l.direction = Vecta.create(direction);
+        l.direction = direction;
         l.color = coulour3(color);
         return l;
       }
@@ -12767,7 +14775,8 @@ available waveTables:
           distance = 10, decay = 1, coneCos = 0.5, penumbraCos = 1, color = [0.5,0.5,0.5]
         } = params;
         l.use = use;
-        l.direction = Vecta.create(direction);
+        l.direction = direction;
+        //l.direction = Vecta.create(direction);
         l.position = Vecta.create(position);
         l.distance = distance; // 忘れました。ごめんなさい。ほんとにごめんなさい。疲れてます。
         l.decay = decay;
@@ -12776,29 +14785,7 @@ available waveTables:
         l.color = coulour3(color);
         return l;
       }
-      static createLight(type = "directional", params = {}){
-        switch(type){
-          case 'directional':
-            return this.createDirectionalLight(params);
-          case 'point':
-            return this.createPointLight(params);
-          case 'spot':
-            return this.createSpotLight(params);
-        }
-        return {};
-      }
-      static configLight(target, params = {}){
-        for(const [key, value] of Object.entries(params)){
-          // Vectaの場合、色の場合、それ以外。
-          if(target[key] instanceof Vecta){
-            target[key].set(value);
-          }else if(key === 'color'){
-            target[key] = coulour3(value);
-          }else{
-            target[key] = value;
-          }
-        }
-      }
+      */
     }
 
     // 3D関連
@@ -12836,20 +14823,41 @@ available waveTables:
     applications.getSVGContours = getSVGContours;
     applications.getTextContours = getTextContours;
 
-    // Shader & Render 関連
+    // Shader.
+    applications.codeSnipets = codeSnipets;
     applications.ShaderPrototype = ShaderPrototype;
     applications.PlaneShader = PlaneShader;
+    applications.PointShader = PointShader;
+    applications.TFFShader = TFFShader;
     applications.StandardLightingShader = StandardLightingShader;
     applications.PBRLightingShader = PBRLightingShader;
 
+    // Renderer.
     applications.RenderSystem = RenderSystem;
     applications.Render2D = Render2D;
+    applications.RenderPoints = RenderPoints;
+    applications.RenderTFF = RenderTFF;
     applications.NoLightShader = NoLightShader;
+    applications.CameraSystem = CameraSystem;
     applications.Render3D = Render3D;
     applications.NoLightRender3D = NoLightRender3D;
     applications.LightRender3D = LightRender3D;
     applications.StandardLightRender3D = StandardLightRender3D;
     applications.PBRLightRender3D = PBRLightRender3D;
+
+    // lights. 略記法も追加(SDL, SPL, SSL, PDL, PPL, PSL)
+    applications.StandardDirectionalLight = StandardDirectionalLight;
+    applications.StandardPointLight = StandardPointLight;
+    applications.StandardSpotLight = StandardSpotLight;
+    applications.PBRDirectionalLight = PBRDirectionalLight;
+    applications.PBRPointLight = PBRPointLight;
+    applications.PBRSpotLight = PBRSpotLight;
+    applications.SDL = StandardDirectionalLight;
+    applications.SPL = StandardPointLight;
+    applications.SSL = StandardSpotLight;
+    applications.PDL = PBRDirectionalLight;
+    applications.PPL = PBRPointLight;
+    applications.PSL = PBRSpotLight;
 
     // context2D関連
 
@@ -12864,12 +14872,12 @@ available waveTables:
   exports.foxMathTools = foxMathTools;
   exports.foxColor = foxColor;
   exports.domUtils = domUtils;
-  exports.webglUtils = webglUtils;
   exports.foxUtils = foxUtils;
   exports.foxIA = foxIA;
   exports.foxAudio = foxAudio;
   exports.foxTess = foxTess;
   exports.fox3Dtools = fox3Dtools;
+  exports.webglUtils = webglUtils;
   exports.foxApplications = foxApplications;
 
   Object.defineProperty(exports, "__esModule", { value: true });

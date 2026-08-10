@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.2.3/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.3.0/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.2.3/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.0/src/index.min.js"></script>
 ```
 
 memo  
@@ -511,7 +511,7 @@ parseCmdToTextのバグを修正。なぜか末尾をカットしていたので
 MCSのsvgにおいてH（水平）,V（垂直）,T（Qの対蹠点接続）,S（Cの対蹠点接続）,A（arcToに準じる）を導入。  
 MCS.create()を導入。ここからrectやcircleにつなげていける。  
 
-createVAOの導入  
+#### createVAO  
 glと頂点数とattrsとindicesから作ります。内容は任意です。面でも辺でも何でもあり。  
 attrsのプロパティ：  
 data:配列。location:ロケーション。usage:基本STATIC_DRAW. arrayType:基本Float32Array.  
@@ -522,7 +522,7 @@ data:配列。基本これだけでいい。あとはusageとarrayOutputだが�
 出力されたvaoオブジェクトにはbufsというプロパティがあり、登録時と同じ名前でバッファにアクセスできる。  
 それにより動的更新とかもできる。その辺の機構も作れるといいっすね。どうしましょうね。まあそのうち作るか。  
 
-ShaderPrototypeとRenderSystemの系列。簡略化のため。  
+#### ShaderPrototypeとRenderSystemの系列  
 一応4種類作りました。2D,ライトを使わない3D,StandardLightの3D,PBRLightの3D.  
 シェーダーの改変機構ですね。precision,declaration,global,mainに分かれてる。あとポストプロセスとか。  
 プログラムを複数用意してあれこれできる。  
@@ -539,3 +539,54 @@ matcapやcubemapはライティングしない場合もあるのでそれ用、�
 PBRライティング用。directional,point,spotの3種類だが微妙にプロパティが異なり、あとmetallicがある。  
 
 Vectaにslerpを導入。円補間。方向が近いなら線形補間。真反対の場合は、2Dなら(0,0,1)で回す。3Dでも何かしら返すようにする。  
+
+### 1.3.0  
+大規模な変更。なんとcreateShaderProgramとuniformXは廃止。  
+新たにProgramWrapperを用意して、今後はこれでプログラムを作る。uniformの登録関数も内蔵。  
+今後は型指定もglやpgの指定も必要なく、pgから名前と値だけ指定すればいい。構造体にも対応。VectaやMT4もそのままぶちこめる。  
+かなり変更点が多いので、順繰りにまとめていく。なお前回導入したcreateVAOもしれっと廃止。VAOWrapperを使ってください。  
+
+#### WBOWrapperの導入  
+WBOWrapperはWebGLBufferObjectのラッパです。初期化、更新、取得を簡単なメソッドで実行できます。派生としてVBO,IBO,UBOのWrapperも存在します。  
+#### VAOWrapperの導入  
+createVAO, registArrayBuffer, registIndexBufferは廃止。count, vbos, ibos, layoutを指定する。  
+layoutではvertexAttribPointerで指定するパラメータの他、divisorなども指定できる。  
+いわゆるインターリーブや、行列アトリビュートも扱える。  
+#### snipetsの導入  
+「#snipet snipet名;」で便利なsnipetが使い放題！今のところ使えるのはrotationMatrix, hsv2rgb, overlay, softLight.  
+#### MT3,MT4のコンストラクタの改変  
+配列、型付配列を指定可能にした。  
+#### ProgramWrapper, UniformWrapperの導入  
+つまりcreateShaderProgramとuniformXは廃止。今後はProgramWrapperでプログラムを作る。useやsetUniformで操作する。  
+#### shaderごとに複数のProgramを生成可能  
+RenderSystem系の関数でプログラムを作る際に、同じシェーダーから複数のプログラムを作り、名前で管理したりできる。  
+#### shaderの書き方を刷新  
+write関数を用いてまとめて指定する。つまりmainとかdeclarationとかで個別に指定しない。そうするとp5のようだが、p5と違って変なことはしない。  
+glslでshaderを書くのに慣れた人に寄り添った記述方法を目指して設計した。  
+#### RenderSystemとカメラの分離(CameraSystem)  
+RenderSystemがカメラと癒着してると複数のRenderSystemで同じカメラを使いまわせないんで、カメラ部分をCameraSystemとして分離し、  
+RenderSystemに登録する仕様とした。これによりたとえばライティングの仕様が異なる複数のRenderSystemで同じカメラを使いまわせる。  
+#### VAOWrapperの整数対応  
+layoutでisIntegerをtrueに指定することで整数アトリビュートが使えるようにした。  
+#### ライトのオブジェクト化  
+複数のプログラムで同じライトを使いまわしたいんで、ライトをオブジェクト化した。  
+たとえばSDLでStandardDirectionalLightを作れる。ライトはオブジェクトのまま送られるんで、ライトを外部的にいじることでそれが  
+プログラムにダイレクトに反映される。たとえばビュー変換をやめることで常にカメラ視点のライトになるようにしたりできる。いつも明るく元気！  
+あ、そのためのメソッドはsetViewMode(true)です。  
+#### コメント表記  
+たとえば「// コメント」を実現したいなら「# コメント」のように書く。「#」のあとの半角スペースは必須。なおコードの後ろでも可能。  
+#### 初期デスクリプタを改変できる  
+declarationやmainなどのデフォルトをいじれる。setInitialDescriptors. ただ基本的にはいじらない方がいいかも。要はテンプレート作りだ。  
+#### RenderPoints
+点描画用。vsにpointSizeがデフォルトで用意されている。これをいじることでサイズ変更できる。  
+データの設定に使う場合は常に1ですから、いじる必要はありません。  
+#### RenderTFF  
+TFF用。いわゆるバッファ引き戻し処理で、完全にcomputeShaderと同じというわけではない。  
+なおtffLayoutでwboを指定すると勝手にバインドとかいろいろやってくれるんで、今のところTFOの導入予定はないです。あってもいいけどね？  
+#### WBOWrapper.create  
+create関数で同時にinit出来るようにした。たとえばサイズ48バイトのVBOをサクッと生成したりできるよ。  
+#### uboLayout
+プログラムの生成オプションにuboLayoutを追加。uniformBlockの名前にindexを付与して送ることで好きなスロットを使えるようにできる。  
+UBOが使いやすくなる。UBOWrapperも作りました。  
+  
+こんなところですね。いずれマニュアルを作りたいところです。  
