@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.3.0/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.3.1/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.0/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.1/src/index.min.js"></script>
 ```
 
 memo  
@@ -549,7 +549,7 @@ Vectaにslerpを導入。円補間。方向が近いなら線形補間。真反�
 #### WBOWrapperの導入  
 WBOWrapperはWebGLBufferObjectのラッパです。初期化、更新、取得を簡単なメソッドで実行できます。派生としてVBO,IBO,UBOのWrapperも存在します。  
 #### VAOWrapperの導入  
-createVAO, registArrayBuffer, registIndexBufferは廃止。count, vbos, ibos, layoutを指定する。  
+createVAO, registArrayBuffer, registIndexBufferは廃止。count, vbo, ibo, layoutを指定する。  
 layoutではvertexAttribPointerで指定するパラメータの他、divisorなども指定できる。  
 いわゆるインターリーブや、行列アトリビュートも扱える。  
 #### snipetsの導入  
@@ -588,5 +588,94 @@ create関数で同時にinit出来るようにした。たとえばサイズ48�
 #### uboLayout
 プログラムの生成オプションにuboLayoutを追加。uniformBlockの名前にindexを付与して送ることで好きなスロットを使えるようにできる。  
 UBOが使いやすくなる。UBOWrapperも作りました。  
-  
+
 こんなところですね。いずれマニュアルを作りたいところです。  
+
+### 1.3.1
+主に1.3.0で見つかったさらなる仕様変更アイデアの実装です。
+テクスチャやフレームバッファは今後の課題となります。  
+GltfがVBOなどの機構を使っているのでその辺りの変更がメインです。ジオメトリは見送りになりました。  
+大きな変更点はGltfのVAO出力、ウェイトアニメとスキンアニメの実装変更です。WBOWrapperを整備したのでそれに基づいての書き換えを実行しました。  
+またVAOWrapperのcreateが刷新され、文字列で実行できるようになりました。従来のlayoutプロパティの書き方ではエラーになるので気を付けてください。  
+使えるのは配列と文字列だけです。  
+
+#### setUBOLayoutをインスタンスメソッド化  
+UBOのlayoutをshaderでの名前の宣言に従って指定する。これをメソッド化できてなかったのでメソッド化してあとから変更できるようにした。  
+TFFのvaryingとかと違ってこれはリンク後に設定するので、その方が合理的。  
+#### VAOWrapperにcountプロパティを用意  
+そういうわけでIBO作る際はこれが使われる。VBOが無い場合は0だが、0なので普通にSHORTで扱う形になる。  
+0でも理屈の上ではINTが使えるだろうって？そうかもね。getCountで取得。  
+countのデフォルトは0に設定。  
+#### initIBOの引数からcountを削除  
+さっきの実装の関連で、IBOの初期化の際にcount（頂点数）をいじることは許されない形になる。  
+もし何らかの事情でIBOのみのVAOを扱いたいなら最後まで頂点は使えない。  
+あとから使う予定ならバッファだけでも用意しておくこと。  
+#### シェーダーソースの空行処理  
+冒頭と末尾の空行、さらに連続する空行の2行目以降をカット。さらに空行をはじく処理も削除。  
+#### シェーダーソースのインデント処理  
+インデントを整える処理を追加。これによりソースを書く際に左端が揃ってさえいれば綺麗に出力される。  
+#### glEnumの導入  
+関数です。たとえばgl.ARRAY_BUFFERでも'array_buffer'でも同じgl定数が返る。glを内部的に使わないで実装してある。　　
+一部エイリアスを用意。たとえばgl.UNSIGNED_BYTEは'ubyte'で取得できるし、gl.TEXTURE_CUBE_MAP_POSITIVE_Xは'cube_px'で取得できる。  
+#### ShaderPrototypeの改変とRenderFreeの用意  
+ShaderPrototypeでvsのoutputを空行にした。fsの方は残した。そしてRenderFreeを用意。全部自分で用意する。  
+2Dのattrとかで遊びたい場合のためのサンドボックス。  
+#### getShaderSource  
+ProgramもしくはRenderSystemの関数として実装。その時に走ってるプログラムのソースが返る。  
+'vs','fs'で個別に。デフォルトは'both'で{vs,fs}で両方返る。  
+#### VAOWrapperのコンストラクタで文字列指定できる
+VAOWrapperのlayoutの指定方法を変更。まず従来のやり方の場合、layoutは配列とする。bufferで使うバッファを指定する。  
+というのも従来のバッファ主導の書き方だと、バッファに紐つく形でdivisorなどを指定する。これは具合が悪い。  
+そういうわけでindexベースにした。配列の場合はindexがそのまま使われるが、個別にparamsにindexを指定することもできる。  
+bufferでバッファ名を指定する。後は同じ。  
+文字列の場合は書き方があって...  
+```js
+const vaoTorus2 = VAOWrapper.create(gl, {
+  count:torusGeom.v.length/3,
+  layout:`
+  @buffer
+  path:torusGeom, offsets // これでパスを元に検索される
+  <vbo>
+  aPosition v; aNormal n; aOffsetPosition op; aOffsetRotation or;
+  <ibo> iFaces f;
+
+  @layout
+  <pointer> 0 aPosition 3; 1 aNormal 3; 2 aOffsetPosition 3; 3 aOffsetRotation 4;
+  <divisor> 2 1; 3 1;
+  <enable> 0; 1; 2; 3;
+  `,
+  dict:{
+    torusGeom,
+    offsets:{
+      op:offsetPositions, or:offsetRotations
+    }
+  }
+});
+```
+こんな感じ。DESIGNという概念を新しく用意して、シェーダー解釈と同じ枠組みで実行できるようにした。  
+#### VAOWrapperのinitVBO,initIBOの第二引数をdataにする  
+dataだけ切り離した。なぜかというとWBOWrapperサイドと引数の仕組みが違うせいで混乱するため。  
+#### Clockの値取得メソッドにNaNチェックを追加  
+Clockでハマったので。jsはNaNにエラーを出してくれないので、この種の調整は今後増える可能性がある。  
+#### WBOWrapper系の関数でdataにWebGLBufferを許す  
+内容は丸ごとコピーするもの。無いと不便なので作った。  
+#### SkinMeshAnimationのbindで引数チェック  
+引数がsingle/doubleでnumber/arrayと違うので、そこをチェックすることで書き間違いを防ぐ。  
+#### setMatricesのoptionsでresetを導入  
+デフォルトはfalse. これをtrueにすると、uniformをセットした後でmodel行列がリセットされる。  
+#### VAOWrapper.scanの導入  
+これを実行するタイミングのVAAの状態とIBOに基づいてVAOWrapperを作る関数。要するに盗むわけ。  
+p5とかでこれを使ってinstance attributeを簡単に追加したりできる。なお内容を見るだけの使い方も可能。  
+#### WBOWrapperのバッファ操作関数を静的メソッドに委譲  
+gl,bufを引数とする形で一般のWebGLBufferに対しても実行可能なようにした。  
+initBuffer,updateBuffer,outputBuffer,showBufferすべて可能。その方が柔軟性が高いので。  
+もちろんクラス化する意味はあって、TFFやUBOの連携など。そういうのはインスタンスでやるメリットが強いですね。  
+#### Gltfのバッファ関連の3つのメソッドの内容更新  
+WBO関連の整備をしたので、それに基づいて大幅に書き換え。  
+たとえば作った後のバッファの追加などが容易になる。以前は面倒だった。
+また、従来の方法でスキンメッシュが扱えなくなった（TFFしないといけなくなった）ので、そういう裏事情もある。  
+#### Render3Dのfsにおけるビュー関連の変数名をPBRとSDで統一  
+PBRの方は変な構造体だったんですが、StandardLightの方と同じくviewNormalとかにしました。  
+たとえばbump mappingではviewNormalをいじるんですが同じコードを書くことができます。  
+
+以上。
