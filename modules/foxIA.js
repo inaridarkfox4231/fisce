@@ -1,0 +1,866 @@
+// foxIA. インタラクション関連。
+const foxIA = (function(){
+  const ia = {};
+
+  class PointerPrototype{
+    constructor(){
+      this.id = -1;
+      this.parent = null; // 親のInteractionクラス。KAとかいろいろ応用できそう
+      this.x = 0;
+      this.y = 0;
+      this.dx = 0;
+      this.dy = 0;
+      this.prevX = 0;
+      this.prevY = 0;
+      this.rect = {width:0, height:0, left:0, top:0};
+      this.button = -1; // マウス用ボタン記録。-1:タッチですよ！の意味
+    }
+    mouseInitialize(e, rect, parent = null){
+      this.x = e.clientX - rect.left;
+      this.y = e.clientY - rect.top;
+      this.parent = parent;
+      const {width, height, left, top} = rect;
+      this.rect = {width, height, left, top};
+      this.prevX = this.x;
+      this.prevY = this.y;
+      this.button = e.button; // 0:left, 1:center, 2:right
+    }
+    mouseDownAction(e){
+    }
+    mouseUpdate(e){
+      this.prevX = this.x;
+      this.prevY = this.y;
+      this.dx = (e.clientX - this.rect.left - this.x);
+      this.dy = (e.clientY - this.rect.top - this.y);
+      this.x = e.clientX - this.rect.left;
+      this.y = e.clientY - this.rect.top;
+    }
+    mouseMoveAction(e){
+    }
+    mouseUpAction(e){
+    }
+    touchInitialize(t, rect, parent = null){
+      this.id = t.identifier;
+      this.x = t.clientX - rect.left; // 要するにmouseX的なやつ
+      this.y = t.clientY - rect.top; // 要するにmouseY的なやつ
+      this.parent = parent;
+      const {width, height, left, top} = rect;
+      this.rect = {width, height, left, top};
+      this.prevX = this.x;
+      this.prevY = this.y;
+    }
+    updateCanvasData(rect){
+      // マウスでもタッチでも実行する
+      const prevLeft = this.rect.left;
+      const prevTop = this.rect.top;
+      const {width, height, left, top} = rect;
+      this.rect = {width, height, left, top};
+      this.x += prevLeft - left;
+      this.y += prevTop - top;
+      this.prevX += prevLeft - left;
+      this.prevY += prevTop - top;
+    }
+    touchStartAction(t){
+    }
+    touchUpdate(t){
+      this.prevX = this.x;
+      this.prevY = this.y;
+      this.dx = (t.clientX - this.rect.left - this.x);
+      this.dy = (t.clientY - this.rect.top - this.y);
+      this.x = t.clientX - this.rect.left;
+      this.y = t.clientY - this.rect.top;
+    }
+    touchMoveAction(t){
+    }
+    touchEndAction(t){
+    }
+  }
+
+  // pointerの生成関数で初期化する。なければPointerPrototypeが使われる。
+  // 一部のメソッドはオプションで用意するかしないか決めることにしましょう
+  // mouseLeaveとかdoubleClickとか場合によっては使わないでしょう
+  // そこらへん
+  // canvasで初期化できるようにするか～。で、factoryはoptionsに含めてしまおう。
+  // 特に指定が無ければ空っぽのoptionsでやればいい。factoryが欲しい、clickやdblclickを有効化したい場合に
+  // optionsを書けばいいわね。
+  // setFactoryは必要になったら用意しましょ
+  // 仕様変更(20240923): factoryがnullを返す場合はpointerを生成しない。かつ、タッチエンド/マウスアップの際に
+  // pointersが空の場合は処理を実行しない。これにより、factoryで分岐処理を用意することで、ポインターの生成が実行されないようにできる。
+  class Interaction{
+    constructor(canvas, options = {}){
+      this.canvas = canvas; // なんか知らないけど持たせてもいいんじゃないの？
+      this.pointers = [];
+      this.factory = ((t) => new PointerPrototype());
+      // leftとtopがwindowのサイズ変更に対応するために必要
+      // コンストラクタでは出来ませんね。初期化時の処理。
+      this.rect = {width:0, height:0, left:0, top:0};
+      this.tapCount = 0; // ダブルタップ判定用
+      this.firstTapped = {x:0, y:0};
+      // コンストラクタで初期化しましょ
+      this.initialize(canvas, options);
+    }
+    initialize(canvas, options = {}){
+      // 念のためpointersを空にする
+      this.pointers = [];
+      // factoryを定義
+      const {factory = ((t) => new PointerPrototype())} = options;
+      this.factory = factory;
+      // 横幅縦幅を定義
+      // touchの場合はこうしないときちんとキャンバス上の座標が取得できない
+      // どうもrectからwidthとheightが出る？じゃあそれでいいですね。pixelDensityによらない、css上の値。
+      const {width, height, left, top} = canvas.getBoundingClientRect();
+      this.rect = {width, height, left, top};
+      // 右クリック時のメニュー表示を殺す
+      // 一応デフォルトtrueのオプションにするか...（あんま意味ないが）
+      const {preventOnContextMenu = true} = options;
+      if(preventOnContextMenu){
+        // スケッチと文章が混在する場合に外側のメニューまで禁止するのはまずいので。
+        //document.oncontextmenu = (e) => { e.preventDefault(); }
+        canvas.oncontextmenu = (e) => { e.preventDefault(); }
+      }
+      // touchのデフォルトアクションを殺す
+      //canvas.style["touch-action"] = "none";
+      // イベントリスナー
+      // optionsになったのね。じゃあそうか。passiveの規定値はfalseのようです。指定する必要、ないのか。
+      // そして1回のみの場合はonceをtrueにするようです。
+      // たとえば警告なんかに使えるかもしれないですね。ていうか明示した方がいいのか。
+      // 以降はdefaultIAと名付ける、これがtrueデフォルトで、falseにするとこれらを用意しないようにできる。
+      // たとえば考えにくいけどホイールしか要らないよって場合とか。
+      const {defaultIA = true, wheel = true} = options;
+      if (defaultIA) {
+        // マウス
+        canvas.addEventListener('mousedown', this.mouseDownAction.bind(this), {passive:false});
+        window.addEventListener('mousemove', this.mouseMoveAction.bind(this), {passive:false});
+        window.addEventListener('mouseup', this.mouseUpAction.bind(this), {passive:false});
+        // タッチ（ダブルタップは無いので自前で実装）
+        canvas.addEventListener('touchstart', this.touchStartAction.bind(this), {passive:false});
+        window.addEventListener('touchmove', this.touchMoveAction.bind(this), {passive:false});
+        window.addEventListener('touchend', this.touchEndAction.bind(this), {passive:false});
+      }
+      // ホイールはキャンバス外で実行することはまずないですね...canvasでいいかと。
+      if (wheel) { canvas.addEventListener('wheel', this.wheelAction.bind(this), {passive:false}); }
+
+      // リサイズの際にleftとtopが変更されるのでそれに伴ってleftとtopを更新する
+      window.addEventListener('resize', (function(){
+        this.updateCanvasData();
+      }).bind(this));
+      window.addEventListener('scroll', (function(){
+        this.updateCanvasData();
+      }).bind(this));
+
+      // options. これらは基本パソコン環境前提なので（スマホが関係ないので）、オプションとします。
+      const {
+        mouseenter = false, mouseleave = false, click = false, dblclick = false,
+        keydown = false, keyup = false
+      } = options;
+      // マウスの出入り
+      if (mouseenter) { canvas.addEventListener('mouseenter', this.mouseEnterAction.bind(this), {passive:false}); }
+      if (mouseleave) { canvas.addEventListener('mouseleave', this.mouseLeaveAction.bind(this), {passive:false}); }
+      // クリック
+      if (click) { canvas.addEventListener('click', this.clickAction.bind(this), {passive:false}); }
+      if (dblclick) { canvas.addEventListener('dblclick', this.doubleClickAction.bind(this), {passive:false}); }
+      // キー(keypressは非推奨とのこと）
+      // いわゆる押しっぱなしの時の処理についてはフラグの切り替えのために両方必要になるわね
+      if (keydown) { window.addEventListener('keydown', this.keyDownAction.bind(this), {passive:false}); }
+      if (keyup) { window.addEventListener('keyup', this.keyUpAction.bind(this), {passive:false}); }
+    }
+    getRect(){
+      return this.rect;
+    }
+    updateCanvasData(){
+      // これでいいはず。おかしいと思ったわ。いいんかな...いいんかな？
+      // 多分今までおとがめなしだけだっただけだと思う。
+      const newRect = this.canvas.getBoundingClientRect();
+      // 対象のキャンバスを更新
+      const {width, height, left, top} = newRect;
+      this.rect = {width, height, left, top};
+      for(const p of this.pointers){ p.updateCanvasData(newRect); }
+    }
+    mouseDownAction(e){
+      this.mouseDownPointerAction(e);
+      this.mouseDownDefaultAction(e);
+    }
+    mouseDownPointerAction(e){
+      const p = this.factory(this);
+      if (p === null) return; // factoryがnullを返す場合はpointerを生成しない
+      p.mouseInitialize(e, this.rect, this);
+      p.mouseDownAction(e);
+      this.pointers.push(p);
+    }
+    mouseDownDefaultAction(e){
+      // Interactionサイドの実行内容を書く
+    }
+    mouseMoveAction(e){
+      this.mouseMovePointerAction(e);
+      // なぜmovementを使っているかというと、
+      // このアクションはポインターが無関係だから（ポインターが無くても実行される）
+      // まずいのはわかってるけどね...
+      // マウスダウン時のPointerの位置の計算についてはmovementが出てこないので
+      // マウスダウン時しか要らない場合は使わないのもあり。
+      this.mouseMoveDefaultAction(e.movementX, e.movementY, e.clientX - this.rect.left, e.clientY - this.rect.top);
+    }
+    mouseMovePointerAction(e){
+      // pointerが生成されなかった場合は処理を実行しない
+      if(this.pointers.length === 0){ return; }
+      const p = this.pointers[0];
+      p.mouseUpdate(e);
+      p.mouseMoveAction(e);
+    }
+    mouseMoveDefaultAction(dx, dy, x, y){
+      // Interactionサイドの実行内容を書く
+    }
+    mouseUpAction(e){
+      this.mouseUpPointerAction(e);
+      this.mouseUpDefaultAction(e);
+    }
+    mouseUpPointerAction(e){
+      // pointerが生成されなかった場合は処理を実行しない
+      if(this.pointers.length === 0){ return; }
+      // ここで排除するpointerに何かさせる...
+      const p = this.pointers[0];
+      p.mouseUpAction(e);
+      this.pointers.pop();
+    }
+    mouseUpDefaultAction(e){
+      // Interactionサイドの実行内容を書く
+    }
+    mouse(e){
+      // ホイールのイベントなどで正確なマウス座標が欲しい場合に有用
+      // マウス限定なのでイベント内部などマウスが関係する処理でしか使わない方がいいです
+      return {x:e.clientX - this.rect.left, y:e.clientY - this.rect.top};
+    }
+    wheelAction(e){
+      // Interactionサイドの実行内容を書く
+      // e.deltaXとかe.deltaYが使われる。下にホイールするとき正の数、上にホイールするとき負の数。
+      // 速くホイールすると大きな数字が出る。おそらく仕様によるもので-1000～1000の100の倍数になった。0.01倍して使うといいかもしれない。
+      // 当然だが、拡大縮小に使う場合は対数を使った方が挙動が滑らかになるしスケールにもよらないのでおすすめ。
+    }
+    clickAction(){
+      // Interactionサイドの実行内容を書く。クリック時。左クリック。
+    }
+    mouseEnterAction(){
+      // Interactionサイドの実行内容を書く。enter時。
+    }
+    mouseLeaveAction(){
+      // Interactionサイドの実行内容を書く。leave時。
+    }
+    doubleClickAction(){
+      // Interactionサイドの実行内容を書く。ダブルクリック時。
+    }
+    doubleTapAction(){
+      // Interactionサイドの実行内容を書く。ダブルタップ時。自前で実装するしかないようです。初めて知った。
+    }
+    touchStartAction(e){
+      this.touchStartPointerAction(e);
+      this.touchStartDefaultAction(e);
+
+      // 以下、ダブルタップ用
+      // マルチタップ時にはイベントキャンセル（それはダブルタップではない）
+      if(this.pointers.length > 1){ this.tapCount = 0; return; }
+      // シングルタップの場合、0ならカウントを増やしつつ350ms後に0にするカウントダウンを開始
+      // ただし、factoryがnullを返すなど、pointerが生成されないならば、実行しない。
+      // pointerが無い以上、ダブルタップの判定が出来ないので。
+      if(this.pointers.length === 0){ return; }
+      if(this.tapCount === 0){
+        // thisをbindしないとおかしなことになると思う
+        setTimeout((function(){ this.tapCount = 0; }).bind(this), 350);
+        this.tapCount++;
+        this.firstTapped.x = this.pointers[0].x;
+        this.firstTapped.y = this.pointers[0].y;
+      } else {
+        this.tapCount++;
+        // 最初のタップした場所とあまりに離れている場合はダブルとみなさない
+        // 25くらいあってもいい気がしてきた
+        const {x, y} = this.pointers[0];
+        if(Math.hypot(this.firstTapped.x - x, this.firstTapped.y - y) > 25){ this.tapCount = 0; return; }
+        if(this.tapCount === 2){
+          this.doubleTapAction();
+          this.tapCount = 0;
+        }
+      }
+    }
+    touchStartPointerAction(e){
+      e.preventDefault();
+      // targetTouchesを使わないとcanvas外のタッチオブジェクトを格納してしまう
+      const currentTouches = e.targetTouches; // touchオブジェクトの配列
+      const newPointers = [];
+      // 新入りがいないかどうか調べていたら増やす感じですね
+      // targetTouchesのうちでpointersに入ってないものを追加する処理です
+      // 入ってないかどうかはidで調べます
+      for (let i = 0; i < currentTouches.length; i++){
+        let equalFlag = false;
+        for (let j = 0; j < this.pointers.length; j++){
+          if (currentTouches[i].identifier === this.pointers[j].id){
+            equalFlag = true;
+            break;
+          }
+        }
+        if(!equalFlag){
+          const p = this.factory(this);
+          if (p === null) return; // factoryがnullを返す場合はpointerを生成しない
+          p.touchInitialize(currentTouches[i], this.rect, this);
+          p.touchStartAction(currentTouches[i]);
+          newPointers.push(p);
+        }
+      }
+      this.pointers.push(...newPointers);
+    }
+    touchStartDefaultAction(e){
+      // Interactionサイドの実行内容を書く。touchがスタートした時
+    }
+    touchMoveAction(e){
+      // pointerごとにupdateする
+      this.touchMovePointerAction(e);
+      if (this.pointers.length === 1) {
+        // swipe.
+        const p0 = this.pointers[0];
+        this.touchSwipeAction(
+          p0.x - p0.prevX, p0.y - p0.prevY, p0.x, p0.y, p0.prevX, p0.prevY
+        );
+      } else if (this.pointers.length > 1) {
+        // pinch in/out.
+        const p = this.pointers[0];
+        const q = this.pointers[1];
+        // pとqから重心の位置と変化、距離の変化を
+        // 計算して各種アクションを実行する
+        const gx = (p.x + q.x) * 0.5;
+        const gPrevX = (p.prevX + q.prevX) * 0.5;
+        const gy = (p.y + q.y) * 0.5;
+        const gPrevY = (p.prevY + q.prevY) * 0.5;
+        const gDX = gx - gPrevX;
+        const gDY = gy - gPrevY;
+        const curDistance = Math.hypot(p.x - q.x, p.y - q.y);
+        const prevDistance = Math.hypot(p.prevX - q.prevX, p.prevY - q.prevY)
+        // 今の距離 - 前の距離
+        const diff = curDistance - prevDistance;
+        // 今の距離 / 前の距離
+        const ratio = curDistance / prevDistance;
+        // 差も比も使えると思ったので仕様変更
+        this.touchPinchInOutAction(diff, ratio, gx, gy, gPrevX, gPrevY);
+        this.touchMultiSwipeAction(gDX, gDY, gx, gy, gPrevX, gPrevY);
+        // rotateは一応用意するが、使うかどうかはその都度決めましょう
+        const angle = Interaction.calculateRotationAngle(q.prevX-p.prevX, q.prevY-p.prevY, q.x-p.x, q.y-p.y);
+        this.touchRotateAction(angle);
+      }
+    }
+    touchMovePointerAction(e){
+      // pointerが生成されなかった場合は処理を実行しない
+      if(this.pointers.length === 0){ return; }
+      //e.preventDefault();
+      const currentTouches = e.targetTouches;
+      for (let i = 0; i < currentTouches.length; i++){
+        const t = currentTouches[i];
+        for (let j = 0; j < this.pointers.length; j++){
+          if (t.identifier === this.pointers[j].id){
+            const p = this.pointers[j];
+            p.touchUpdate(t);
+            p.touchMoveAction(t);
+          }
+        }
+      }
+    }
+    touchSwipeAction(dx, dy, x, y, px, py){
+      // Interactionサイドの実行内容を書く。
+      // dx,dyが変位。
+    }
+    touchPinchInOutAction(diff, ratio, x, y, px, py){
+      // Interactionサイドの実行内容を書く。
+      // diffは距離の変化。正の場合大きくなる。ratioは距離の比。
+    }
+    touchMultiSwipeAction(dx, dy, x, y, px, py){
+      // Interactionサイドの実行内容を書く。
+      // dx,dyは重心の変位。
+    }
+    touchRotateAction(angle){
+      // prevP-->prevQをp-->qにする回転角度で何かしら実行する
+    }
+    touchEndAction(e){
+      // End時のアクション。
+      this.touchEndPointerAction(e);
+      this.touchEndDefaultAction(e);
+    }
+    touchEndPointerAction(e){
+      // pointerが生成されなかった場合は処理を実行しない
+      if(this.pointers.length === 0){ return; }
+      const changedTouches = e.changedTouches;
+      for (let i = 0; i < changedTouches.length; i++){
+        for (let j = this.pointers.length-1; j >= 0; j--){
+          if (changedTouches[i].identifier === this.pointers[j].id){
+            // ここで排除するpointerに何かさせる...
+            const p = this.pointers[j];
+            p.touchEndAction(changedTouches[i]);
+            this.pointers.splice(j, 1);
+          }
+        }
+      }
+    }
+    touchEndDefaultAction(e){
+      // Interactionサイドの実行内容を書く。touchEndが発生した場合。
+      // とはいえ難しいだろうので、おそらくpointersが空っぽの時とかそういう感じになるかと。
+    }
+    keyDownAction(e){
+      // Interactionサイドの実行内容を書く。
+      // キーが押されたとき
+    }
+    keyUpAction(e){
+      // Interactionサイドの実行内容を書く。
+      // キーが離れた時
+      //console.log(e.code);
+    }
+    resizeAction(){
+      // リサイズ時の処理。
+    }
+    getPointers(){
+      return this.pointers;
+    }
+    static calculateRotationAngle(a, b, c, d){
+      // ベクトル(a,b)をベクトル(c,d)にする回転の向きを正の向きとする。
+      return Math.atan2(a*d-b*c, a*c+b*d);
+    }
+  }
+
+  // addEventの方がよさそう
+  // add
+  // clear
+  // addとclearでよいです
+  // addでイベントを追加しclearですべて破棄します
+  // addで登録するイベント名をリスナーに合わせました（有効化オプションもこれになってるので倣った形です）
+  // 一応touchStartとdbltapと複数登録用意しました、が、一応デスクトップでの運用が主なので、
+  // 本格的にやるならCCみたいに継承してね。
+  class Inspector extends Interaction{
+    constructor(canvas, options = {}){
+      super(canvas, options);
+      this.functions = {
+        mousedown:[],
+        mousemove:[],
+        mouseup:[],
+        wheel:[],
+        click:[],
+        mouseenter:[],
+        mouseleave:[],
+        dblclick:[],
+        keydown:[],
+        keyup:[],
+        touchstart:[], // スマホだとclickが発動しないので代わりに。
+        touchend:[], // タッチエンドあった方がいい？
+        dbltap:[] // doubleTapですね。これも用意しておきましょ。
+      };
+    }
+    execute(name, args){
+      for (const func of this.functions[name]){
+        func(...args);
+      }
+    }
+    add(name, func){
+      // 複数のインタラクションを同時に設定できるようにする
+      if (typeof name === 'string') {
+        this.functions[name].push(func);
+      } else if (Array.isArray(name)) {
+        for (const functionName of name) {
+          this.functions[functionName].push(func);
+        }
+      }
+    }
+    clear(name){
+      this.functions[name] = [];
+    }
+    mouseDownDefaultAction(e){
+      this.execute("mousedown", arguments);
+    }
+    mouseMoveDefaultAction(dx, dy, x, y){
+      this.execute("mousemove", arguments);
+    }
+    mouseUpDefaultAction(e){
+      this.execute("mouseup", arguments);
+    }
+    wheelAction(e){
+      this.execute("wheel", arguments);
+    }
+    clickAction(){
+      this.execute("click", arguments);
+    }
+    mouseEnterAction(){
+      this.execute("mouseenter", arguments);
+    }
+    mouseLeaveAction(){
+      this.execute("mouseleave", arguments);
+    }
+    doubleClickAction(){
+      this.execute("dblclick", arguments);
+    }
+    doubleTapAction(){
+      this.execute("dbltap", arguments);
+    }
+    keyDownAction(e){
+      this.execute("keydown", arguments);
+    }
+    keyUpAction(e){
+      this.execute("keyup", arguments);
+    }
+    touchStartDefaultAction(e){
+      this.execute("touchstart", arguments);
+    }
+    touchEndDefaultAction(e){
+      this.execute("touchend", arguments);
+    }
+  }
+
+  // これクラス化しよ？？Locaterがいい。
+  // 簡易版。毎フレームupdateする。pointersを調べて末尾を取る。末尾なので、常に新規が採用される。
+  // 位置情報を更新する。x,y,dx,dyを使う。また関数を導入できる。
+  // 発動時、移動時、activeを前提として常時、終了時のアクションが存在する。終了時はタッチの場合、
+  // pointersが空になるとき。なぜなら常に新規で更新されるので。
+  // 取得するときclampとnormalizeのoptionを設けるようにしました。
+  // factorを設けてすぐに値が変わらないようにできる仕組みを導入しました。
+  // 自由に変えられるようにするかどうかは応相談...できるだけ軽量で行きたいので。
+  // mouseFreeUpdateにより、マウスの場合にマウス移動で位置更新がされるようにするオプションを追加
+  class Locater extends Interaction{
+    constructor(canvas, options = {}){
+      super(canvas, options);
+      this.active = false;
+      this.x = 0;
+      this.y = 0;
+      this.dx = 0;
+      this.dy = 0;
+      // 位置情報を滑らかに変化させたいときはoptionsでfactorを定義する。
+      const {factor = 1} = options;
+      this.factor = factor;
+      // マウス操作の場合、位置情報をマウス移動に伴って変化させたい場合もあるでしょう。
+      // mouseFreeUpdateのoptionを設けてそれが実現されるようにします
+      const {mouseFreeUpdate = false} = options;
+      this.mouseFreeUpdate = mouseFreeUpdate;
+      // 関数族
+      this.actions = {}; // activate, inActivate, move.
+      // 関数のデフォルト。
+      this.actions.activate = (e) => {};
+      this.actions.move = (x, y, dx, dy) => {};
+      this.actions.update = (x, y, dx, dy) => {};
+      this.actions.inActivate = (e) => {};
+      // ボタン.
+      this.button = -1;
+    }
+    positionUpdate(x, y, dx, dy){
+      // 位置情報の更新を関数化する
+      // 急に変化させたくない場合に徐々に変化させる選択肢を設ける
+      const factor = this.factor;
+      this.x += (x - this.x) * factor;
+      this.y += (y - this.y) * factor;
+      this.dx += (dx - this.dx) * factor;
+      this.dy += (dy - this.dy) * factor;
+    }
+    update(){
+      if (this.pointers.length > 0) {
+        // 末尾（新規）を採用する。
+        // マウス操作でmouseFreeUpdateの場合これが実行されないようにするには、結局pointer.length>0ということは
+        // もうactivateされててbutton>=0であるから、タッチならここが-1だから、そこで判定できる。そこで、
+        // (this.button >= 0 && this.mouseFreeUpdate)の場合にキャンセルさせる。この場合!を使った方が分かりやすい。
+        // 「マウスアクションにおいてmouseFreeUpdateの場合はactive時にはpositionをupdateしない」という日本語の翻訳になる。
+        // buttonを使うことでタッチとマウスの処理を分けられるわけ。
+        if (!(this.button >= 0 && this.mouseFreeUpdate)) {
+          const p = this.pointers[this.pointers.length - 1];
+          this.positionUpdate(p.x, p.y, p.dx, p.dy);
+        }
+      }
+      if (this.active) {
+        this.actions.update(this.x, this.y, this.dx, this.dy);
+      }
+    }
+    setAction(name, func){
+      // オブジェクト記法に対応
+      if (typeof name === 'string') {
+        this.actions[name] = func;
+      } else if (typeof name === 'object') {
+        for(const _name of Object.keys(name)){
+          const _func = name[_name];
+          this.actions[_name] = _func;
+        }
+      }
+    }
+    isActive(){
+      return this.active;
+    }
+    getPos(options = {}){
+      const {clamp = false, normalize = false} = options;
+      const {width:w, height:h} = this.rect;
+      // clampのoptionsがある場合は先にclampしてから正規化する。
+      // dxとdyはclampの必要がない。
+      const result = {x:this.x, y:this.y, dx:this.dx, dy:this.dy};
+      if (clamp) {
+        result.x = Math.max(0, Math.min(w, result.x));
+        result.y = Math.max(0, Math.min(h, result.y));
+      }
+      // 正規化して0～1の値を返せるようにする。
+      if (normalize) {
+        result.x /= w;
+        result.y /= h;
+        result.dx /= w;
+        result.dy /= h;
+      }
+      return result;
+    }
+    mouseDownDefaultAction(e){
+      // ボタン. 0:left, 1:center, 2:right
+      this.button = e.button;
+      this.active = true;
+      this.actions.activate(e); // e.buttonで処理分けた方が楽だわ。タッチの場合は常に-1だけどね。
+    }
+    mouseMoveDefaultAction(dx, dy, x, y){
+      // mouseFreeUpdateがtrueであれば常に位置更新がされるようにする
+      // タッチの場合ここは実行されないため、mouseFreeUpdateがtrueでも問題ない。
+      if (this.mouseFreeUpdate) {
+        // ああここか
+        // xとyをそのまま使っちゃってる
+        // ...
+        this.positionUpdate(x, y, dx, dy);
+      }
+      if(this.active){
+        this.actions.move(x, y, dx, dy);
+      }
+    }
+    mouseUpDefaultAction(e){
+      // activateされていないなら各種の処理は不要
+      if (!this.active) return;
+      this.active = false;
+      this.actions.inActivate(e);
+      // ボタンリセット
+      this.button = -1;
+    }
+    touchStartDefaultAction(e){
+      this.active = true;
+      this.actions.activate(e);
+    }
+    touchSwipeAction(dx, dy, x, y, px, py){
+      if (this.active) {
+        this.actions.move(x, y, dx, dy);
+      }
+    }
+    touchEndDefaultAction(e){
+      // ここ、タッチポインタが一つでも外れるとオフになる仕様なんだけど、
+      // タッチポインタ、末尾採用にしたから、全部空の時だけ発動でいいよ。
+      // 空っぽになる場合、この時点でちゃんと空っぽだから。
+      // ここもactiveでないのに実行されてしまうようですね...防いでおくか。
+      if (this.active && this.pointers.length === 0) {
+        this.active = false;
+        this.actions.inActivate(e);
+      }
+    }
+  }
+
+  // キーを押したとき(activate), キーを押しているとき(update), キーを離したとき(inActivate),
+  // それぞれに対してイベントを設定する。
+  // 改変でキーコードが分かるようにするわ（どう使うか？showKeyCode:trueしたうえで使いたいキーをたたくだけ。）
+
+  // キーごとにただひとつ生成されるagent
+  // プロパティを持たせることで処理に柔軟性を持たせることができる。
+  // もちろんすべてのagentが共通のプロパティを持つ必要はないが、
+  // そこはメソッドで無視すればいいだけ。
+  class KeyAgent{
+    constructor(code){
+      this.code = code;
+      // tは親のKeyActionで、すなわちそれを受け取る。
+      // 他のキーのactive状態などを分岐処理に利用できる。
+      this.activateFunction = (t,a)=>{};
+      this.updateFunction = (t,a)=>{};
+      this.inActivateFunction = (t,a)=>{};
+      this.active = false;
+    }
+    isActive(){
+      return this.active;
+    }
+    activate(t){
+      this.activateFunction(t, this);
+      this.active = true;
+    }
+    update(t){
+      this.updateFunction(t, this);
+    }
+    inActivate(t){
+      this.inActivateFunction(t, this);
+      this.active = false;
+    }
+    registAction(actionType, func){
+      if(typeof actionType)
+      this[actionType.concat("Function")] = func;
+    }
+  }
+
+  // 改善案（同時押し対応）
+  // isActiveが未定義の場合nullを返しているところをfalseを返すようにする
+  // さらにactivate,update,inActivateの関数登録で引数を持たせられるようにする。その内容は第一引数で、
+  // thisである。どう使うかというとたとえば(e)=>{if(e.isActive){~~~}}といった感じで「これこれのキーが押されている場合～～」
+  // っていう、いわゆる同時押し対応をできるようにする。その際、たとえばBを押しながらAのときに、Bを押すだけの処理が存在しないと
+  // isActiveがnullを返してしまうので、先のように変更したいわけです。
+  // 改良版KeyAction.
+  // agentをクラス化することでさらに複雑な処理を可能にする.
+  // うん
+  // PointerPrototypeで遊びたいので
+  // オフにするのはやめましょ
+  class KeyAction extends Interaction{
+    constructor(canvas, options = {}){
+      // keydown,keyupは何も指定せずともlistenerが登録されるようにする
+      // こういう使い方もあるのだ（superの宣言箇所は任意！）
+      options.keydown = true;
+      options.keyup = true;
+      super(canvas, options);
+      this.keys = {};
+      this.options = {
+        showKeyCode:false, autoRegist:true
+      }
+      // keyAgentFactoryはcodeを引数に取る
+      // codeごとに異なる毛色のagentが欲しい場合に有用
+      const {keyAgentFactory = (code) => new KeyAgent(code)} = options;
+      this.keyAgentFactory = keyAgentFactory;
+      // showKeyCode: デフォルトはfalse. trueの場合、キーをたたくとコンソールにe.codeが表示される
+      // autoRegist: デフォルトはtrue. trueの場合、キーをたたくと自動的にkeyActionObjectがそれに対して生成される。
+    }
+    enable(...args){
+      // 各種オプションを有効化します。
+      const arg = [...arguments];
+      for (const name of arg) {
+        this.options[name] = true;
+      }
+      return this;
+    }
+    disable(...args){
+      // 各種オプションを無効化します。
+      const arg = [...arguments];
+      for (const name of arg) {
+        this.options[name] = false;
+      }
+      return this;
+    }
+    registAction(code, actions = {}){
+      if (typeof code === 'string') {
+        const agent = this.keys[code];
+        if (agent === undefined) {
+          // 存在しない場合は、空っぽのアクションが生成される。指定がある場合はそれが設定される。
+          //const result = {};
+          const newAgent = this.keyAgentFactory(code);
+          const {
+            activate = (t,a) => {},
+            update = (t,a) => {},
+            inActivate = (t,a) => {}
+          } = actions;
+          newAgent.registAction("activate", activate);
+          newAgent.registAction("update", update);
+          newAgent.registAction("inActivate", inActivate);
+          this.keys[code] = newAgent;
+        } else {
+          // 存在する場合、actionsで指定されたものだけ上書きされる。
+          for (const actionType of Object.keys(actions)) {
+            //agent[actionType] = actions[actionType];
+            agent.registAction(actionType, actions[actionType]);
+          }
+        }
+      } else if (typeof code === 'object') {
+        // まとめて登録する場合。registActionsなんか要らんですよ。
+        for(const name of Object.keys(code)) {
+          this.registAction(name, code[name]);
+        }
+      }
+      return this;
+    }
+    isActive(code){
+      const agent = this.keys[code];
+      if (agent === undefined) return false; // 未定義の場合はfalse.
+      return agent.isActive();
+    }
+    keyDownAction(e){
+      if (this.options.showKeyCode) {
+        // showKeyCodeがonの場合、e.codeを教えてくれる。
+        console.log(e.code);
+      }
+      // 何らかのキーが押されると、その瞬間に空っぽのアクションからなる
+      // オブジェクトが生成される。それによりactive判定が可能になる。
+      if (this.options.autoRegist) {
+        this.registAction(e.code);
+      }
+      const agent = this.keys[e.code];
+      if(agent === undefined || agent.isActive())return;
+      agent.activate(this);
+    }
+    update(){
+      for(const name of Object.keys(this.keys)){
+        const agent = this.keys[name];
+        if(agent.isActive()){
+          agent.update(this); // this.isActiveなどの処理を可能にする。
+        }
+      }
+    }
+    keyUpAction(e){
+      const agent = this.keys[e.code];
+      if(agent===undefined || !agent.isActive()) return;
+      agent.inActivate(this);
+    }
+  }
+
+  // Commander.
+  // PointerPrototypeの継承でなんかやりたいけどいちいち書くのめんどくさい、
+  // 別にプロパティ持たせる気はなくて、this.xやthis.yでぐりぐりしたいだけなんだ...
+  // って時に便利です。きちんと設計したい場合は自由度の高い通常のやり方を用いましょう。
+  // pointerdown, pointermove, pointerupを使うと個別に処理を書くのをサボれます。
+  class Commander extends Interaction{
+    constructor(cvs, options = {}, commands = {}){
+      options.factory = () => {
+        return new Soldier(commands);
+      }
+      super(cvs, options);
+    }
+  }
+
+  // Soldier.
+  // これを継承すればpointerdownやpointerupをパラメータありで使うことができる。
+  // Brushにはこっちの方が適任かもしれない。
+  // e(event)で統一して問題ないです。混乱するんでやめよう。
+  class Soldier extends PointerPrototype{
+    constructor(commands = {}){
+      super();
+      const {
+        mousedown = (e,p) => {},
+        mousemove = (e,p) => {},
+        mouseup = (e,p) => {},
+        touchstart = (e,p) => {},
+        touchmove = (e,p) => {},
+        touchend = (e,p) => {},
+        pointerdown,
+        pointermove,
+        pointerup
+      } = commands;
+      this.mousedown = (pointerdown === undefined ? mousedown : pointerdown);
+      this.mousemove = (pointermove === undefined ? mousemove : pointermove);
+      this.mouseup = (pointerup === undefined ? mouseup : pointerup);
+      this.touchstart = (pointerdown === undefined ? touchstart : pointerdown);
+      this.touchmove = (pointermove === undefined ? touchmove : pointermove);
+      this.touchend = (pointerup === undefined ? touchend : pointerup);
+    }
+    mouseDownAction(e){
+      this.mousedown(e, this);
+    }
+    mouseMoveAction(e){
+      this.mousemove(e, this);
+    }
+    mouseUpAction(e){
+      this.mouseup(e, this);
+    }
+    touchStartAction(e){
+      this.touchstart(e, this);
+    }
+    touchMoveAction(e){
+      this.touchmove(e, this);
+    }
+    touchEndAction(e){
+      this.touchend(e, this);
+    }
+  }
+
+  ia.Interaction = Interaction;
+  ia.PointerPrototype = PointerPrototype;
+  ia.Inspector = Inspector;
+  ia.Locater = Locater;
+  ia.KeyAgent = KeyAgent; // 追加(20240923)
+  ia.KeyAction = KeyAction;
+  ia.Commander = Commander; // 追加(20241020)
+  ia.Soldier = Soldier; // 追加(20241020)
+
+  return ia;
+})();
