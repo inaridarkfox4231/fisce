@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.3.1
+ * @version 1.3.2
  */
 
 (function (global, factory) {
@@ -494,21 +494,114 @@
   const foxErrors = (function(){
     const errors = {};
 
-    // E_Type.
-    // タイプ関連のエラーを扱う。jsは関数の仕様によっては型チェックしないので。それが便利な場合もあるけどね。
-    class E_Type extends Error{
-      constructor(data, ...params){
-        super(...params);
-        // nameとvalueの既定値は不要でしょう。混乱の原因になる。
-        const {name, value, info = ""} = data;
-        this.type = 'E_Type';
-        this.variable_name = name;
-        this.variable_value = value;
-        this.info = info;
+    // 2種類のエラーキャッチャーを用意する
+    // ErrorCatcher: 単数を取り、関数で判定し、結果がfalseの場合にエラーを出し、trueなら値をそのまま返す。
+    // CompareErrorCatcher: 単数と判定対象を取り、それらを元に関数で判定し、結果がfalseの場合にエラーを出し、trueなら以下略。
+    // throw: エラーをスローするだけ。メインループ内ではこっちを使う。
+    // catchError: ループ外で使いたい場合はプロセスをラップして使う。
+    // なぜラップする必要があるかというと、try構文内でエラーが出ないとキャッチできないからですね。だから関数渡し。
+
+    // successとfailureは関数、又は文字列。successの場合のみ第一引数にprocessの結果を取れる。
+    function catchError(process, messages = {}){
+      const {success = null, failure = null} = messages;
+      try{
+        const value = process();
+        if(success !== null){
+          switch(typeof(success)){
+            case 'string': console.log(success); break;
+            case 'function': success(value); break;
+          }
+        }
+        return true;
+      }catch(e){
+        // CustomErrorの場合だけ独自処理
+        if(e.name === 'CustomError'){
+          console.error(e.message);
+        }else{
+          console.error(`予期せぬエラー：${e}`);
+        }
       }
-      show(){
-        console.error(`種類：${this.type}, 変数名：${this.variable_name}, 変数の値：${this.variable_value}, 詳細：${this.info}`);
+      if(failure !== null){
+        switch(typeof(failure)){
+          case 'string': console.log(failure); break;
+          case 'function': failure(); break;
+        }
       }
+      return false;
+    }
+
+    class ErrorCatcher extends Error{
+      constructor(message, value){
+        // messageで初期化するとmessageプロパティに自動的に入る
+        super(message);
+        this.value = value;
+      }
+      static validate(value){ return true; }
+      static throw(process, message = ""){
+        const value = (typeof process === 'function' ? process() : process);
+        const check = this.validate(value);
+        if(check){ return; }
+        throw new this(message, value);
+      }
+    }
+
+    class UndefinedErrorCatcher extends ErrorCatcher{
+      constructor(message, value){
+        super(message, value);
+        this.name = 'CustomError';
+        this.message = `Undefined Error!\n${this.message}`;
+      }
+      static validate(value){
+        // 配列の場合は全ての成分をチェックする
+        if(Array.isArray(value)){ return value.every((x) => x !== undefined); }
+        return value !== undefined;
+      }
+    }
+
+    class NaNErrorCatcher extends ErrorCatcher{
+      constructor(message, value){
+        super(message, value);
+        this.name = 'CustomError';
+        this.message = `NaN Error!\n${this.message}`;
+      }
+      static validate(value){
+        // 配列の場合は全ての成分をチェックする
+        if(Array.isArray(value)){ return value.every((x) => !isNaN(x)); }
+        return !isNaN(value);
+      }
+    }
+
+    class CompareErrorCatcher extends Error{
+      constructor(message, value, target){
+        super(message);
+        this.value = value;
+        this.target = target;
+      }
+      static validate(value, target){ return true; }
+      static throw(process, target, message = ""){
+        const value = (typeof process === 'function' ? process() : process);
+        const check = this.validate(value, target);
+        if(check){ return; }
+        throw new this(message, value, target);
+      }
+    }
+
+    class TypeErrorCatcher extends CompareErrorCatcher{
+      constructor(message, value, target){
+        super(message, value, target);
+        this.name = 'CustomError';
+        this.message = `${JSON.stringify(value)}は${target}型ではないです\n${this.message}`;
+      }
+      static validate(value, target){ return typeof(value) === target; }
+    }
+
+    class ClassErrorCatcher extends CompareErrorCatcher{
+      constructor(message, value, target){
+        super(message, value, target);
+        this.name = 'CustomError';
+        this.message = `${JSON.stringify(value)}は${target.name}クラスではないです\n${this.message}`;
+      }
+      static validate(value, target){ return (value instanceof target); }
     }
 
     // WebGLのgetErrorのラッパ関数。単にErrorだと分かりにくいのでgetWebGLErrorとする。
@@ -535,7 +628,14 @@
       return ""; // empty string
     }
 
-    errors.E_Type = E_Type;
+    errors.catchError = catchError;
+    errors.ErrorCatcher = ErrorCatcher;
+    errors.UndefinedErrorCatcher = UndefinedErrorCatcher;
+    errors.NaNErrorCatcher = NaNErrorCatcher;
+    errors.CompareErrorCatcher = CompareErrorCatcher;
+    errors.TypeErrorCatcher = TypeErrorCatcher;
+    errors.ClassErrorCatcher = ClassErrorCatcher;
+
     errors.getWebGLError = getWebGLError;
 
     return errors;
@@ -1365,7 +1465,7 @@
   })();
 
   const domUtils = (function(){
-    const {E_Type} = foxErrors;
+    const {catchError, TypeErrorCatcher} = foxErrors;
     const utils = {};
 
     // コンフィグもこの方が楽だろう
@@ -1386,29 +1486,15 @@
     }
 
     function createCanvas(w, h, options = {}){
-      // 例えばこうする。
-      try{
-        for(const key of Object.keys(options)){
-          if(key === 'id' && (typeof options[key] !== 'string')){
-            throw new E_Type({name:key, value:options[key], info:'idはstring型を指定してください'});
-          }
-          if(key === 'dpr' && (typeof options[key] !== 'number')){
-            throw new E_Type({name:key, value:options[key], info:'dprはnumber型を指定してください'});
-          }
-        }
-      }catch(e){
-        if (typeof e.show === 'function'){
-          e.show();
-        }else{
-          console.error(`${e.name}|${e.message}`);
-        }
-        //console.error(`${e.type}, ${e.name}, ${e.value}, ${e.info}`);
-        // 明示的に指定した値に不具合がある場合はキャンバスを作らない。
-        // idがstring onlyは厳しいかもしれないが...まあ型変換してください。ふつうあそこ文字列しか入れないし。
+      const {id = "", dpr = 1} = options;
+
+      const idTest = catchError(() => { TypeErrorCatcher.throw(id, 'string', `idはstring型を使用してください`); });
+      const dprTest = catchError(() => { TypeErrorCatcher.throw(dpr, 'number', `dprはnumber型を使用してください`); });
+      if(!idTest || !dprTest){
+        console.error('createCanvas failure.');
         return null;
       }
 
-      const {id = "", dpr = 1} = options;
       const cvs = (function(){
         if(id === ""){
           const c = createElement("canvas", options);
@@ -1429,21 +1515,10 @@
     // 必要かわかんないけどOffscreenCanvasを作る関数
     // DOMとして使わないならこっちの方がいいかも？
     function createOffscreen(w, h){
-      try{
-        if(w === undefined || h === undefined){
-          throw new Error('w, hのいずれかが未定義です');
-        }
-        if(typeof(w) !== 'number'){
-          throw new E_Type({name:'w', value:w, info:'wはnumber型を指定してください'});
-        }else if(typeof(h) !== 'number'){
-          throw new E_Type({name:'h', value:h, info:'hはnumber型を指定してください'});
-        }
-      }catch(e){
-        if (typeof e.show === 'function'){
-          e.show();
-        }else{
-          console.error(`${e.name}|${e.message}`);
-        }
+      const wTest = catchError(() => {TypeErrorCatcher.throw(w, 'number', `wはnumber型を使用してください`);});
+      const hTest = catchError(() => {TypeErrorCatcher.throw(h, 'number', `hはnumber型を使用してください`);});
+      if(!wTest || !hTest){
+        console.error('createOffscreen failure.');
         return null;
       }
       return new OffscreenCanvas(w, h);
@@ -1454,11 +1529,11 @@
     // 関数は後からでも設定できる
     class SketchLooper{
       constructor(params = {}){
-        const {loop = () => {}, safe = false, errorCountLimit = 120, interval = 0} = params;
+        const {loop = () => {}, safe = false, errorCountLimit = 16, interval = 0} = params;
         this.loopFunction = loop;
         this.safe = safe; // 関数内でErrorが発生したら処理を止める
         this.errorCount = 0;
-        this.errorCountLimit = errorCountLimit; // 120回まで。
+        this.errorCountLimit = errorCountLimit; // デフォルトでは16回まで。
         this.isLooping = false;
         this.properFrameCount = 0; // 0ベースのカウンタ。ループが実行された場合にそのループ内で処理を実行後に増加させる
         this.animationID = -1; // キャンセル用
@@ -1494,11 +1569,13 @@
           }catch(e){
             this.errorCount++;
             // safe:trueの場合、エラーを出してから処理を止める。
-            if(typeof e.show === 'function'){
-              e.show();
+            // CustomErrorの場合だけ独自処理
+            if(e.name === 'CustomError'){
+              console.error(e.message);
             }else{
-              console.error(`${e.name}|${e.message}`);
+              console.error(`予期せぬエラー：${e}`);
             }
+
             if(this.safe || this.errorCount === this.errorCountLimit){
               this.pause();
               this.errorCount = 0;
@@ -1557,9 +1634,10 @@
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
 
-  // utility. ユーティリティ。DamperやTimerなどはここ。色関連も。文字列とかはこっちかもしれない。
+  // utility. ユーティリティ。DamperやClockなどはここ。色関連も。文字列とかはこっちかもしれない。
   // ローディング関連もここに集めよう。他のあれこれが必要なく独立しているものは全部ここ。
   const foxUtils = (function(){
+    const {NaNErrorCatcher} = foxErrors;
     const utils = {};
 
     // Damper.
@@ -2029,7 +2107,17 @@
     class Gun extends CrossReferenceArray{
       constructor(params = {}){
         super();
+        this.muzzle = true; // 銃口が開いている状態。
         this.weapons = {};
+      }
+      muzzleOn(){
+        this.muzzle = true;
+      }
+      muzzleOff(){
+        this.muzzle = false;
+      }
+      switchMuzzle(){
+        this.muzzle = !this.muzzle;
       }
       registWeapon(key = 'fire', weapon = ()=>{}){
         if(typeof weapon !== 'function'){
@@ -2039,6 +2127,9 @@
         this.weapons[key] = weapon;
       }
       fire(){
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
         // 戻り値をBulletにするように仕様変更
         const args = [...arguments];
         if(args[0] === null) return;
@@ -2093,6 +2184,9 @@
         }
       }
       fireSingle(obj){
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
         // Bulletの設計図1つのみ。
         const newBullet = new Bullet(obj);
         //this.add(new Bullet(obj));
@@ -2100,6 +2194,9 @@
         return newBullet;
       }
       fireMulti(data){
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
         // Bulletの設計図の配列。
         const bullets = [];
         for(const obj of data){
@@ -2110,12 +2207,18 @@
         return bullets;
       }
       fireBullets(bullets){
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
         // Bulletの配列。事前に作っておきたい場合向け。
         this.add(bullets);
         return bullets;
       }
       fireWeaponSingle(name){
-        // 武器を使う。戻り値は設計図が1つ。
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
+        // 武器を使う。引数は設計図が1つ。
         const args = [...arguments];
         args.shift();
         const obj = this.weapons[name](...args);
@@ -2124,7 +2227,10 @@
         return newBullet;
       }
       fireWeaponMulti(name){
-        // 武器を使う。戻り値は設計図の配列。Bulletは1つも無し。
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
+        // 武器を使う。引数は設計図の配列。Bulletは1つも無し。
         const args = [...arguments];
         args.shift();
         const objs = this.weapons[name](...args);
@@ -2137,6 +2243,9 @@
         return bullets;
       }
       fireWeaponBullets(name){
+        // 銃口が閉じていたら発砲しない
+        if(!this.muzzle) return null;
+
         // 武器を使う。戻り値はすべてBullet. 事前に作っておきたい場合向け。
         const args = [...arguments];
         args.shift();
@@ -2666,46 +2775,32 @@
       }
       getElapsedScaled(scale = 1000){
         const result = this.getElapsed()/scale;
-        if(isNaN(result)){
-          console.error('getElapsedScaled: NaN error.');
-          return null;
-        }
+        NaNErrorCatcher.throw(result, 'getElapsedScaled()');
         return result;
       }
       getElapsedDiscrete(scale = 1000, modulo = 0){
         const n = Math.floor(this.getElapsed()/scale);
         modulo = Math.max(0, Math.floor(modulo));
         if(modulo === 0){
-          const result0 = n;
-          if(isNaN(result0)){
-            console.error('getElapsedDiscrete: NaN error.');
-            return null;
-          }
-          return result0;
+          NaNErrorCatcher.throw(n, 'getElapsedDiscrete()');
+          return n;
         }
         const result = n % modulo;
-        if(isNaN(result)){
-          console.error('getElapsedDiscrete: NaN error.');
-          return null;
-        }
+        NaNErrorCatcher.throw(result, 'getElapsedDiscrete()');
         return result;
       }
       getElapsedSeparate(scale = 1000, modulo = 0){
         const x = this.getElapsedScaled(scale);
         const n = Math.floor(x);
         const f = x - n;
+        NaNErrorCatcher.throw(f, 'getElapsedSeparate()');
+
         modulo = Math.max(0, Math.floor(modulo));
         if(modulo === 0){
-          if(isNaN(n) || isNaN(f)){
-            console.error('getElapsedSeparate: NaN error.');
-            return null;
-          }
+          NaNErrorCatcher.throw(n, 'getElapsedSeparate()');
           return {floor:n, fract:f};
         }
-        if(isNaN(n % modulo) || isNaN(f)){
-          console.error('getElapsedSeparate: NaN error');
-          return null;
-        }
+        NaNErrorCatcher.throw(n % modulo, 'getElapsedSeparate()');
         return {floor:n % modulo, fract:f};
       }
       static create(s){
@@ -9160,6 +9255,7 @@ available waveTables:
           console.log(`${name}:create vertex shader failed...`);
           const infoLog = gl.getShaderInfoLog(vsShader);
           console.error(infoLog);
+          ProgramWrapper.showInfoLogDetail(vs, infoLog);
           return this;
         }
         this.vsShader = vsShader;
@@ -9172,6 +9268,7 @@ available waveTables:
           console.log(`${name}:create fragment shader failed...`);
           const infoLog = gl.getShaderInfoLog(fsShader);
           console.error(infoLog);
+          ProgramWrapper.showInfoLogDetail(fs, infoLog);
           return this;
         }
         this.fsShader = fsShader;
@@ -9381,6 +9478,11 @@ available waveTables:
       static create(gl, params = {}){
         return new this(gl, params);
       }
+      static build(gl, params = {}){
+        const pg = new this(gl, params);
+        pg.createProgram(params);
+        return pg;
+      }
       static setAttributeLayout(gl, pg, layout = {}){
         for(const [name, index] of Object.entries(layout)){
           gl.bindAttribLocation(pg, index, name);
@@ -9437,6 +9539,22 @@ available waveTables:
         }
         console.error("invalid type.");
         return null;
+      }
+      static showInfoLogDetail(src, infoLog){
+        // エラーの箇所を赤字にしたうえで全文表示
+        const errors = infoLog.split('\n');
+        const errorLineNumbers = errors.map(line => { return Number(line.split(':')[2]); }).filter((n) => !isNaN(n));
+
+        const lines = src.split('\n');
+        const styles = [];
+        for(let i=0; i<lines.length; i++){
+          if(errorLineNumbers.includes(i+1)){
+            lines[i] = '%c' + lines[i] + '%c';
+            styles.push('color:red;', 'color:black;');
+          }
+        }
+        const outputText = lines.reduce((s, t) => s.concat('\n').concat(t), '');
+        console.log(outputText, ...styles);
       }
     }
     ProgramWrapper.integerAttributeTypes = ['int', 'ivec2', 'ivec3', 'ivec4', 'uint', 'uvec2', 'uvec3', 'uvec4'];
@@ -9771,11 +9889,17 @@ available waveTables:
     class VAOWrapper{
       constructor(gl, params = {}){
         this.gl = gl;
-        this.vao = gl.createVertexArray();
+        //this.vao = gl.createVertexArray();
+        this.vaos = {}
         this.vbos = {};
         this.ibos = {};
-        const {count = 1, vbo = {}, ibo = {}, layout = [], dict = {}} = params;
+        this.tfos = {};
+        const {name = 'default', count = 0, vbo = {}, ibo = {}, layout = [], dict = {}} = params;
         this.count = count; // VAOWrapperがcountを持ってればいいんよな。
+
+        const initialVAO = gl.createVertexArray();
+        this.vaos[name] = initialVAO;
+        this.currentVAO = initialVAO;
 
         // もしlayoutが文字列の場合は別メソッドで全部用意する
         if(typeof(layout) === 'string'){
@@ -9792,25 +9916,42 @@ available waveTables:
         for(const [key, value] of Object.entries(ibo)){
           this.initIBO(key, value.data, value);
           // IBOは最後に作ったものが暫定的に採用される
-          this.setIBO(key);
+          this.bindIBO(key, false);
         }
 
         // VBOLayoutを作る
         if(Array.isArray(layout)){
-          this.setVBOLayout(layout);
+          this.setVBOLayout(layout, false);
         }
         this.unbind();
-        /*
-        // VBOを使ってレイアウトを作る
-        for(const [key, value] of Object.entries(layout)){
-          // 同じVBOを複数のスロットで使う（インターリーブなどの）場合、それぞれ実行する。
-          // valueが配列の場合の分岐はあっちでやることにしました。
-          this.registVBO(key, value);
-        }
-        */
       }
-      bind(){
-        this.gl.bindVertexArray(this.vao);
+      addVAO(name = '', vaoLayout = '', dict = {}){
+        // vaoを加える。名前が無いと失敗する。
+        if(typeof(name) !== 'string' || name.length === 0){ return this; }
+        // vaoLayoutとdictが無ければ、新設して、currentVAOを切り替えて、終わり。
+        // なお同じIBOが付け加えられる保証はないので、bindIBOで適宜作り済みのIBOを付与する。
+        // modifyはtrue固定とする。複数のvaoを使い分けるのであれば、bind時に使うvaoを指定するのは当然の行為。
+        // 1つしか使わないならそもそもaddVAOを呼び出す必要は無く、すべて今まで通り。
+        const anotherVAO = this.gl.createVertexArray();
+        // うっかり同じ名前で作ってしまった場合、元のデータは破棄される。
+        this.vaos[name] = anotherVAO;
+        this.currentVAO = anotherVAO;
+        // 指定が無ければ作ってセットして終わり。指定がある場合、そのまま新しく作る。
+        if(vaoLayout === ''){ return this; }
+        this.setVAOLayout(vaoLayout, dict, true);
+        return this;
+      }
+      setVAO(name = ''){
+        if(this.vaos[name] === undefined){ console.log("vao not found."); return this; }
+        this.currentVAO = this.vaos[name];
+        return this;
+      }
+      bind(name = ''){
+        // name指定がある場合、currentをいじる。つまり名前でvaoの使い分けができる。
+        if(name !== '' && this.vaos[name] !== undefined){
+          this.currentVAO = this.vaos[name];
+        }
+        this.gl.bindVertexArray(this.currentVAO);
         return this;
       }
       unbind(){
@@ -9836,25 +9977,25 @@ available waveTables:
 
         return this;
       }
-      setVBOLayout(vboLayout = [], modify = false){
+      setVBOLayout(vboLayout = [], modify = true){
         if(modify){ this.bind(); }
         for(let index = 0; index < vboLayout.length; index++){
           const params = vboLayout[index];
           // null/undefinedの場合はスルー
           if(params === null || params === undefined){ continue; }
-          this.setIndexedVBOLayout(index, params);
+          this.setIndexedVBOLayout(index, params, false);
         }
         if(modify){ this.unbind(); }
         return this;
       }
-      setIndexedVBOLayout(index = 0, params = {}, modify = false){
+      setIndexedVBOLayout(index = 0, params = {}, modify = true){
         // おそらくほとんど使われないが、配列でnullを頭に並べるのが気になるんで、
         // paramsがindexを持っている場合にはそれを採用する形にしようか。まあ使わないだろうけど。
         const {gl} = this;
         if(modify){ this.bind(); }
         const {
           index:customIndex = -1, // 手動でindexを決めたい場合
-          buffer = "",
+          buffer = '',
           size = 3, type = this.gl.FLOAT, normalized = false, stride = 0, offset = 0, isInteger = false,
           divisor = 0, enable = true
         } = params;
@@ -9862,18 +10003,18 @@ available waveTables:
         const properIndex = (customIndex < 0 ? index : customIndex);
 
         // 専用関数で書き換える
-        this.pointer(properIndex, {buffer, size, type, normalized, stride, offset, isInteger});
-        this.divisor(properIndex, divisor);
+        this.pointer(properIndex, {buffer, size, type, normalized, stride, offset, isInteger}, false);
+        this.divisor(properIndex, divisor, false);
         if(enable){
-          this.enable(properIndex);
+          this.enable(properIndex, false);
         }else{
-          this.disable(properIndex);
+          this.disable(properIndex, false);
         }
 
         if(modify){ this.unbind(); }
         return this;
       }
-      setVAOLayout(vaoLayout = '', dict = {}, modify = false){
+      setVAOLayout(vaoLayout = '', dict = {}, modify = true){
         const parsed = VAOWrapper.parse(vaoLayout, dict);
         //const parsed = parseDesignDescription(vaoLayout, VAO_DESIGN, {dict});
         //console.log(parsed);
@@ -9895,24 +10036,24 @@ available waveTables:
           for(const data of ibo.content){
             this.initIBO(data.name, data.data, data);
             // IBOは最後に作ったものが暫定的に採用される
-            this.setIBO(data.name);
+            this.bindIBO(data.name, false);
           }
         }
 
-        const {pointer = null, divisor = null, enable = null} = parsed.layout;
+        const {pointer = null, divisor = null, enable = null, ibo:iboSpecification = null} = parsed.layout;
         if(pointer !== null){
           for(const data of pointer.content){
-            this.pointer(data.index, data);
+            this.pointer(data.index, data, false);
             // pointerと同時に基本的にenableにする。
             // もし何らかの理由であとからdisableにしたい場合に<enable>タグでfalseを指定する
             // divisorと違ってデフォルトでは利用できないのでこの仕様は必須
-            this.enable(data.index);
+            this.enable(data.index, false);
           }
         }
         if(divisor !== null){
           // divisorのデフォルトは0である。指定がある場合のみ、逐次的に上書きする。
           for(const data of divisor.content){
-            this.divisor(data.index, data.divisor);
+            this.divisor(data.index, data.divisor, false);
           }
         }
         if(enable !== null){
@@ -9920,10 +10061,17 @@ available waveTables:
           // デフォルトでfalseにしたところをenableする、もしくは何らかの理由でdisableにするときに使う
           for(const data of enable.content){
             if(data.enable){
-              this.enable(data.index);
+              this.enable(data.index, false);
             }else{
-              this.disable(data.index);
+              this.disable(data.index, false);
             }
+          }
+        }
+        // たとえば<ibo> f;とでも書いておくと、自動的にiboとしてはfが使われる形になる。
+        if(iboSpecification !== null){
+          const iboName = iboSpecification.content[0].ibo;
+          if(this.ibos[iboName] !== undefined){
+            this.bindIBO(iboName, false);
           }
         }
 
@@ -9961,18 +10109,27 @@ available waveTables:
 
         return this;
       }
-      setIBO(name, modify = false){
+      bindIBO(name, modify = true){
+        // setIBO改めbindIBOにしましょう。
         // modifyがtrueの場合にサンドイッチする。これはvaoのバインド中に呼び出すことが多いので、そのようにする。
-        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
         if(modify){ this.bind(); }
         this.ibos[name].bind();
         if(modify){ this.unbind(); }
         return this;
       }
-      pointer(index, params = {}, modify = false){
+      unbindIBO(modify = true){
+        // IBOをクリアする処理。VAOはIBOのみ、バインド状態を記録できる。
+        // 現状それをクリアする方法が無いので、用意する。
+        if(modify){ this.bind(); }
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, null);
+        if(modify){ this.unbind(); }
+        return this;
+      }
+      pointer(index, params = {}, modify = true){
         // index主体に書き換える。vboの名前はbufferという形でparamsに含める
         const {buffer = ""} = params;
-        if(this.vbos[buffer] === undefined){ console.log('not found'); return this; }
+        if(this.vbos[buffer] === undefined){ console.log('vbo not found'); return this; }
         const vbo = this.vbos[buffer];
 
         const {
@@ -9995,50 +10152,50 @@ available waveTables:
 
         return this;
       }
-      divisor(index = 0, divisor = 0, modify = false){
+      divisor(index = 0, divisor = 0, modify = true){
         if(modify){ this.bind(); }
         this.gl.vertexAttribDivisor(index, divisor);
         if(modify){ this.unbind(); }
         return this;
       }
-      enable(index = 0, modify = false){
+      enable(index = 0, modify = true){
         if(modify){ this.bind(); }
         this.gl.enableVertexAttribArray(index);
         if(modify){ this.unbind(); }
         return this;
       }
-      disable(index = 0, modify = false){
+      disable(index = 0, modify = true){
         if(modify){ this.bind(); }
         this.gl.disableVertexAttribArray(index);
         if(modify){ this.unbind(); }
         return this;
       }
       updateVBO(name, data, options = {}){
-        if(this.vbos[name] === undefined){ console.log('not found'); return this; }
+        if(this.vbos[name] === undefined){ console.log('vbo not found'); return this; }
         this.vbos[name].update(data, options);
         return this;
       }
       updateIBO(name, data, options = {}){
-        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
         this.ibos[name].update(data, options);
         return this;
       }
       outputVBO(name, data, options = {}){
-        if(this.vbos[name] === undefined){ console.log('not found'); return this; }
+        if(this.vbos[name] === undefined){ console.log('vbo not found'); return this; }
         this.vbos[name].output(data, options);
         return this;
       }
       outputIBO(name, data, options = {}){
-        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
         this.ibos[name].output(data, options);
         return this;
       }
       showVBO(name, options = {}){
-        if(this.vbos[name] === undefined){ console.log('not found'); return null; }
+        if(this.vbos[name] === undefined){ console.log('vbo not found'); return null; }
         return this.vbos[name].show(options);
       }
       showIBO(name, options = {}){
-        if(this.ibos[name] === undefined){ console.log('not found'); return null; }
+        if(this.ibos[name] === undefined){ console.log('ibo not found'); return null; }
         return this.ibos[name].show(options);
       }
       drawArrays(drawCall = 'triangles', options = {}){
@@ -10055,7 +10212,7 @@ available waveTables:
         return this;
       }
       drawElements(name, drawCall = 'triangles', options = {}){
-        if(this.ibos[name] === undefined){ console.log('not found'); return this; }
+        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
         const ibo = this.ibos[name];
         const {count = 0, offset = 0, size = ibo.length, type = ibo.type} = options;
         //const properDrawCall = VAOWrapper.parseDrawCall(this.gl, drawCall);
@@ -10068,6 +10225,37 @@ available waveTables:
         }
         return this;
       }
+      registTFO(name = '', bufferDescription = ''){
+        const {gl} = this;
+        if(typeof(name) !== 'string' || name.length === 0){ return this; }
+        if(typeof(bufferDescription) === 'string'){
+          const bufferNames = bufferDescription.split(',').map((u) => u.trim());
+          this.registTFO(name, bufferNames);
+          return this;
+        }
+        if(!Array.isArray(bufferDescription)){ return this; }
+        const tfo = gl.createTransformFeedback();
+        let tfoIndex = 0;
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tfo);
+        for(let i=0; i<bufferDescription.length; i++){
+          const vbo = this.vbos[bufferDescription[i]];
+          if(vbo === undefined){ continue; }
+          gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, tfoIndex, vbo.buf);
+          tfoIndex++;
+        }
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+        this.tfos[name] = tfo;
+        return this;
+      }
+      bindTFO(name = ''){
+        if(this.tfos[name] === undefined){ console.log('tfo not found'); return this; }
+        this.gl.bindTransformFeedback(this.gl.TRANSFORM_FEEDBACK, this.tfos[name]);
+        return this;
+      }
+      unbindTFO(){
+        this.gl.bindTransformFeedback(this.gl.TRANSFORM_FEEDBACK, null);
+        return this;
+      }
       static parse(vaoLayout = "", dict = {}){
         return parseDesignDescription(vaoLayout, this.VAO_DESIGN, {dict});
       }
@@ -10075,11 +10263,12 @@ available waveTables:
         return new this(...arguments);
       }
       static scan(gl, options = {}){
-        // iboName: 紐付けられているIBOがある場合、それの名前を指定する
+        // iboName: 紐付けられているIBOがある場合、それの名前を指定する。デフォルトは'f'にしよう。混乱するので。
+        // もし線とかで使いたいなら適宜'l'とかにして！ほぼ面で使うと思うよ！
         // showVAAState: VAAの状態を表示するオプション
         // scanOnly: showVAAStateと同時にtrueにすることで、VAAの状態を確認するだけの関数になる。
         const {
-          iboName = 'ibo_0', showVAAState = false, scanOnly = false,
+          iboName = 'f', showVAAState = false, scanOnly = false,
           showArrayBuffer = false, showIndexBuffer = false
         } = options;
 
@@ -10141,7 +10330,7 @@ available waveTables:
 
         // バッファが無い、IBOだけのVAOも存在するのでそれでも可能。何にもない場合は空っぽができるだけ。
 
-        // 次にIBOのチェック。nullでなければコピーを作りバインドする形。名前はibo_0とするが...手動で決める？？
+        // 次にIBOのチェック。nullでなければコピーを作りバインドする形。名前のデフォルトは'f'でいいっすね。
         const curIBO = gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING);
         if(curIBO !== null){
           // WebGLBufferからiboを作る場合、初期化の都合上、byteLengthパラメータが必須
@@ -10151,6 +10340,8 @@ available waveTables:
           };
 
           if(showIndexBuffer){
+            // iboの名前も出そうね。
+            console.log(`iboName:${iboName}`);
             WBOWrapper.showBuffer(gl, curIBO, gl.ELEMENT_ARRAY_BUFFER, {arrayType:(properVAOcount <= 65536 ? Uint16Array : Uint32Array)});
             // 見せる過程でバッファをクリアしてしまうので、戻しておく。
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, curIBO);
@@ -10244,6 +10435,11 @@ available waveTables:
             type:'enum',
             keys:['index', 'enable'],
             values:[0, true]
+          },
+          ibo:{
+            type:'enum',
+            keys:['ibo'],
+            values:['']
           }
         }
       }
@@ -10276,10 +10472,9 @@ available waveTables:
   const foxApplications = (function(){
     const applications = {};
 
-    //const {createShaderProgram, uniformX} = webglUtils;
     const {parseDesignDescription} = foxParse;
     const {glEnum, glTypedArray, ProgramWrapper, WBOWrapper, VBOWrapper, UBOWrapper, IBOWrapper, VAOWrapper} = webglUtils;
-    const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount} = foxUtils;
+    const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount, Gun} = foxUtils;
     const {Interaction, Inspector} = foxIA;
     const {Vecta, MT3, MT4, QCameraPerse, QCameraOrtho} = fox3Dtools;
     const {coulour3} = foxColor;
@@ -12220,8 +12415,9 @@ available waveTables:
         const {easySave = true} = options;
         this.target = cvs;
         this.active = false;
-        this.interaction = new Inspector(cvs, {dblclick:true});
+        this.interaction = null; // easySaveでなければ用意しないようにする
         if(easySave){
+          this.interaction = new Inspector(cvs, {dblclick:true});
           this.interaction.add("dblclick", (function(){ this.fire(); }).bind(this));
           this.interaction.add("dbltap", (function(){ this.fire(); }).bind(this));
         }
@@ -12832,7 +13028,6 @@ available waveTables:
         const vbo = {};
         const ibo = {};
         const layout = [];
-        //const validAttributes = {};
 
         for(const name of attributeNames){
           if(attributes[name] === undefined) continue;
@@ -12844,14 +13039,6 @@ available waveTables:
           };
           // あんま綺麗ではないが、おそらく全部一緒なので、これでいいっすね。まあ違ってたら大問題だわ。普通に考えて。
           count = attr.count;
-          /*
-          validAttributes[name] = {
-            location:location[name], size:attr.size, type:attr.type, normalized:attr.normalized,
-            data:attr.data, count:attr.count,
-            isInteger:(!attr.normalized && (attr.type === 5125 || attr.type === 5213 || attr.type === 5121)),
-            buffer:Gltf.createBuffer(gl, attr.data)
-          };
-          */
         }
         if(face !== null && typeof(face) === 'string'){
           if(face === ''){
@@ -12866,64 +13053,6 @@ available waveTables:
         const vao = VAOWrapper.create(gl, {count, vbo, ibo, layout});
         return vao;
       }
-      /*
-      createVAO(gl, options = {}){
-        // meshesの翻訳データに基づいて新しく作る
-        // いずれweightAnimationsの方も書き換える
-        // locationですが、指定したものだけ用意する形にする。指定してなければ何にも起きない
-        // こっちで新たにlocationのセマンティクスに基づいたオブジェクトを用意してそれに従って作る
-        // webgpuでは全部こっちで用意するんで、まあいいですよね。
-        // これであれ、何気にCOLOR_1とかTEXCOORD_1とかも使えるようになるわね。
-        // createVAOとの違いはlocationを明示するところだけ。あと全部一緒...のはず。
-        const {meshId = 0, primitiveId = 0, location = {}} = options;
-
-        // POSITIONとかいろいろ入ってる。indexBuffer関連はINDICESを使おう。
-        const attributeNames = Object.keys(location);
-
-        const primitive = this.meshes[meshId].primitives[primitiveId];
-        const {attributes, indices} = primitive;
-        const validAttributes = {};
-
-        for(const name of attributeNames){
-          if(attributes[name] === undefined) continue;
-          const attr = attributes[name];
-          validAttributes[name] = {
-            location:location[name], size:attr.size, type:attr.type, normalized:attr.normalized,
-            data:attr.data, count:attr.count,
-            isInteger:(!attr.normalized && (attr.type === 5125 || attr.type === 5213 || attr.type === 5121)),
-            buffer:Gltf.createBuffer(gl, attr.data)
-          };
-        }
-
-        const indexBuffer = Gltf.createBuffer(gl, indices.data, {target:gl.ELEMENT_ARRAY_BUFFER});
-
-        // prepare vao.
-        const vao = gl.createVertexArray();
-        gl.bindVertexArray(vao);
-
-        // attributes.
-        for(const name of Object.keys(validAttributes)){
-          const attr = validAttributes[name];
-          gl.bindBuffer(gl.ARRAY_BUFFER, attr.buffer);
-          if(attr.isInteger){
-            gl.vertexAttribIPointer(attr.location, attr.size, attr.type, 0, 0);
-          }else{
-            gl.vertexAttribPointer(attr.location, attr.size, attr.type, attr.normalized, 0, 0)
-          }
-          gl.enableVertexAttribArray(attr.location);
-        }
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-
-        // indexBuffer.
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
-        gl.bindVertexArray(null);
-
-        vao.count = indices.count;
-        vao.type = indices.type;
-        return vao;
-      }
-      */
       createTransformAnimations(gl, options = {}){
         // meshのtreeのglobalを取得できるようにするか。アクセスできるようにしよう。
         // modelでいいっすね
@@ -13095,13 +13224,13 @@ available waveTables:
 
               vao.pointer(attr.location, {
                 buffer:vboName, size:attr.size, type:attr.type, normalized:attr.normalized
-              });
-              vao.enable(attr.location);
+              }, false);
+              vao.enable(attr.location, false);
               if(double){
                 vao.pointer(attr.location + attributeNum, {
                   buffer:`${vboName}__shifted__`, size:attr.size, type:attr.type, normalized:attr.normalized
-                });
-                vao.enable(attr.location + attributeNum);
+                }, false);
+                vao.enable(attr.location + attributeNum, false);
               }
             }
             vao.unbind();
@@ -13132,136 +13261,6 @@ available waveTables:
         // なぜanimationsという形にするかというと、拡張の余地を用意しておかないとのちのち困る可能性があるから。
         return {animations:weightAnimations};
       }
-      /*
-      createWeightAnimations(gl, options = {}){
-        // encodeMeshesを受けて作り直し。locationが指定されていない場合は機能しない。
-        // targetのセマンティクスをそのまま使う形で運用する。
-        // doubleってやるとattributeの枠を2つ分使って補間が可能になる
-        // loopのときとそうでないときの場合分けはCPUでやってください
-        const {meshId = 0, primitiveId = 0, location = {}, includeData = false, double = false} = options;
-        const primitive = this.meshes[meshId].primitives[primitiveId];
-        const {targets} = primitive;
-        const weightNum = targets.length;
-
-        // POSITIONとNORMALだが、POSITIONのみの場合もある。
-        const attributeNames = Object.keys(location);
-        const validAttributes = {};
-
-        // POSITIONだけか、又はNORMALも。dataだけ配列で置き換える。バッファは今は作らない。
-        for(const name of attributeNames){
-          if(targets[0][name] === undefined) continue;
-          const attr0 = targets[0][name];
-          const eachTargets = {
-            name:name,
-            location:location[name], size:attr0.size, type:attr0.type,
-            normalized:attr0.normalized, count:attr0.count
-          };
-          const data = [];
-          for(let i=0; i<targets.length; i++){
-            data.push(targets[i][name].data);
-          }
-          eachTargets.data = data;
-          validAttributes[name] = eachTargets;
-        }
-
-        const animations = this.animations.weight;
-        const weightAnimations = [];
-
-        for(let i=0, len=animations.length; i<len; i++){
-          const animation = animations[i];
-          if(animation.mesh !== meshId) continue;
-
-          const outputData = animation.data;
-          const frames = animation.frames;
-
-          // ここにvとnか、もしくはvだけを入れる。更新処理もこれに従って構築する。
-          // フレームごとのvやnのデータの配列を最終的に出力する形。
-          const morphAttributes = [];
-          for(const name of attributeNames){
-            const attr = validAttributes[name];
-
-            const morphAttr = {};
-            const morphData = [];
-            const data = attr.data;
-            const WEIGHT_NUM = data.length;
-            const VERTEX_NUM = data[0].length;
-            for(let k=0; k<frames; k++){
-              const lerpedData = new Array(VERTEX_NUM);
-              lerpedData.fill(0);
-              for(let l=0; l<WEIGHT_NUM; l++){
-                const w = outputData[k][l];
-                if(w===0){continue;}
-                for(let m=0; m<VERTEX_NUM; m++){
-                  lerpedData[m] += w * data[l][m];
-                }
-              }
-              morphData.push(new Float32Array(lerpedData));
-            }
-            morphAttr.attr = attr;
-            morphAttr.name = attr.name;
-            morphAttr.data = morphData;
-            const BYTE_LENGTH = morphData[0].length*4;
-            morphAttr.buffer = Gltf.createBuffer(gl, BYTE_LENGTH, {usage:gl.DYNAMIC_DRAW});
-            if(double){
-              // double
-              // bufferを追加で用意する。
-              morphAttr.shiftedBuffer = Gltf.createBuffer(gl, BYTE_LENGTH, {usage:gl.DYNAMIC_DRAW});
-            }
-            morphAttributes.push(morphAttr);
-          }
-
-          // あとはbindとupdateを作るだけ。bindはvaoにbufferを割り当てる。updateはbufferにデータを供給する。
-
-          // バッファの紐付け（アニメーション変更時）
-          const bind = (vao) => {
-            gl.bindVertexArray(vao);
-            for(const morphAttr of morphAttributes){
-              const {attr, buffer} = morphAttr;
-              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-              gl.vertexAttribPointer(attr.location, attr.size, attr.type, attr.normalized, 0, 0);
-              gl.enableVertexAttribArray(attr.location);
-              if(double){
-                // double
-                // locationは2つずつずらす。
-                const {shiftedBuffer} = morphAttr;
-                gl.bindBuffer(gl.ARRAY_BUFFER, shiftedBuffer);
-                gl.vertexAttribPointer(attr.location + 2, attr.size, attr.type, attr.normalized, 0, 0);
-                gl.enableVertexAttribArray(attr.location + 2);
-              }
-            }
-            gl.bindVertexArray(null);
-          }
-          // データの供給（随時）
-          const update = (frame) => {
-            for(const morphAttr of morphAttributes){
-              const {data, buffer} = morphAttr;
-              gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-              gl.bufferSubData(gl.ARRAY_BUFFER, 0, data[frame % frames]);
-              if(double){
-                // double
-                // 1つずらしたデータを入れる。
-                const {shiftedBuffer} = morphAttr;
-                gl.bindBuffer(gl.ARRAY_BUFFER, shiftedBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, data[(frame + 1) % frames]);
-              }
-            }
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
-          }
-          const result = {frames, bind, update};
-          // includeData:trueとするとanimationごとにdataが入る。
-          // 型付配列がフレーム数分入ってる。
-          if(includeData){
-            result.data = {};
-            for(const morphAttr of morphAttributes){
-              result.data[morphAttr.name] = morphAttr.data;
-            }
-          }
-          weightAnimations.push(result);
-        }
-        // なぜanimationsという形にするかというと、拡張の余地を用意しておかないとのちのち困る可能性があるから。
-        return {animations:weightAnimations};
-      }
-      */
       createSkinMeshAnimations(gl, options = {}){
         // さてやろうか
         const animations = this.animations.skinMesh;
@@ -13377,111 +13376,6 @@ available waveTables:
         // doubleの場合も同様
         // TFFで更新されたskinMatrixによりメッシュを動かす流れ
       }
-      /*
-      createSkinMeshAnimations(gl, options = {}){
-        const animations = this.animations.skinMesh;
-        // skinIdごとにanimationを作って格納する感じ
-        // 最後にmeshesを付与する（アニメーション作成時は使わない）
-        // boneの個数も付与する（シェーダーで使う）
-        // bindとupdateも関数の形で用意する感じで
-        // framesも付与する。
-        // ...
-        // boneNumはbonesのlength-1でいいです。gltf出力すればちゃんとアーマチュアはskinの配列から弾かれます。
-        // skinがmeshesの情報を持ってるので流用します。対応するmeshをこのアニメーションで動かすことができます。
-        // バカな例に合わせる必要はありません。
-
-        const {skinId = 0, double = false, includeData = false} = options;
-        const skin = this.skins[skinId];
-        const {bones, root, meshes} = skin;
-        const boneNum = bones.length-1;
-
-        const skinMeshAnimations = [];
-
-        for(let i=0; i<animations.length; i++){
-          const animation = animations[i];
-          if(animation.skin !== skinId) continue;
-
-          const {data, frames} = animation;
-
-          const matrixArrays = [];
-          for(let f=0; f<frames; f++){
-            const mArray = [];
-            for(let i=0; i<bones.length-1; i++){
-              const t = bones[i].tree;
-              const n = bones[i].nodeIndex;
-              if(data[n] === undefined) continue;
-              const localMatrix = data[n][f];
-              t.local.set(localMatrix);
-            }
-            BoneTree.computeGlobal(root.tree);
-            for(let i=0; i<bones.length-1; i++){
-              mArray.push(...bones[i].tree.global.m);
-            }
-            const matrixArray = new Float32Array(mArray);
-            matrixArrays.push(matrixArray);
-          }
-
-          if(!double){
-            // 通常の場合は1つだけスロットを用意する形。
-            const buf = gl.createBuffer();
-            gl.bindBuffer(gl.UNIFORM_BUFFER, buf);
-            gl.bufferData(gl.UNIFORM_BUFFER, 64*boneNum, gl.DYNAMIC_DRAW);
-            gl.bindBuffer(gl.UNIFORM_BUFFER, null);
-
-            // nameはUBOで使う
-            const bind = (pg, index, name) => {
-              gl.bindBufferBase(gl.UNIFORM_BUFFER, index, buf);
-              //const dataBufIndex = ;
-              gl.uniformBlockBinding(pg, gl.getUniformBlockIndex(pg, name), index);
-            }
-
-            // frameだけ指定すると更新される形
-            const update = (frame) => {
-              gl.bindBuffer(gl.UNIFORM_BUFFER, buf);
-              gl.bufferSubData(gl.UNIFORM_BUFFER, 0, matrixArrays[frame % frames]);
-              gl.bindBuffer(gl.UNIFORM_BUFFER, null);
-            }
-
-            const result = {frames, bind, update};
-            if(includeData){ result.data = matrixArrays; }
-            skinMeshAnimations.push(result);
-          }else{
-            // doubleの場合はbindで配列を指定してprevとnextを指定できるようにする。
-            // たとえば4と5で4.3の場合に0.3で補間できるようにするわけ。
-            const buf0 = gl.createBuffer();
-            const buf1 = gl.createBuffer();
-            gl.bindBuffer(gl.UNIFORM_BUFFER, buf0);
-            gl.bufferData(gl.UNIFORM_BUFFER, 64*boneNum, gl.DYNAMIC_DRAW);
-            gl.bindBuffer(gl.UNIFORM_BUFFER, buf1);
-            gl.bufferData(gl.UNIFORM_BUFFER, 64*boneNum, gl.DYNAMIC_DRAW);
-            gl.bindBuffer(gl.UNIFORM_BUFFER, null);
-            const bind = (pg, indices, names) => {
-              gl.bindBufferBase(gl.UNIFORM_BUFFER, indices[0], buf0);
-              //const dataBufIndex0 =
-              gl.uniformBlockBinding(pg, gl.getUniformBlockIndex(pg, names[0]), indices[0]);
-              gl.bindBufferBase(gl.UNIFORM_BUFFER, indices[1], buf1);
-              //const dataBufIndex1 = ;
-              gl.uniformBlockBinding(pg, gl.getUniformBlockIndex(pg, names[1]), indices[1]);
-            }
-            // framesが1の場合は両方0ですね。f,f+1に入れるわけ。あとはシェーダーサイドでよしなに。
-            const update = (frame) => {
-              gl.bindBuffer(gl.UNIFORM_BUFFER, buf0);
-              gl.bufferSubData(gl.UNIFORM_BUFFER, 0, matrixArrays[frame%frames]);
-              gl.bindBuffer(gl.UNIFORM_BUFFER, buf1);
-              gl.bufferSubData(gl.UNIFORM_BUFFER, 0, matrixArrays[(frame+1)%frames]);
-              gl.bindBuffer(gl.UNIFORM_BUFFER, null);
-            }
-            // ここから先はshaderの仕事。まあ、頑張って。
-            const result = {frames, bind, update};
-            if(includeData){ result.data = matrixArrays; }
-            skinMeshAnimations.push(result);
-          }
-        }
-        // animationsだけ分けて、共通のboneNumとmeshesとは別にする。
-        // meshesに属するすべてのメッシュを動かす。boneNumはシェーダーで使う。
-        return {animations:skinMeshAnimations, boneNum, root, meshes};
-      }
-      */
       async loadTextures(){
         const {images} = this.gltf;
         if(images === undefined) return;
@@ -13609,7 +13503,7 @@ available waveTables:
     // shader snipets. 順次追加予定。
     const codeSnipets = {
       // rotationMatrix. axisの周りにtだけ回転する。使い方はシェーダー内で右から掛けるだけ。
-      'rotationMatrix':`
+'rotationMatrix':`
 mat3 rotationMatrix(in vec3 axis, in float t){
   return mat3(
     cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y,
@@ -13617,15 +13511,20 @@ mat3 rotationMatrix(in vec3 axis, in float t){
     (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z
   );
 }
+mat3 rotationMatrix(in float x, in float y, in float z, in float t){
+  return rotationMatrix(vec3(x, y, z), t);
+}
+mat3 rotationMatrix(in vec4 v){ return rotationMatrix(v.xyz, v.w); }
 `,
-      'hsv2rgb':`
+'hsv2rgb':`
 vec3 hsv2rgb(in vec3 color){
   vec3 rgb = clamp(abs(mod(color.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   rgb = rgb * rgb * (3.0 - 2.0 * rgb);
   return color.z * mix(vec3(1.0), rgb, color.y);
 }
+vec3 hsv2rgb(in float r, in float g, in float b){ return hsv2rgb(vec3(r, g, b)); }
 `,
-      'overlay':`
+'overlay':`
 vec3 overlay(in vec3 src, in vec3 dst){
   vec3 result;
     if(dst.r < 0.5){ result.r = 2.0*src.r*dst.r; }else{ result.r = 2.0*(src.r+dst.r-src.r*dst.r)-1.0; }
@@ -13633,8 +13532,11 @@ vec3 overlay(in vec3 src, in vec3 dst){
     if(dst.b < 0.5){ result.b = 2.0*src.b*dst.b; }else{ result.b = 2.0*(src.b+dst.b-src.b*dst.b)-1.0; }
   return result;
 }
+vec3 overlay(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
+  return overlay(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
+}
 `,
-      'softLight':`
+'softLight':`
 vec3 softLight(in vec3 src, in vec3 dst){
   vec3 result;
   if(src.r < 0.5){ result.r = 2.0*src.r*dst.r + dst.r*dst.r*(1.0-2.0*src.r); }
@@ -13644,6 +13546,365 @@ vec3 softLight(in vec3 src, in vec3 dst){
   if(src.b < 0.5){ result.b = 2.0*src.b*dst.b + dst.b*dst.b*(1.0-2.0*src.b); }
   else{ result.b = 2.0*dst.b*(1.0-src.b) + sqrt(dst.b)*(2.0*src.b-1.0); }
   return result;
+}
+vec3 softLight(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
+  return softLight(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
+}
+`,
+'transform':`
+void applyTransformV(inout vec3 v, in mat4 tf){
+  v = (vec4(v, 1.0) * tf).xyz;
+}
+void applyTransformN(inout vec3 n, in mat4 tf){
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+void applyTransform(inout vec3 v, inout vec3 n, in mat4 tf){
+  applyTransformV(v, tf);
+  applyTransformN(n, tf);
+}
+`,
+'scale':`
+mat4 getScale(in vec3 s){
+  return mat4(s.x, 0.0, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, 0.0, s.z, 0.0, 0.0, 0.0, 0.0, 1.0);
+}
+mat4 getScale(in float sx, in float sy, in float sz){
+  return getScale(vec3(sx, sy, sz));
+}
+mat4 getScale(in float s){
+  return getScale(vec3(s));
+}
+void localScale(inout mat4 m, in vec3 s){
+  m = getScale(s) * m;
+}
+void localScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m = getScale(vec3(sx, sy, sz)) * m;
+}
+void localScale(inout mat4 m, in float s){
+  m = getScale(vec3(s)) * m;
+}
+void globalScale(inout mat4 m, in vec3 s){
+  m *= getScale(s);
+}
+void globalScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m *= getScale(vec3(sx, sy, sz));
+}
+void globalScale(inout mat4 m, in float s){
+  m *= getScale(vec3(s));
+}
+void setScale(inout mat4 m, in vec3 s){
+  m = getScale(s);
+}
+void setScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m = getScale(vec3(sx, sy, sz));
+}
+void setScale(inout mat4 m, in float s){
+  m = getScale(vec3(s));
+}
+void applyScaleV(inout vec3 v, in vec3 s){
+  v = (vec4(v, 1.0) * getScale(s)).xyz;
+}
+void applyScaleV(inout vec3 v, in float sx, in float sy, in float sz){
+  v = (vec4(v, 1.0) * getScale(vec3(sx, sy, sz))).xyz;
+}
+void applyScaleV(inout vec3 v, in float s){
+  v = (vec4(v, 1.0) * getScale(vec3(s))).xyz;
+}
+void applyScaleN(inout vec3 n, in vec3 s){
+  n = (vec4(n, 0.0) * inverse(transpose(getScale(s)))).xyz;
+}
+void applyScaleN(inout vec3 n, in float sx, in float sy, in float sz){
+  n = (vec4(n, 0.0) * inverse(transpose(getScale(vec3(sx, sy, sz))))).xyz;
+}
+void applyScaleN(inout vec3 n, in float s){
+  n = (vec4(n, 0.0) * inverse(transpose(getScale(vec3(s))))).xyz;
+}
+void applyScale(inout vec3 v, inout vec3 n, in vec3 s){
+  mat4 tf = getScale(s);
+  v = (vec4(v, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+void applyScale(inout vec3 v, inout vec3 n, in float sx, in float sy, in float sz){
+  mat4 tf = getScale(vec3(sx, sy, sz));
+  v = (vec4(v, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+void applyScale(inout vec3 v, inout vec3 n, in float s){
+  mat4 tf = getScale(vec3(s));
+  v = (vec4(v, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+`,
+'translation':`
+mat4 getTranslation(in vec3 t){
+  return mat4(1.0, 0.0, 0.0, t.x, 0.0, 1.0, 0.0, t.y, 0.0, 0.0, 1.0, t.z, 0.0, 0.0, 0.0, 1.0);
+}
+mat4 getTranslation(in float tx, in float ty, in float tz){
+  return getTranslation(vec3(tx, ty, tz));
+}
+void localTranslation(inout mat4 m, in vec3 t){
+  m = getTranslation(t) * m;
+}
+void localTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m = getTranslation(vec3(tx, ty, tz)) * m;
+}
+void globalTranslation(inout mat4 m, in vec3 t){
+  m *= getTranslation(t);
+}
+void globalTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m *= getTranslation(vec3(tx, ty, tz));
+}
+void setTranslation(inout mat4 m, in vec3 t){
+  m = getTranslation(t);
+}
+void setTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m = getTranslation(vec3(tx, ty, tz));
+}
+void applyTranslationV(inout vec3 v, in vec3 t){
+  v = (vec4(v, 1.0) * getTranslation(t)).xyz;
+}
+void applyTranslationV(inout vec3 v, in float tx, in float ty, in float tz){
+  v = (vec4(v, 1.0) * getTranslation(vec3(tx, ty, tz))).xyz;
+}
+void applyTranslationN(inout vec3 n, in vec3 t){
+  // 何も起きない
+}
+void applyTranslationN(inout vec3 n, in float tx, in float ty, in float tz){
+  // 何も起きない
+}
+void applyTranslation(inout vec3 v, inout vec3 n, in vec3 t){
+  mat4 tf = getTranslation(t);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nは何にもしない
+}
+void applyTranslation(inout vec3 v, inout vec3 n, in float tx, in float ty, in float tz){
+  mat4 tf = getTranslation(vec3(tx, ty, tz));
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nは何にもしない
+}
+`,
+'rotation':`
+mat4 getRotation(in vec3 axis, in float t){
+  return mat4(
+    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
+    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
+    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+}
+mat4 getRotation(in vec4 axisAndT){
+  return getRotation(axisAndT.xyz, axisAndT.w);
+}
+mat4 getRotation(in float rx, in float ry, in float rz, in float t){
+  return getRotation(vec3(rx, ry, rz), t);
+}
+mat4 getRotation(in float t){
+  return getRotation(vec3(0.0, 0.0, 1.0), t);
+}
+void localRotation(inout mat4 m, in vec3 axis, in float t){
+  m = getRotation(axis, t) * m;
+}
+void localRotation(inout mat4 m, in vec4 axisAndT){
+  m = getRotation(axisAndT.xyz, axisAndT.w) * m;
+}
+void localRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m = getRotation(vec3(rx, ry, rz), t) * m;
+}
+void localRotation(inout mat4 m, in float t){
+  m = getRotation(vec3(0.0, 0.0, 1.0), t) * m;
+}
+void globalRotation(inout mat4 m, in vec3 axis, in float t){
+  m *= getRotation(axis, t);
+}
+void globalRotation(inout mat4 m, in vec4 axisAndT){
+  m *= getRotation(axisAndT.xyz, axisAndT.w);
+}
+void globalRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m *= getRotation(vec3(rx, ry, rz), t);
+}
+void globalRotation(inout mat4 m, in float t){
+  m *= getRotation(vec3(0.0, 0.0, 1.0), t);
+}
+void setRotation(inout mat4 m, in vec3 axis, in float t){
+  m = getRotation(axis, t);
+}
+void setRotation(inout mat4 m, in vec4 axisAndT){
+  m = getRotation(axisAndT.xyz, axisAndT.w);
+}
+void setRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m = getRotation(vec3(rx, ry, rz), t);
+}
+void setRotation(inout mat4 m, in float t){
+  m = getRotation(vec3(0.0, 0.0, 1.0), t);
+}
+void applyRotationV(inout vec3 v, in vec3 axis, in float t){
+  v = (vec4(v, 1.0) * getRotation(axis, t)).xyz;
+}
+void applyRotationV(inout vec3 v, in vec4 axisAndT){
+  v = (vec4(v, 1.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
+}
+void applyRotationV(inout vec3 v, in float rx, in float ry, in float rz, in float t){
+  v = (vec4(v, 1.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
+}
+void applyRotationV(inout vec3 v, in float t){
+  v = (vec4(v, 1.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
+}
+void applyRotationN(inout vec3 n, in vec3 axis, in float t){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotation(axis, t)).xyz;
+}
+void applyRotationN(inout vec3 n, in vec4 axisAndT){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
+}
+void applyRotationN(inout vec3 n, in float rx, in float ry, in float rz, in float t){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
+}
+void applyRotationN(inout vec3 n, in float t){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
+}
+void applyRotation(inout vec3 v, inout vec3 n, in vec3 axis, in float t){
+  mat4 tf = getRotation(axis, t);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 v, inout vec3 n, in vec4 axisAndT){
+  mat4 tf = getRotation(axisAndT.xyz, axisAndT.w);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 v, inout vec3 n, in float rx, in float ry, in float rz, in float t){
+  mat4 tf = getRotation(vec3(rx, ry, rz), t);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 v, inout vec3 n, in float t){
+  mat4 tf = getRotation(vec3(0.0, 0.0, 1.0), t);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+`,
+'rotationQ':`
+mat4 getRotationQ(in vec4 q){
+  return mat4(
+    2.0*q.w*q.w-1.0+2.0*q.x*q.x, 2.0*(q.x*q.y-q.z*q.w), 2.0*(q.x*q.z+q.y*q.w), 0.0,
+    2.0*(q.x*q.y+q.z*q.w), 2.0*q.w*q.w-1.0+2.0*q.y*q.y, 2.0*(q.y*q.z-q.x*q.w), 0.0,
+    2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+}
+mat4 getRotationQ(in float x, in float y, in float z, in float w){
+  return getRotationQ(vec4(x, y, z, w));
+}
+void localRotationQ(inout mat4 m, in vec4 q){
+  m = getRotationQ(q) * m;
+}
+void localRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m = getRotationQ(vec4(x, y, z, w)) * m;
+}
+void globalRotationQ(inout mat4 m, in vec4 q){
+  m *= getRotationQ(q);
+}
+void globalRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m *= getRotationQ(vec4(x, y, z, w));
+}
+void setRotationQ(inout mat4 m, in vec4 q){
+  m = getRotationQ(q);
+}
+void setRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m = getRotationQ(vec4(x, y, z, w));
+}
+void applyRotationQV(inout vec3 v, in vec4 q){
+  v = (vec4(v, 1.0) * getRotationQ(q)).xyz;
+}
+void applyRotationQV(inout vec3 v, in float x, in float y, in float z, in float w){
+  v = (vec4(v, 1.0) * getRotationQ(vec4(x, y, z, w))).xyz;
+}
+void applyRotationQN(inout vec3 n, in vec4 q){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotationQ(q)).xyz;
+}
+void applyRotationQN(inout vec3 n, in float x, in float y, in float z, in float w){
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * getRotationQ(vec4(x, y, z, w))).xyz;
+}
+void applyRotationQ(inout vec3 v, inout vec3 n, in vec4 q){
+  mat4 tf = getRotationQ(q);
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotationQ(inout vec3 v, inout vec3 n, in float x, in float y, in float z, in float w){
+  mat4 tf = getRotationQ(vec4(x, y, z, w));
+  v = (vec4(v, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+`,
+'quarternion':`
+vec4 multQ(in vec4 q1, in vec4 q2){
+  // 外でのq2, q1の順に掛け算する。そうしないと回転としての取り扱いで不整合が出るので。
+  float w = q2.w * q1.w - q2.x * q1.x - q2.y * q1.y - q2.z * q1.z;
+  float x = q2.w * q1.x + q2.x * q1.w + q2.y * q1.z - q2.z * q1.y;
+  float y = q2.w * q1.y + q2.y * q1.w + q2.z * q1.x - q2.x * q1.z;
+  float z = q2.w * q1.z + q2.z * q1.w + q2.x * q1.y - q2.y * q1.x;
+  return vec4(x, y, z, w);
+}
+vec4 conjQ(in vec4 q){
+  return vec4(-q.x, -q.y, -q.z, q.w);
+}
+vec4 getQuarternionFromAA(in vec3 axis, in float angle){
+  return vec4(sin(angle*0.5)*normalize(axis), cos(angle*0.5));
+}
+vec4 getQuarternionFromAA(in vec4 v){
+  return getQuarternionFromAA(v.xyz, v.w);
+}
+vec4 getQuarternionFromAA(in float x, in float y, in float z, in float angle){
+  return getQuarternionFromAA(vec3(x, y, z), angle);
+}
+vec4 powQ(in vec4 q, in float a, in float threshold){
+  float m = dot(q, q);
+  if(m < threshold){
+    return vec4(0.0);
+  }
+  if(q.w < 0.0){
+    q *= -1.0;
+  }
+  float n = sqrt(m);
+  float c = q.w/n;
+  float s = sqrt(m - q.w*q.w)/n;
+  float t = atan(s, c); // 0～PI/2
+  float multiplier = pow(n, a);
+  if(abs(t) < threshold){
+    q.w = (q.w/n)*multiplier;
+    q.x = (q.x/n)*multiplier;
+    q.y = (q.y/n)*multiplier;
+    q.z = (q.z/n)*multiplier;
+    return q;
+  }
+  vec3 axis = (q.xyz/n)/s;
+  float phi = a*t;
+  return multiplier * vec4(sin(phi)*axis, cos(phi));
+}
+vec4 powQ(in vec4 q, in float a){
+  return powQ(q, a, 1e-10);
+}
+vec4 slerpQ(in vec4 q1, in vec4 q2, in float r, in float threshold){
+  float m = dot(q1, q1);
+  if(m < threshold){
+    return vec4(0.0);
+  }
+  // multQが逆になっているので掛ける順序を逆にする
+  vec4 q = multQ(conjQ(q1), q2) * (1.0/m);
+  return multQ(q1, powQ(q, r, threshold));
+}
+vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
+  return slerpQ(q1, q2, r, 1e-10);
 }
 `
     };
@@ -14050,13 +14311,14 @@ void main(){
     // (0,0)を中心に置いてyが上か下か、コーナーは±1.
     // それと左上(0,0)もしくは左下(0,0)ですね。そしてデフォルトは 'leftUp' にする、と。
     // textureから取るときとかそうしますし。
+    // original_uvは廃止。positionに改名。自由にいじってください。
     class PlaneShader extends ShaderPrototype{
       constructor(options = {}){
         super(options);
         const {align = 'leftUp'} = options;
         this.align = align;
 
-        this.initialDescriptors.vs.output = `gl_Position = vec4(original_uv, depth, 1.0);`;
+        this.initialDescriptors.vs.output = `gl_Position = vec4(position, depth, 1.0);`;
         this.initDescriptors();
       }
       createShader(){
@@ -14088,7 +14350,7 @@ ${v.global}
 
 void main(){
   vec2 uv = pos[gl_VertexID];
-  vec2 original_uv = uv; // 板ポリ用
+  vec2 position = uv; // positionだろ普通。それで、いじれるようにする。
   float depth = 0.0; // depthもいじれるように
 
   ${PlaneShader.aligns[this.align].replaceAll(/\n/g, "\n  ")}
@@ -14338,6 +14600,25 @@ void main(){
         this.programs[program.name] = program;
         return this;
       }
+      build(buildParams = {}, name = ''){
+        // もしlayout以外何にも要らないのであれば...それを文字列として第一引数に置けます。
+        // 第二引数は基本無視ですが、buildParamsが文字列の場合のみ、プログラム名を指定できます。
+        if(typeof(buildParams) === 'string'){
+          const properParams = {layout:buildParams};
+          if(name !== ''){ properParams.program = {name:name}; }
+          this.build(properParams);
+          return this;
+        }
+
+        // addShader～createProgramまで一気にやる。layoutだけ文字列。
+        // シェーダー名が空っぽの場合、defaultが延々と書き換えられ、再利用できない。ほとんどそれで十分だが。
+        // プログラム名はprogramでnameで指定。使い分けるならここで指定する。
+        const {shader = {}, layout = ``, layoutOptions = {}, program = {}} = buildParams;
+        this.addShader(shader); // このときに自動的にcurrentが作ったシェーダーになる
+        this.getShader().write(layout, layoutOptions);
+        this.createShader().createProgram(program);
+        return this;
+      }
       useProgram(name = 'default_0'){
         // 以前はcurrentShaderに付随するprogramを起動させるものだったが、それだとshader:programで1:1になってしまう。
         // それを避けるためにこのような仕組みになった。
@@ -14384,9 +14665,14 @@ void main(){
         this.addShader();
       }
       render(options = {}){
-        // triangle_stripで板ポリ芸。optionsは未定。
+        // triangle_stripで板ポリ芸。optionsはまずcountかなぁ。インスタンシングしたい。
         const gl = this.gl;
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        const {count = 0} = options;
+        if(count === 0){
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }else{
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+        }
       }
     }
 
@@ -14419,6 +14705,9 @@ void main(){
 
         // tffLayoutは最大長さ4の配列で、使わない場合はnullを指定します。てか欠番できたっけ？まあいいか。
         // drawCallは文字列でもいいし、gl定数でもいいです。
+
+        // tffLayoutが空っぽでも、外部的にtfoを用いれば、問題なく処理を実行できます。
+        // その処理はVAOがやるっぽいんで、まあ、その場合はtffLayoutは空っぽでもOKです。
         const {
           tffLayout = [],
           rasterizerDiscard = true, drawCall = 'points',
@@ -15212,6 +15501,39 @@ void main(){
       }
     }
 
+    // リサイズモジュール
+    // リサイズの際はこれを外部的に作り、カメラシステムに渡す。
+    // checkFunctionの役割：画面サイズに対し、欲しいキャンバスの横と縦を返す。全画面ならそのまま返す。
+    // projFunctionの役割：モジュールに対し、それのw,hに基づいて（基づかなくてもいいが）setProjの引数を構成して返す。
+    class ResizeModule{
+      constructor(w=1, h=1, dpr=1){
+        this.w = w;
+        this.h = h;
+        this.dpr = dpr;
+        this.checkFunction = (w, h) => { return {w:w, h:h}; };
+        this.projFunction = (rm) => { return {aspect:rm.w/rm.h}; };
+      }
+      set set_check(func){
+        this.checkFunction = func;
+      }
+      set set_proj(func){
+        this.projFunction = func;
+      }
+      check(w, h){
+        return this.checkFunction(w, h);
+      }
+      proj(){
+        return this.projFunction(this);
+      }
+      update(newSize){
+        this.w = newSize.w;
+        this.h = newSize.h;
+      }
+      viewport(gl){
+        gl.viewport(0, 0, this.w*this.dpr, this.h*this.dpr);
+      }
+    }
+
     // カメラ部分を分離して、組み込む形にする。
     // キャンバスもカメラでしか使わないのでこっちでやる
     // Render3Dのupdateは廃止し、viewMatrixの準備はsetMatricesでやる。そうしないと複数のRender3Dを使い分ける際に不便。
@@ -15244,6 +15566,7 @@ void main(){
     // たとえばcamだけきちんと用意してccは軸とか適当でいいよ...いつものy上でいいよ...の場合、'free'とか'axis'で済む。
     // z上とかがいい場合はきちんと用意しましょう！！
     // 文字列の指定の仕方によってはnullになるんで、その場合は上記のどれかになる。
+    // autoReset廃止。reset:'none'/'manual'/'auto'.
     class CameraSystem{
       constructor(params = {}){
         // cvsは必須ではない。ただアスペクト比が考慮されないところだけが問題。
@@ -15251,7 +15574,7 @@ void main(){
         const {
           cvs = null,
           cam = null, cc = null, easySetting = 'default',
-          autoReset = false
+          reset = 'none', resizeModule = null
         } = params;
         this.cvs = cvs;
 
@@ -15305,21 +15628,97 @@ void main(){
         }
 
         this.active = true;
-        this.autoReset = (this.cc !== null && autoReset);
-        if(this.autoReset){
-          this.resetter = {duration:20, current:20};
-          const IR = new Inspector(this.cvs, {dblclick:true});
-          this.cameraReset = ()=>{
-            // activeでない場合、cameraResetは機能しないとする。
-            if(!this.active) return;
-            if(this.resetter.current === this.resetter.duration){
-              this.cam.saveState("tmp");
-              this.cc.pause();
-              this.resetter.current = 0;
+
+        this.resetMode = reset;
+        this.resetter = null;
+        this.resetInteraction = null;
+        if(this.resetMode === 'manual' || this.resetMode === 'auto'){
+          // リセットはGunで書こう。
+          this.resetter = new Gun();
+          this.resetter.registWeapon('reset', ()=>{
+            return {
+              construct:{
+                life:20, type:'discrete', group:"reset"
+              },
+              init:(b)=>{
+                this.cam.saveState("tmp");
+                this.pause();
+              },
+              update:(b)=>{
+                const prg = b.progress;
+                this.cam.lerpState("tmp", "default", prg*prg*(3-2*prg));
+              },
+              remove:(b)=>{
+                this.cam.loadState("default");
+                this.start();
+                this.reset();
+              }
             }
-          };
-          IR.add("dblclick", this.cameraReset);
-          IR.add("dbltap", this.cameraReset);
+          });
+
+          if(this.resetMode === 'auto'){
+            this.resetInteraction = new Inspector(this.cvs, {dblclick:true});
+            this.resetInteraction.add("dblclick", () => { this.cameraReset(); });
+            this.resetInteraction.add("dbltap", () => { this.cameraReset(); });
+          }
+        }
+
+        // リサイズモジュールが設定されている場合はリサイズの際にこれが実行される。
+        this.resizeModule = resizeModule;
+        if(this.resizeModule !== null){
+          window.addEventListener('resize', (e) => {
+            this.resize(window.innerWidth, window.innerHeight);
+          });
+        }
+      }
+      pause(){
+        if(this.cc === null){ return; }
+        this.cc.pause();
+      }
+      start(){
+        if(this.cc === null){ return; }
+        this.cc.start();
+      }
+      reset(){
+        if(this.cc === null){ return; }
+        this.cc.reset();
+      }
+      cameraReset(){
+        // 移植。manualの場合はこれを手動で実行する。
+        if(this.resetMode === 'none'){ return; }
+        // countはresetグループのbulletの個数を数えます。無かったら作ります。
+        // updateのあとremoveで破棄されて無くなります。そういうサイクル。
+        if(this.resetter.count('reset') === 0){
+          this.resetter.fire('reset');
+        }
+      }
+      resize(w, h){
+        // モジュールが無ければ何にも起きないよ。
+        if(this.resizeModule === null) return;
+        // dprは事前に放り込んでおけ
+        const {dpr} = this.resizeModule;
+
+        const targetSize = this.resizeModule.check(w, h);
+        // リサイズはモジュール単位で実行される。複数のカメラがあってもそれぞれのモジュールのw,hが未更新であれば
+        // すべて問題なく実行される。cvsのサイズ変更は重複するが、それ以外の処理は個別にすべて実行される。
+        // カメラごとに射影の仕組みが異なっていて問題ない。何が言いたいかというとモジュールはきちんと分けてね。
+        if(this.resizeModule.w !== targetSize.w || this.resizeModule.h !== targetSize.h){
+          this.cvs.width = dpr*targetSize.w;
+          this.cvs.height = dpr*targetSize.h;
+          this.cvs.style.width = `${targetSize.w}px`;
+          this.cvs.style.height = `${targetSize.h}px`;
+          this.resizeModule.update(targetSize);
+
+          // キャンバスを修正したのでこのタイミングでupdateCanvasDataを実行する
+          if(this.cc !== null){
+            this.cc.updateCanvasData();
+            this.cc.reset();
+          }
+          if(this.resetInteraction !== null){
+            this.resetInteraction.updateCanvasData();
+          }
+          // カメラの修正
+          this.cam.setProj(this.resizeModule.proj());
         }
       }
       activate(){
@@ -15341,16 +15740,10 @@ void main(){
         // CameraControllerのupdate
         // ビュー行列の更新はRender3Dに委譲
         // autoResetの場合はダブルクリックでリセットする
-        if(this.autoReset){
-          if(this.resetter.current < this.resetter.duration){
-            this.resetter.current++;
-            const prg = this.resetter.current/this.resetter.duration;
-            this.cam.lerpState("tmp", "default", prg*prg*(3-2*prg));
-            if(this.resetter.current === this.resetter.duration){
-              this.cc.start();
-              this.cc.reset();
-            }
-          }
+        if(this.resetMode === 'manual' || this.resetMode === 'auto'){
+          // まあこんなもんです。楽ちん。
+          this.resetter.update();
+          this.resetter.remove();
         }
         // ccを使わない場合は何もしない。
         if(this.cc !== null){ this.cc.update(); }
@@ -15380,12 +15773,28 @@ void main(){
         const {
           cameraSystem = null
         } = params;
-        this.cameraSystem = (cameraSystem === null ? new CameraSystem() : cameraSystem);
-        this.cam = this.cameraSystem.getCam();
+        // cameraSystemを保持する必要性を今のところ感じないので破棄しよう。
+        const properCameraSystem = (cameraSystem === null ? new CameraSystem() : cameraSystem);
+        this.cam = properCameraSystem.getCam();
 
+        // 事前に計算する必要ないと思う。どうせuniformセット時しか使わんし。
+        // ライトのあれも使うのはカメラであって行列ではないし。だったらわざわざ事前に行列を設定する必要ないね。
         this.modelMatrix = new MT4();
-        this.viewMatrix = this.cam.getView();
-        this.modelViewMatrix = this.viewMatrix.multM(this.modelMatrix, true);
+        this.viewMatrix = new MT4();
+        this.modelViewMatrix = new MT4();
+        //this.viewMatrix = this.cam.getView();
+        //this.modelViewMatrix = this.viewMatrix.multM(this.modelMatrix, true);
+      }
+      setCamera(cam){
+        // 外部的にカメラをセットする。システムの場合はシステム内のカメラ。直接カメラをセットするのもあり。
+        // たとえば複数の画面でカメラを切り替えるようなユースケースを想定している。
+        // このタイミングでview行列を計算する必要が生じたなら仕様変更もありうる。今は不要。
+        if(cam instanceof CameraSystem){
+          this.cam = cam.getCam();
+        }else{
+          this.cam = cam;
+        }
+        return this;
       }
       model(){
         // 好きに。
@@ -15419,6 +15828,83 @@ void main(){
         super(gl, params);
         this.shaderFactory = (options) => { return new NoLightShader(options); }
         this.addShader();
+      }
+    }
+
+    // こんなもんかな。そうですね。ふぅ。良いと思う。
+    // targetsは好きに勝手な名前を付けてください。aでもbでもleftでもrightでも好きに。
+    class CameraSystemManager{
+      constructor(params = {}){
+        const {systems = {}, targets = {}} = params;
+        this.targets = {};
+        for(const [key, value] of Object.entries(targets)){
+          this.targets[key] = value;
+        }
+        this.systems = {};
+        for(const [key, value] of Object.entries(systems)){
+          this.systems[key] = value;
+        }
+        // システムのデフォルトはnullとする
+        this.currentSystem = null;
+      }
+      addTarget(key, target){
+        this.targets[key] = target;
+        return this;
+      }
+      removeTarget(key){
+        delete this.targets[key];
+        return this;
+      }
+      setSystem(key = ""){
+        if(key === ""){ return this; }
+        if(this.systems[key] === undefined){
+          console.error('invalid camera system name.');
+          return this;
+        }
+        this.currentSystem = this.systems[key];
+        if(this.currentSystem === null){ return; }
+        // ここで他のカメラシステムについて、オビコンの機能をpauseし、さらにリセッターを閉じる。
+        // 銃口を閉じるにはmuzzleOffを使う。
+        for(const [otherKey, system] of Object.entries(this.systems)){
+          if(key === otherKey) continue;
+          system.pause();
+          if(system.resetter instanceof Gun){
+            system.resetter.muzzleOff();
+          }
+        }
+        // そして現行のシステムについてオビコンをstartさせ、リセッターの銃口を開く。
+        // リセッターをGunで用意しているため、Gunにアクセスすればリセットを封じられるのは強み。
+        this.currentSystem.start();
+        if(this.currentSystem.resetter instanceof Gun){
+          this.currentSystem.resetter.muzzleOn();
+        }
+        // targetすべてに現行のカメラシステムを適用
+        for(const target of Object.values(this.targets)){
+          target.setCamera(this.currentSystem);
+        }
+        return this;
+      }
+      addSystem(key, system){
+        if(!(system instanceof CameraSystem)){
+          console.error('invalid value.');
+          return this;
+        }
+        this.systems[key] = system;
+        return this;
+      }
+      removeSystem(key){
+        // こうしないとObject.keysで取得されてしまう。
+        delete this.systems[key];
+        return this;
+      }
+      update(){
+        if(this.currentSystem === null){ return; }
+        this.currentSystem.update();
+      }
+      cameraReset(){
+        // カレントのカメラを手動リセット
+        if(this.currentSystem === null){ return; }
+        this.currentSystem.cameraReset();
       }
     }
 
@@ -15765,8 +16251,10 @@ void main(){
     applications.RenderPoints = RenderPoints;
     applications.RenderTFF = RenderTFF;
     applications.NoLightShader = NoLightShader;
+    applications.ResizeModule = ResizeModule;
     applications.CameraSystem = CameraSystem;
     applications.Render3D = Render3D;
+    applications.CameraSystemManager = CameraSystemManager;
     applications.NoLightRender3D = NoLightRender3D;
     applications.LightRender3D = LightRender3D;
     applications.StandardLightRender3D = StandardLightRender3D;

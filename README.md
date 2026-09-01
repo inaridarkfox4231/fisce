@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.3.1/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.3.2/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.1/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.2/src/index.min.js"></script>
 ```
 
 memo  
@@ -678,4 +678,80 @@ WBO関連の整備をしたので、それに基づいて大幅に書き換え�
 PBRの方は変な構造体だったんですが、StandardLightの方と同じくviewNormalとかにしました。  
 たとえばbump mappingではviewNormalをいじるんですが同じコードを書くことができます。  
 
-以上。
+以上。  
+
+### 1.3.2  
+　ジオメトリは見送り。内容的には1.3.0～1.3.1において導入された内容の利便性を図るパッチ処理がメイン。  
+　真新しいフィーチャーはリサイズとかその辺か。全体的に使いやすくする処理。  
+　一部やや破壊的な変更点もあるので、順繰りにまとめていく。  
+
+#### CameraSystemのreset機能をGunで書き直し  
+　リセットを内部的に泥臭い処理で書いていたが、fisceのスケッチ集でGunでやっていて綺麗な処理だったので採用することにした。  
+#### CameraSystemManager  
+　いわゆる複数カメラの仕様だが、p5wgex時代と違って複数のカメラをひとつのコントローラーでまとめて...というのは無し。  
+　システム単位での管理となる。レンダーシステムとの連携については、これを登録しておくことでカレントが変更された際にまとめて更新される仕組み。  
+　なおこれに伴い、cameraSystemプロパティはRender3Dから破棄されている。カメラのみを保持する。  
+　一応{systems:{},targets:{}}というオブジェクト式での定義だが、いずれ配列になるかもしれない。ひとまずこれで。  
+#### CameraSystemにpause,start,resetを用意  
+　これらはccがある場合のみ、ccに対して実行される。nullなら何にも起きない。  
+#### Gunにmuzzleプロパティを用意  
+　muzzle:true/falseでfire系関数を実行するかどうか決める。デフォルトはtrueで、falseだと一切弾丸が発射されない（たとえばリセットが発動しない）。  
+　muzzleOn,muzzleOff,switchMuzzleで切り替え。  
+#### ResizeModuleの導入  
+　カメラのリサイズを簡単に実行するためのResizeModuleの導入。サイズ変更時にサイズをどうするかの処理と、カメラの処理の仕方を決める内容。  
+　複数のカメラにリサイズさせる場合、モジュールを個別に用意し、個別に登録することで、リサイズ時に問題なくすべてのカメラがリサイズされる。  
+　もちろん種類が違ってもカメラのいじり方を変えれば問題ない。  
+　ビューポート関数も用意。ビューポートを適切にいじらないと問題が発生する。  
+#### E_Typeを廃止してErrorCatcherを導入  
+　E_Typeがクソだったので廃止。代わりにErrorCatcherを導入。内容的にはエラーを出すだけ。ループ内で出すならthrowして終わり。  
+　ループ外の場合はcatchErrorという補助関数を使う。  
+　たとえばTypeErrorCatcher.throw(n, 'number', 'number型ではないぞ！');とかループ内に書く。  
+#### Errorの回数上限を減らす  
+　120では多すぎるので16に制限。  
+#### ProgramWrapperと各種RenderSystemにbuildを導入  
+　addShaderからcreateProgramまでの流れが冗長で面倒だという場合のためにbuildを導入。一気にプログラム生成まで行ける。  
+　layoutで文字列を用意してprogramで色々な下準備をする。後は一気にゴールまで行ける。  
+　同じ内容のシェーダーを改変しながら使いまわすユースケースがあんまないだろうということでの処置。従来の方法は残してある。  
+#### Render2Dの改変  
+　今までoriginal_uvとかなっていたところをpositionに変更。内部でuvとともにいじれる。uvとは別に表示位置をいじるためのもの。  
+　さらに今までrenderにはオプションは無かったが初めて{count:個数}を導入。1以上だとインスタンシングになる。  
+#### EasyCanvasSaverの軽微な改変  
+　easySaveでないマニュアル利用の場合にInspectorを用意しないように仕様変更。  
+#### シェーダーコンパイルエラーの改善  
+　エラー出力時にソースコード全文を「エラー箇所が赤字になる」形で出力するように仕様変更。どこがあやしいか一目でわかる。  
+#### CameraSystemのreset記述を変更  
+　今まで「autoReset:true」とかしていたと思うが、reset:'none'/'manual'/'auto'に変更。デフォルトはnoneで、これだとリセットが機能しない。  
+　manualの場合はcameraReset関数で手動でリセットする。autoの場合にダブルクリックで自動リセットする。  
+　というのもダブルクリック系のアクションが競合している場合でもリセットしたいという要望があったので。保存とかね。併用しやすくする。  
+　CameraSystemManagerの場合はカレントカメラのが発動する。  
+#### 各種snipetの導入  
+　transform関連のtransform,scale,rotation,translation,rotationQ,quarternionを導入。slerpQやmultQやgetQuarternionFromAAが使える。  
+　multQ(q0,q1)は外部と掛け算順が逆だが、これは内部では作用が右から来るため。q0から作用することが分かりやすいように、逆にしてある。  
+　getRotationQでクォータニオンから一瞬で回転行列を作れる。  
+#### VAOWrapper.scanのibo名のデフォルトを'f'に変更
+　ibo_0の合理性は分かる（vboは通し番号でvbo_0,vbo_1,...）のだが、ほとんどの場合'f'で運用するため、それが自然ということで変更。  
+　showIndexBufferのオプションでibo名を出すようにした。分かりやすいので。  
+#### VAOWrapperに関するいくつかの変更  
+　まずunbindIBO()を導入。これによりカレントVAOのiboがnullになる。需要があるかは不明。  
+　複数VAOを導入。同じvboやiboから複数のVAOを生成して切り替えたりできる。やり方はaddVAOで名前とレイアウト、あれば辞書。おそらく使わないが。  
+　このときその名前とレイアウトで新しいvaoが作られ、自動的にセットされる。  
+　従来の処理はカレントVAOに対するものになる。setVAOで切り替えられる。  
+　なおbindで名前を指定するとbindされると同時にカレントがそのvaoになり、これでもいい。  
+
+　modifyのデフォルトをすべてtrueに変更。理由は外部的に使う場合ほとんどtrueでの運用が主なため。  
+　仮に全ての処理をmodifyフラグ無しで実行したとしてもすべて問題なく改変は実行される。  
+　ユースケースとしてはどうしてもbind/unbindを繰り返しやる事による負荷が気になる場合に限られるが、レアケースだろうから。内部では使っている。  
+
+　VAO_DESIGNの@layoutの枠に<ibo>を追加。使えるのは文字が1つだけ。ibo名を指定することで、そのiboが使われる。複数あっても0番しか作用しない。  
+#### VAOWrapperにTFOを導入  
+　逐次更新などでTFFを使いたい場合のためにregistTFO,bindTFO,unbindTFOを導入。  
+　registTFOは('tfo0', ['v','n'])でもいいが('tfo0', 'v, n')といった簡易記法も使える。  
+　純粋なTFOの導入ではなく、あくまで「VAOWrapperインスタンスに登録されたvboの更新用」の補助機能としての位置づけである。  
+　TFFの制約でVAAに同じバッファがあると失敗するのでそれを回避するために使われる。  
+　これを用いてRenderTFFを使う場合、tffLayoutの指定は必要なく、bind/unbindTFOで挟めばよい。  
+#### buildで文字列のみを許す  
+　文字列とプログラム名を順に指定するだけでその名前のプログラムができるようにした。究極の簡易版。  
+　もちろんTFFやUBOを使いたいなら別途。ただUBOに関していえば作ったあとでの指定も可能。   
+　TFFは「リンク前」という強い制約があるので、UBOのように後から用意することはできない。  
+
+　今回の更新は以上です。
