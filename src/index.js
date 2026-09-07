@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.3.2
+ * @version 1.3.3
  */
 
 (function (global, factory) {
@@ -31,9 +31,10 @@
     Sequencer関連が落ち着いたのでマイナー更新。
     時計関連はClockだけ残して後は削除。
     1.3.0～
-    createShaderProgramとuniformXを廃止
+    createShaderProgramとuniformXを廃止、VAOWrapperの導入
     カスタムシェーダー
     もちろん直書きも従来通り可能。ProgramWrapperの使用により、uniformのセットがめっちゃ楽になったよ。
+    writeやbuildなどによりシェーダーカスタマイズが楽になった
   */
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
@@ -294,10 +295,10 @@
         for(let i=0; i<descriptions.length; i++){
           const description = descriptions[i].trim();
           if(description.match(/:/) !== null){
-            const defs = description.split(":");
+            const defs = description.split(":").map(s => s.trim()).filter(s => s.length > 0);
             props[defs[0]] = parseVariable(defs[1], dict, path);
           }else{
-            const splitted = description.split(" ");
+            const splitted = description.split(" ").map(s => s.trim()).filter(s => s.length > 0);
             for(let k=0; k<Math.min(keys.length, splitted.length); k++){
               props[keys[k]] = parseVariable(splitted[k], dict, path);
             }
@@ -502,8 +503,9 @@
     // なぜラップする必要があるかというと、try構文内でエラーが出ないとキャッチできないからですね。だから関数渡し。
 
     // successとfailureは関数、又は文字列。successの場合のみ第一引数にprocessの結果を取れる。
-    function catchError(process, messages = {}){
-      const {success = null, failure = null} = messages;
+    // messageの代わりにcallbackって書いていい？いいよ。
+    function catchError(process, callback = {}){
+      const {success = null, failure = null} = callback;
       try{
         const value = process();
         if(success !== null){
@@ -571,6 +573,18 @@
       }
     }
 
+    class NullErrorCatcher extends ErrorCatcher{
+      constructor(message, value){
+        super(message, value);
+        this.name = 'CustomError';
+        this.message = `Null Error!\n${this.message}`;
+      }
+      static validate(value){
+        // nullかどうか見るだけ。
+        return value !== null;
+      }
+    }
+
     class CompareErrorCatcher extends Error{
       constructor(message, value, target){
         super(message);
@@ -632,6 +646,7 @@
     errors.ErrorCatcher = ErrorCatcher;
     errors.UndefinedErrorCatcher = UndefinedErrorCatcher;
     errors.NaNErrorCatcher = NaNErrorCatcher;
+    errors.NullErrorCatcher = NullErrorCatcher;
     errors.CompareErrorCatcher = CompareErrorCatcher;
     errors.TypeErrorCatcher = TypeErrorCatcher;
     errors.ClassErrorCatcher = ClassErrorCatcher;
@@ -1488,8 +1503,8 @@
     function createCanvas(w, h, options = {}){
       const {id = "", dpr = 1} = options;
 
-      const idTest = catchError(() => { TypeErrorCatcher.throw(id, 'string', `idはstring型を使用してください`); });
-      const dprTest = catchError(() => { TypeErrorCatcher.throw(dpr, 'number', `dprはnumber型を使用してください`); });
+      const idTest = catchError(() => { TypeErrorCatcher.throw(id, 'string', `id type must be string.`); });
+      const dprTest = catchError(() => { TypeErrorCatcher.throw(dpr, 'number', `dpr type must be string.`); });
       if(!idTest || !dprTest){
         console.error('createCanvas failure.');
         return null;
@@ -1515,8 +1530,8 @@
     // 必要かわかんないけどOffscreenCanvasを作る関数
     // DOMとして使わないならこっちの方がいいかも？
     function createOffscreen(w, h){
-      const wTest = catchError(() => {TypeErrorCatcher.throw(w, 'number', `wはnumber型を使用してください`);});
-      const hTest = catchError(() => {TypeErrorCatcher.throw(h, 'number', `hはnumber型を使用してください`);});
+      const wTest = catchError(() => {TypeErrorCatcher.throw(w, 'number', `createOffscreen: w type must be number.`);});
+      const hTest = catchError(() => {TypeErrorCatcher.throw(h, 'number', `createOffscreen: h type must be number.`);});
       if(!wTest || !hTest){
         console.error('createOffscreen failure.');
         return null;
@@ -1623,11 +1638,203 @@
       }
     }
 
+    class EasyConsole{
+      constructor(options = {}){
+        const {
+          maxHeight = '30%',
+          backgroundColor = {},
+          color:defaultTextColor = 'white'
+        } = options;
+        const {
+          left:leftBackgroundColor = `rgba(0,0,0,1.0)`,
+          right:rightBackgroundColor = `rgba(0,0,128,0.8)`
+        } = backgroundColor;
+
+        const p = createElement('p', {style:{
+          'font-family':"'メイリオ', 'Meiryo', sans-serif",
+          'font-size':'18px',
+          'line-height':'26px',
+          position:'fixed',
+          color:defaultTextColor,
+          background:`linear-gradient(to right, ${leftBackgroundColor}, ${rightBackgroundColor}`,
+          margin:0,
+          padding:'10px',
+          left:0,
+          bottom:0,
+          height:'fit-content',
+          'max-height': maxHeight,
+          overflow:'auto',
+          'overflow-wrap':'anywhere', // 改行
+          'scrollbar-width':'none',
+          display:'block',
+        }});
+
+        document.body.appendChild(p);
+
+        const cfg = createElement('div',{
+          style:{
+            padding:'1px 4px',
+            position:'fixed',
+            left:0,
+            top:0,
+            background:'linear-gradient(to right, rgba(0,0,0,0.9), rgba(0,0,128,0.9))',
+            color:'white'
+          }
+        });
+
+        const cb_visible = createElement('div');
+        const cb_active = createElement('div');
+        const cb_clear = createElement('div');
+
+        const input_visible = createElement('input', {
+          style:{margin:'1px'},
+          attr:{type:'checkbox', id:'visible', checked:''}
+        });
+        const label_visible = createElement('label', {
+          style:{
+            margin:'5px',
+            'font-family':"'メイリオ', 'Meiryo', sans-serif",
+            'font-size':'18px',
+            'font-style':'italic',
+            'user-select':'none'
+          },
+          attr:{for:'visible'}
+        });
+        label_visible.innerText = 'visible';
+
+        const input_active = createElement('input', {
+          style:{margin:'1px'},
+          attr:{type:'checkbox', id:'active', checked:''}
+        });
+        const label_active = createElement('label', {
+          style:{
+            margin:'5px',
+            'font-family':"'メイリオ', 'Meiryo', sans-serif",
+            'font-size':'18px',
+            'font-style':'italic',
+            'user-select':'none'
+          },
+          attr:{for:'active'}
+        });
+        label_active.innerText = 'active';
+
+        const button_clear = createElement('button', {
+          style:{
+            width:'64px',
+            height:'30px',
+            margin:'5px',
+            'font-family':"'メイリオ', 'Meiryo', sans-serif",
+            'font-size':'18px',
+            'font-style':'italic',
+            'user-select':'none',
+            background:`rgb(0,96,64)`,
+            color:'white'
+          }
+        });
+        button_clear.innerText = 'clear';
+
+        cb_visible.appendChild(input_visible);
+        cb_visible.appendChild(label_visible);
+        cb_active.appendChild(input_active);
+        cb_active.appendChild(label_active);
+        cb_clear.appendChild(button_clear);
+        cfg.appendChild(cb_visible);
+        cfg.appendChild(cb_active);
+        cfg.appendChild(cb_clear);
+        document.body.appendChild(cfg);
+
+        this.p = p;
+        this.content = ``;
+        this.active = true;
+
+        const cb0 = input_visible;
+        cb0.addEventListener("change", (e) => {
+          if(cb0.checked){
+            this.show();
+          }else{
+            this.hide();
+          }
+        });
+        const cb1 = input_active;
+        cb1.addEventListener("change", (e) => {
+          if(cb1.checked){
+            this.activate();
+          }else{
+            this.inActivate();
+          }
+        });
+        const cb2 = button_clear;
+        cb2.addEventListener('click', (e) => {this.clear();});
+      }
+      show(){
+        this.p.style.display = "block";
+        this.updateText();
+      }
+      hide(){
+        this.p.style.display = "none";
+      }
+      activate(){
+        this.active = true;
+      }
+      inActivate(){
+        this.active = false;
+      }
+      updateText(){
+        // innerHTMLでないと色を変えられないので変更
+        this.p.innerHTML = `${this.content.replaceAll('\n', '<br>')}`;
+        // 更新時にスクロールする
+        this.p.scrollTop = this.p.scrollHeight - this.p.offsetHeight;
+      }
+      clear(){
+        this.content = ``;
+        this.updateText();
+      }
+      addText(txt, style = {}){
+        if(!this.active)return;
+        const spanTag = EasyConsole.createStyledSpanTag(style);
+        this.content = `${this.content}${spanTag}${txt.toString()}</span>\n`;
+        this.updateText();
+      }
+      writeText(txt, style = {}){
+        if(!this.active)return;
+        const spanTag = EasyConsole.createStyledSpanTag(style);
+        this.content = `${spanTag}${txt.toString()}</span>\n`;
+        this.updateText();
+      }
+      getContent(){
+        // タグ情報とか欲しいならこっち
+        return this.content;
+      }
+      getText(){
+        // pタグのinnerTextを取得してそれを返す仕組みにすればいいんだよな
+        // 色情報とかはgetContentで取ればいい
+        return this.p.innerText;
+      }
+      static createStyledSpanTag(style = {}){
+        const styles = Object.keys(style);
+        let styleDescription = '';
+        for(const styleName of styles){
+          if(EasyConsole.styleList[styleName] === undefined){ continue; }
+          const properStyleName = EasyConsole.styleList[styleName];
+          styleDescription += `${properStyleName}:${style[styleName]};`;
+        }
+        if(styleDescription.length > 0){
+          return `<span style='${styleDescription}'>`;
+        }
+        return '<span>';
+      }
+    }
+    // 今のところいじれるのはcolor,fontWeight,fontFamily,fontStyle,fontSizeの5つ。このくらいでいいと思うよ。
+    EasyConsole.styleList = {
+      color:'color', fontWeight:'font-weight', fontFamily:'font-family', fontSize:'font-size', fontStyle:'font-style'
+    };
+
     utils.configElement = configElement;
     utils.createElement = createElement;
     utils.createCanvas = createCanvas;
     utils.createOffscreen = createOffscreen;
     utils.SketchLooper = SketchLooper;
+    utils.EasyConsole = EasyConsole;
 
     return utils;
   })();
@@ -2775,32 +2982,32 @@
       }
       getElapsedScaled(scale = 1000){
         const result = this.getElapsed()/scale;
-        NaNErrorCatcher.throw(result, 'getElapsedScaled()');
+        NaNErrorCatcher.throw(result, 'getElapsedScaled');
         return result;
       }
       getElapsedDiscrete(scale = 1000, modulo = 0){
         const n = Math.floor(this.getElapsed()/scale);
         modulo = Math.max(0, Math.floor(modulo));
         if(modulo === 0){
-          NaNErrorCatcher.throw(n, 'getElapsedDiscrete()');
+          NaNErrorCatcher.throw(n, 'getElapsedDiscrete');
           return n;
         }
         const result = n % modulo;
-        NaNErrorCatcher.throw(result, 'getElapsedDiscrete()');
+        NaNErrorCatcher.throw(result, 'getElapsedDiscrete');
         return result;
       }
       getElapsedSeparate(scale = 1000, modulo = 0){
         const x = this.getElapsedScaled(scale);
         const n = Math.floor(x);
         const f = x - n;
-        NaNErrorCatcher.throw(f, 'getElapsedSeparate()');
+        NaNErrorCatcher.throw(f, 'getElapsedSeparate');
 
         modulo = Math.max(0, Math.floor(modulo));
         if(modulo === 0){
-          NaNErrorCatcher.throw(n, 'getElapsedSeparate()');
+          NaNErrorCatcher.throw(n, 'getElapsedSeparate');
           return {floor:n, fract:f};
         }
-        NaNErrorCatcher.throw(n % modulo, 'getElapsedSeparate()');
+        NaNErrorCatcher.throw(n % modulo, 'getElapsedSeparate');
         return {floor:n % modulo, fract:f};
       }
       static create(s){
@@ -4022,257 +4229,138 @@
       }
     }
 
-    // 使い方をいじって進捗を取得できるようにする
+    // -------------------------------------------- //
+    // ResourceLoaderはいずれ廃止されます。
+    // 代替関数群
+    async function loadBlob(response, execute){
+      // blobの取得。executeが未定義の場合は従来通りblob()で取得する。
+      if(typeof execute === 'undefined'){
+        return response.blob();
+      }
 
-    // ResourceLoader. 使い方
-    // 生成するときに{name:{url:~~,callback:~~,arrayBuffer:~~}, ...} のように作るんだけどregistでも作れる
-    // loadでロードすると同時にpromiseを返すのでそのまま非同期処理に持っていける
-    // loadAllでまとめてロードできた場合の処理を記述できる
-    // isLoadedとisLoadedAllだがisLoadedAllは引数指定がない場合「すべて」となる
-    // 望むならすべてロードされた状態でdrawを開始できる
-    // arrayBuffer形式での取得も可能とする
-    // getResourceで取得
-    // fontについてはfontFileを返す。document.fonts.add(res)で登録時の名前で使えるようになる
-    // opentypeでやりたいならarrayBufferで取得してよろしくやる
-    // videoやmusicも可能、videoの場合出力形式はHTMLVideoElementなのでそのままtexImage2Dで使える
-    class ResourceLoader{
-      constructor(data = {}){
-        this.loaders = {};
-        for(const name of Object.keys(data)){
-          this.regist(name, data[name]);
-        }
-      }
-      regist(name, params = {}){
-        // 文字列の場合はそのままurlとしcallbackは存在しないとする
-        if(typeof params === 'string'){
-          this.regist(name, {url:params});
-          return this;
-        }
-        // resはresourceの省略形
-        // callbackは省略化、arrayBufferをいじるとあれできる
-        const {url, callback = (res) => {}, arrayBuffer = false, execute} = params;
-        this.loaders[name] = {url, callback, arrayBuffer, execute, loaded:false, res:null};
-        return this;
-      }
-      load(name){
-        const loader = this.loaders[name];
-        const {url, callback, arrayBuffer, execute} = loader;
-        // urlのpostFixで場合分けする。
-        // jpg,jpeg,png,JPG,JPEG,PNG --> HTMLImageElement
-        // json,JSON,gltf --> JSON Object
-        // txt --> text Object
-        // wav,ogg,mp3,WAV,OGG,MP3 --> HTMLAudioElement
-        // mp4,MP4 --> HTMLVideoElement
-        // 以上となります...が、ArrayBufferが入ってない
-        // ArrayBuffer:trueとすることでArrayBuffer形式で取得できる
-        // その場合promise以降の処理を自前で用意することになるし、できる。
-        const promise = (arrayBuffer ? ResourceLoader.getArrayBuffer(url) : ResourceLoader.getResource(url, name, execute));
-        promise.then(
-          (res) => {
-            // ロードに成功した場合
-            console.log(`${name} is loaded.`);
-            loader.res = res;
-            loader.loaded = true;
-            callback(res);
-          },(error) => {
-            // ロードに失敗した場合
-            console.error(`${name} can't be loaded. error: ${error.message}`);
-          }
-        );
-        return promise;
-      }
-      loadAll(names, callback = (resources) => {}){
-        const promises = names.map((name) => this.load(name));
-        return Promise.all(promises).then((resources) => {
-          // すべてのロードに成功した場合
-          callback(resources);
-          return true;
-        },(error) => {
-          // いずれかのロードに失敗した場合
-          console.error(`loadAll failure. error: ${error.message}`);
-          return false;
-        });
-        // 一つの例としてはこのようにtrue/falseと分けることで、
-        // きちんと実行されたかどうかを踏まえたうえでthen以降の処理をするとか。
-      }
-      isLoaded(name){
-        return this.loaders[name].loaded;
-      }
-      isLoadedAll(names = []){
-        if(names.length === 0){
-          // 未指定の場合は「すべて」
-          names = Object.keys(this.loaders);
-        }
-        for(const name of names){
-          if(!this.loaders[name].loaded) return false;
-        }
-        return true;
-      }
-      getResource(name){
-        return this.loaders[name].res;
-      }
-      getResourceAll(names = []){
-        if(names.length === 0){
-          // 未指定の場合は「すべて」
-          names = Object.keys(this.loaders);
-        }
-        const result = {};
-        for(const name of names){ result[name] = this.getResource(name); }
-        return result;
-      }
-      static getResource(url, name, execute){
-        const fileType = url.split(".").pop(); // これの末尾がpostFixになる。
-        switch(fileType){
-          case "jpg":
-          case "jpeg":
-          case "png":
-          case "JPG":
-          case "JPEG":
-          case "PNG":
-            return ResourceLoader.getImage(url, execute);
-          case "txt":
-            return ResourceLoader.getText(url);
-          case "json":
-          case "JSON":
-          case "gltf":
-            return ResourceLoader.getJSON(url);
-          case "wav":
-          case "mp3":
-          case "ogg":
-          case "WAV":
-          case "MP3":
-          case "OGG":
-            return ResourceLoader.getAudio(url, execute);
-          case "mp4":
-          case "MP4":
-            return ResourceLoader.getVideo(url, execute);
-          case "ttf":
-          case "otf":
-            return ResourceLoader.getFontFile(url, name);
-        }
-        return null;
-      }
-      static async getImage(url, execute){
-        // HTMLImageElement
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
+      const contentLength = response.headers.get('Content-Length');
+
+      // このresponse.bodyってのがReadableStreamなんだって
+      const reader = response.body.getReader();
+
+      let receivedLength = 0;
+      let chunks = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
         }
 
-        const blob = await ResourceLoader.getBlob(response, execute);
+        chunks.push(value);
+        receivedLength += value.length;
 
-        const dlurl = URL.createObjectURL(blob)
-        const img = new Image(); // HTMLImageElementのコンストラクタ
-        img.src = dlurl;
-        await img.decode(); // HTMLImageElementなのでdecode()
-        return img;
-      }
-      static async getText(url){
-        // text string
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
+        // 進捗状況の計算
+        const progress = (receivedLength / contentLength);
+        if(typeof execute === 'function'){
+          execute({
+            progress:progress, chunk:value.length, total:contentLength
+          });
         }
-        const txt = response.text(); // テキストデータが欲しい時はこれ
-        return txt;
       }
-      static async getJSON(url){
-        // json object
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
-        }
-        const json = response.json(); // jsonデータが欲しい時はこれ
-        return json;
+
+      // チャンクを結合
+      let chunksAll = new Uint8Array(receivedLength);
+      let position = 0;
+      for (let chunk of chunks) {
+        chunksAll.set(chunk, position);
+        position += chunk.length;
       }
-      static async getAudio(url, execute){
-        // HTMLAudioElement
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
-        }
 
-        const blob = await ResourceLoader.getBlob(response, execute);
+      const blob = new Blob([chunksAll]);
 
-        const dlurl = URL.createObjectURL(blob)
-        const audio = document.createElement('audio');
-        audio.src = dlurl; // decodeはHTMLImageElementのためのもの。
-        return audio;
-      }
-      static async getVideo(url, execute){
-        // HTMLVideoElement
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
-        }
-
-        const blob = await ResourceLoader.getBlob(response, execute);
-
-        const dlurl = URL.createObjectURL(blob)
-        const video = document.createElement('video');
-        video.src = dlurl;
-        return video;
-      }
-      static async getArrayBuffer(url){
-        // ArrayBufferの形でほしい場合。たとえばAudioの場合など。
-        const response = await fetch(url);
-        if(!response.ok){
-          throw new Error(`response.status: ${response.status}`);
-        }
-        const ab = response.arrayBuffer(); // ArrayBufferデータが欲しいとき
-        return ab;
-      }
-      static async getFontFile(url, name){
-        const fontFile = new FontFace(name, `url(${url})`);
-        await fontFile.load();
-        return fontFile;
-      }
-      static async getBlob(response, execute){
-        // blobの取得。executeが未定義の場合は従来通りblob()で取得する。
-        if(typeof execute === 'undefined'){
-          return response.blob();
-        }
-
-        const contentLength = response.headers.get('Content-Length');
-
-        // このresponse.bodyってのがReadableStreamなんだって
-        const reader = response.body.getReader();
-
-        let receivedLength = 0;
-        let chunks = [];
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            break;
-          }
-
-          chunks.push(value);
-          receivedLength += value.length;
-
-          // 進捗状況の計算
-          const progress = (receivedLength / contentLength);
-          if(typeof execute === 'function'){
-            execute({
-              progress:progress, chunk:value.length, total:contentLength
-            });
-          }
-        }
-
-        // チャンクを結合
-        let chunksAll = new Uint8Array(receivedLength);
-        let position = 0;
-        for (let chunk of chunks) {
-          chunksAll.set(chunk, position);
-          position += chunk.length;
-        }
-
-    		const blob = new Blob([chunksAll]);
-
-        return blob;
-      }
+      return blob;
     }
+
+    async function loadImage(url, execute){
+      // HTMLImageElement
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+
+      const blob = await loadBlob(response, execute);
+
+      const dlurl = URL.createObjectURL(blob)
+      const img = new Image(); // HTMLImageElementのコンストラクタ
+      img.src = dlurl;
+      await img.decode(); // HTMLImageElementなのでdecode()
+      return img;
+    }
+
+    async function loadText(url){
+      // text string
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+      const txt = response.text(); // テキストデータが欲しい時はこれ
+      return txt;
+    }
+
+    async function loadJSON(url){
+      // json object
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+      const json = response.json(); // jsonデータが欲しい時はこれ
+      return json;
+    }
+
+    async function loadAudio(url, execute){
+      // HTMLAudioElement
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+
+      const blob = await loadBlob(response, execute);
+
+      const dlurl = URL.createObjectURL(blob)
+      const audio = document.createElement('audio');
+      audio.src = dlurl; // decodeはHTMLImageElementのためのもの。
+      return audio;
+    }
+
+    async function loadVideo(url, execute){
+      // HTMLVideoElement
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+
+      const blob = await loadBlob(response, execute);
+
+      const dlurl = URL.createObjectURL(blob)
+      const video = document.createElement('video');
+      video.src = dlurl;
+      return video;
+    }
+
+    async function loadArrayBuffer(url){
+      // ArrayBufferの形でほしい場合。たとえばAudioの場合など。
+      const response = await fetch(url);
+      if(!response.ok){
+        throw new Error(`response.status: ${response.status}`);
+      }
+      const ab = response.arrayBuffer(); // ArrayBufferデータが欲しいとき
+      return ab;
+    }
+
+    async function loadFontFile(url, name){
+      const fontFile = new FontFace(name, `url(${url})`);
+      await fontFile.load();
+      return fontFile;
+    }
+
+    // -------------------------------- //
 
     // loadImageData
     // 基本的にlilにぶち込んで使う
@@ -4930,6 +5018,35 @@
       }
     }
 
+    // getPerformanceLevel.
+    // 戻り値は'low'もしくは'high'とする
+    function getPerformanceLevel(){
+      const nav = window.navigator;
+
+      if (nav.platform !== undefined) {
+        // platformが定義されている場合
+        switch (nav.platform) {
+          case "Win32": // Windowsだったら
+          case "MacIntel": // OS Xだったら
+            return "high";
+          case "iPhone": // iPhoneだったら
+          default:
+            // その他の端末も
+            return "low";
+        }
+      } else if (nav.userAgentData !== undefined) {
+        // userAgentDataが利用可能な場合
+        if (nav.userAgentData.mobile) {
+          return "low";
+        } else {
+          return "high";
+        }
+      }
+      // いずれでもなければ安全のためlowにする
+      return "low";
+    }
+
+    // Damper. 減衰器。
     utils.Damper = Damper;
 
     // Array関連
@@ -4937,8 +5054,6 @@
     utils.LoopArray = LoopArray;
     utils.RoundRobinArray = RoundRobinArray;
     utils.RandomChoiceArray = RandomChoiceArray;
-    //utils.SweepArray = SweepArray; // 廃止
-    //utils.BooleanArray = BooleanArray; // 廃止
 
     // CrossReferenceArray関連
     utils.CrossReferenceArray = CrossReferenceArray;
@@ -4970,7 +5085,16 @@
     utils.Easing = Easing;
 
     // loading関連
-    utils.ResourceLoader = ResourceLoader;
+    //utils.ResourceLoader = ResourceLoader;
+    utils.loadBlob = loadBlob;
+    utils.loadImage = loadImage;
+    utils.loadText = loadText;
+    utils.loadJSON = loadJSON;
+    utils.loadAudio = loadAudio;
+    utils.loadVideo = loadVideo;
+    utils.loadArrayBuffer = loadArrayBuffer;
+    utils.loadFontFile = loadFontFile;
+    // 以下3つは使用されていないのであれば廃止する可能性がある
     utils.loadImageData = loadImageData;
     utils.loadTextData = loadTextData;
     utils.loadJsonData = loadJsonData;
@@ -4990,6 +5114,9 @@
     utils.drawPartialText = drawPartialText;
     utils.drawText = drawText;
     utils.MTS = MTS; // Measurable Texts.
+
+    // その他、パフォーマンスレベルの取得など。
+    utils.getPerformanceLevel = getPerformanceLevel;
 
     return utils;
   })();
@@ -7237,10 +7364,10 @@ available waveTables:
       constructor(w = 1, x = 0, y = 0, z = 0){
         if(Array.isArray(w)){
           // wが配列の場合だけ、用意するか。1,0,0,0をデフォとして用意する。不要かもだけど。
-          this.w = (w[0] !== undefined ? w[0] : 1);
-          this.x = (w[1] !== undefined ? w[1] : 0);
-          this.y = (w[2] !== undefined ? w[2] : 0);
-          this.z = (w[3] !== undefined ? w[3] : 0);
+          this.w = (typeof(w[0]) === 'number' ? w[0] : 1);
+          this.x = (typeof(w[1]) === 'number' ? w[1] : 0);
+          this.y = (typeof(w[2]) === 'number' ? w[2] : 0);
+          this.z = (typeof(w[3]) === 'number' ? w[3] : 0);
         }else{
           this.w = w;
           this.x = x;
@@ -7514,6 +7641,45 @@ available waveTables:
         const {w,x,y,z} = this;
         return new Vecta(2*(x*z + y*w), 2*(y*z - x*w), 2*w*w-1 + 2*z*z);
       }
+      static create(){
+        // 第一引数がQuarternionの場合はコピーを返す。
+        // 第一引数が配列 -> ばらしてもう一度
+        // 第一引数が数 -> すべて数とみなし通常生成
+        // 第一引数がベクトル -> 引数個数が1,2,3に応じて作り方を変える。2の場合、第二引数は数。
+        // いずれでもない場合、1を返す。
+        const args = [...arguments];
+        if(args[0] instanceof Quarternion){
+          return args[0].copy();
+        }
+        if(Array.isArray(args[0])){
+          // 第二引数がnumberの場合に限り、getFromAAを適用する。
+          // 引数個数が1であるなら、再帰。
+          if(typeof(args[1]) === 'number'){
+            return this.getFromAA(args[0], args[1]);
+          }
+          return this.create(...args[0]);
+        }
+        if(typeof(args[0]) === 'number'){
+          return new this(...args);
+        }
+        if(args[0] instanceof Vecta){
+          switch(args.length){
+            case 1:
+              return this.getFromV(args[0]);
+            case 2:
+              if(typeof(args[1]) === 'number'){
+                return this.getFromAA(args[0], args[1]);
+              }
+              break;
+            case 3:
+              if(args[1] instanceof Vecta && args[2] instanceof Vecta){
+                return this.getFromAxes(args[0], args[1], args[2]);
+              }
+              break;
+          }
+        }
+        return new this();
+      }
       static getFromAA(){
         // 軸の指定方法は3種類
         return (new Quarternion()).setFromAA(...arguments);
@@ -7687,11 +7853,12 @@ available waveTables:
         }
         return this;
       }
-      multV(v, immutable = false){
-        // vは3次元ベクトルでx,y,z成分を持つ
+      applyP(v, immutable = false){
+        // 位置なのでp. 戻り値はベクトルなのでmultをやめてapplyに変更。
+        // pは3次元ベクトルでx,y,z成分を持つ
         if(immutable){
           // 不変
-          return this.multV(v.copy(), false);
+          return this.applyP(v.copy(), false);
         }
         const {x:a, y:b, z:c} = v;
         v.x = this.m[0]*a + this.m[1]*b + this.m[2]*c + this.m[3];
@@ -7699,12 +7866,12 @@ available waveTables:
         v.z = this.m[8]*a + this.m[9]*b + this.m[10]*c + this.m[11];
         return v;
       }
-      multN(v, immutable = false){
+      applyN(v, immutable = false){
         // Vの第四成分が0のバージョン。Nとあるのは法線を意識してる。
         // ライティングとかで使うと思う
         if(immutable){
           // 不変
-          return this.multN(v.copy(), false);
+          return this.applyN(v.copy(), false);
         }
         const {x:a, y:b, z:c} = v;
         v.x = this.m[0]*a + this.m[1]*b + this.m[2]*c;
@@ -7928,6 +8095,33 @@ available waveTables:
         const scaleMat = MT4.getScale(s);
         this.multM(scaleMat);
         return this;
+      }
+      static create(){
+        // 特殊ケースの場合は特殊な生成を適用する
+        // 通常の、数を16個用意するとか、長さ9や16の配列を使う場合は普通に生成する
+        const args = [...arguments];
+        if(Array.isArray(args[0])){
+          // 配列、数ならばgetRotationMatrix
+          if(typeof(args[1]) === 'number'){
+            return this.getRotationMatrix(args[0], args[1]);
+          }
+          // それ以外の場合は配列を元に通常生成
+          return new this(...args);
+        }
+        // Vecta,数の場合もgetRotationMatrix
+        if(args[0] instanceof Vecta && typeof(args[1]) === 'number'){
+          return this.getRotationMatrix(args[0], args[1]);
+        }
+        // 第一引数がQuarternionの場合
+        if(args[0] instanceof Quarternion){
+          return this.getRotationMatrixQ(args[0]);
+        }
+        // 数で長さ4以下の場合
+        if(typeof(args[0]) === 'number' && args.length <= 4){
+          return this.getRotationMatrixQ(...args);
+        }
+        // それ以外は普通に作る
+        return new this(...arguments);
       }
       static getRotationMatrix(axis, angle){
         // 回転行列部分だけ取り出すか
@@ -8316,10 +8510,10 @@ available waveTables:
       getNDCFromGlobal(v){
         // global点からNDCを計算するだけ。view, proj.
         // 引数はとりあえずベクトル限定でいいかと。
-        const u = this.view.multV(v, true);
+        const u = this.view.applyP(v, true);
         const p = this.proj.m;
         const divider = p[12]*u.x + p[13]*u.y + p[14]*u.z + p[15];
-        this.proj.multV(u);
+        this.proj.applyP(u);
         u.div(divider);
         // u.x, u.yがNDCで、u.zは-1～1の深度値。0.5倍して0.5を足すと正式な深度値
         // になる。0が最も近くで、1が最も遠い。
@@ -8333,7 +8527,7 @@ available waveTables:
         // もっていく。
         // この式でいいかどうかは知らんです。式いじってたらこうなった。
         const ip = this.invProj.m;
-        const z = this.view.multV(v, true).z;
+        const z = this.view.applyP(v, true).z;
         const a = ip[8]*x1 + ip[9]*y1 + ip[11];
         const b = ip[10];
         const c = ip[12]*x1 + ip[13]*y1 + ip[15];
@@ -8394,6 +8588,9 @@ available waveTables:
         this.invProj.set(this.proj.invert(true));
         return this;
       }
+      static create(params = {}){
+        return new this(params);
+      }
     }
 
     // orthoの射影を生成時に用意できる便利版
@@ -8418,6 +8615,9 @@ available waveTables:
         this.proj.setOrthoProjection(w, h, near, far);
         this.invProj.set(this.proj.invert(true));
         return this;
+      }
+      static create(params = {}){
+        return new this(params);
       }
     }
 
@@ -8542,12 +8742,12 @@ available waveTables:
         }
         return this;
       }
-      multV(v, immutable = false){
+      applyP(v, immutable = false){
         // vは3次元ベクトルでx,y,z成分を持つ
         // Vectaでもp5.Vectorでも{x,y,z}でも何でもあり。
         if(immutable){
           // 不変
-          return this.multV(v.copy(), false);
+          return this.applyP(v.copy(), false);
         }
         const {x:a, y:b, z:c} = v;
         v.x = this.m[0]*a + this.m[1]*b + this.m[2]*c;
@@ -8658,7 +8858,7 @@ available waveTables:
         const s = Math.sin(t);
         return this.inverseMultM([c,-s,0,s,c,0,0,0,1]);
       }
-      setScale(a=1,b=1,c=1){
+      setScale(a=1,b=1){
         return this.init().localScale(...arguments);
       }
       setTranslation(a=0,b=0,c=0){
@@ -8667,14 +8867,18 @@ available waveTables:
       setRotation(t=0){
         return this.init().localRotation(...arguments);
       }
+      static create(){
+        // MT4のような多彩な生成方法はないんで、単純に引数生成でいいです。
+        return new this(...arguments);
+      }
       static getScale(){
-        return (new MT3()).setScale(...arguments);
+        return this.create().setScale(...arguments);
       }
       static getRotation(){
-        return (new MT3()).setRotation(...arguments);
+        return this.create().setRotation(...arguments);
       }
       static getTranslation(){
-        return (new MT3()).setTranslation(...arguments);
+        return this.create().setTranslation(...arguments);
       }
     }
 
@@ -8693,6 +8897,7 @@ available waveTables:
 
   const webglUtils = (function(){
     const utils = {};
+    const {UndefinedErrorCatcher, TypeErrorCatcher} = foxErrors;
     const {parseDesignDescription} = foxParse;
     const {Vecta, MT3, MT4, Quarternion} = fox3Dtools;
 
@@ -9570,6 +9775,7 @@ available waveTables:
         this.gl = gl;
         this.buf = gl.createBuffer();
         this.target = null;
+        this.byteLength = 0; // initのたびに書き換える。
       }
       bind(target){
         this.gl.bindBuffer(target, this.buf);
@@ -9603,6 +9809,8 @@ available waveTables:
         const {gl, buf} = this;
 
         WBOWrapper.initBuffer(gl, buf, target, data, options);
+        // initのたびにbyteLengthを更新する
+        this.byteLength = WBOWrapper.getBufferSize(gl, buf, target);
         return this;
       }
       update(target, data = null, options = {}){
@@ -9649,6 +9857,13 @@ available waveTables:
         }
         wbo.init(target, data, options);
         return wbo;
+      }
+      static getBufferSize(gl, buf, target){
+        // バイト数を取得するだけ。該当ターゲットのバッファはクリアされる。
+        gl.bindBuffer(target, buf);
+        const byteLength = gl.getBufferParameter(target, gl.BUFFER_SIZE);
+        gl.bindBuffer(target, null);
+        return byteLength;
       }
       static initBuffer(gl, buf, target, data = null, options = {}){
         // 一般のWebGLBufferを対象とする初期化関数
@@ -9894,20 +10109,29 @@ available waveTables:
         this.vbos = {};
         this.ibos = {};
         this.tfos = {};
-        const {name = 'default', count = 0, vbo = {}, ibo = {}, layout = [], dict = {}} = params;
+        // programと同じようにする。1つしかvaoを扱わない場合、defaultで固定。
+        const {name = 'default', count, vbo = {}, ibo = {}, layout = [], dict = {}} = params;
+        // countが既定値0の場合、undefinedだと0で初期化されてしまうので、
+        // 問題を防ぐために未定義とする。
+        UndefinedErrorCatcher.throw(count, 'constructor: count is undefined.');
+        TypeErrorCatcher.throw(count, 'number', 'constructor: count type must be number.');
         this.count = count; // VAOWrapperがcountを持ってればいいんよな。
 
-        const initialVAO = gl.createVertexArray();
-        this.vaos[name] = initialVAO;
-        this.currentVAO = initialVAO;
+        const defaultVAO = gl.createVertexArray();
+        this.vaos[name] = {vao:defaultVAO, ibo:null};
+        this.currentVAO = null;
 
         // もしlayoutが文字列の場合は別メソッドで全部用意する
+        // targetはデフォルト。つまり上で用意したvaoをそのままいじる。
         if(typeof(layout) === 'string'){
-          this.setVAOLayout(layout, dict, true);
+          // ああそうかnameで「'default'」ではない名前を付けられるんだったわ
+          // あんまやるべきではないかもね...まあ一応できるようにしましょう
+          this.setVAOLayout({layout, dict}, name);
           return;
         }
 
-        this.bind();
+        // nameで「'default'」ではない名前を付けられるの忘れてたわ。馬鹿。
+        this.bind(name);
         // VBOの準備
         for(const [key, value] of Object.entries(vbo)){
           this.initVBO(key, value.data, value);
@@ -9916,54 +10140,79 @@ available waveTables:
         for(const [key, value] of Object.entries(ibo)){
           this.initIBO(key, value.data, value);
           // IBOは最後に作ったものが暫定的に採用される
-          this.bindIBO(key, false);
+          this.bindIBO(key, null);
         }
 
         // VBOLayoutを作る
         if(Array.isArray(layout)){
-          this.setVBOLayout(layout, false);
+          this.setVBOLayout(layout, null);
         }
         this.unbind();
       }
-      addVAO(name = '', vaoLayout = '', dict = {}){
-        // vaoを加える。名前が無いと失敗する。
-        if(typeof(name) !== 'string' || name.length === 0){ return this; }
-        // vaoLayoutとdictが無ければ、新設して、currentVAOを切り替えて、終わり。
-        // なお同じIBOが付け加えられる保証はないので、bindIBOで適宜作り済みのIBOを付与する。
-        // modifyはtrue固定とする。複数のvaoを使い分けるのであれば、bind時に使うvaoを指定するのは当然の行為。
-        // 1つしか使わないならそもそもaddVAOを呼び出す必要は無く、すべて今まで通り。
+      addVAO(name, params = {}){
+        // vaoを加える。nameはstringでなければならない。
+        TypeErrorCatcher.throw(name, 'string', 'addVAO: vao name type must be string.');
+
+        // paramsがstringの場合はそれをlayoutとする。dictが邪魔な場合。
+        if(typeof(params) === 'string'){
+          this.addVAO(name, {layout:params});
+          return this;
+        }
+        // vaoを作る。
         const anotherVAO = this.gl.createVertexArray();
-        // うっかり同じ名前で作ってしまった場合、元のデータは破棄される。
-        this.vaos[name] = anotherVAO;
-        this.currentVAO = anotherVAO;
-        // 指定が無ければ作ってセットして終わり。指定がある場合、そのまま新しく作る。
-        if(vaoLayout === ''){ return this; }
-        this.setVAOLayout(vaoLayout, dict, true);
+        // 同じ名前の場合は上書き
+        this.vaos[name] = {vao:anotherVAO, ibo:null};
+        // 作ったばっかりのvaoをnameで指定する
+        this.setVAOLayout(params, name);
+
         return this;
       }
+      /*
       setVAO(name = ''){
+        // 破棄
         if(this.vaos[name] === undefined){ console.log("vao not found."); return this; }
         this.currentVAO = this.vaos[name];
         return this;
       }
-      bind(name = ''){
-        // name指定がある場合、currentをいじる。つまり名前でvaoの使い分けができる。
-        if(name !== '' && this.vaos[name] !== undefined){
-          this.currentVAO = this.vaos[name];
-        }
-        this.gl.bindVertexArray(this.currentVAO);
+      */
+      bind(target = 'default'){
+        // nullの場合は何もしない。
+        if(target === null){ return this; }
+        // nullでない場合に文字列でなければエラーを出す
+        TypeErrorCatcher.throw(target, 'string', 'bind: target type must be null or string.');
+        // vaoが見つからないときにエラーを出す
+        UndefinedErrorCatcher.throw(this.vaos[target], `bind: vao ${target} not found.`);
+
+        this.currentVAO = this.vaos[target];
+        this.gl.bindVertexArray(this.currentVAO.vao);
         return this;
       }
-      unbind(){
+      unbind(target = 'default'){
+        // nullの場合は何もしない。
+        // nullでないときになんか追加で処理するかは未定。
+        if(target === null){ return this; }
         this.gl.bindVertexArray(null);
+        this.currentVAO = null;
         return this;
       }
-      getVBO(name){ if(this.vbos[name] === undefined){ return null; } return this.vbos[name]; }
-      getIBO(name){ if(this.ibos[name] === undefined){ return null; } return this.ibos[name]; }
-      getCount(){ return this.count; }
+      getVBO(name){
+        TypeErrorCatcher.throw(name, 'string', 'getVBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.vbos[name], `getVBO: vbo ${name} not found.`);
+        return this.vbos[name];
+      }
+      getIBO(name){
+        TypeErrorCatcher.throw(name, 'string', 'getIBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.ibos[name], `getIBO: ibo ${name} not found.`);
+        return this.ibos[name];
+      }
+      getCount(){
+        return this.count;
+      }
       initVBO(name, data, params = {}){
-        // data別にしろよ。馬鹿か。何でWBOの方と違う書き方にするんだよクソが
-        // 無ければ作る
+        // dataはWBOに合わせて分けて記述。paramsが不要な場合に面倒なので。
+        // nameはstringにしろ
+        TypeErrorCatcher.throw(name, 'string', 'initVBO: vbo name type must be string.');
+        // 無ければ作る。
         if(this.vbos[name] === undefined){
           this.vbos[name] = new VBOWrapper(this.gl);
         }
@@ -9977,22 +10226,23 @@ available waveTables:
 
         return this;
       }
-      setVBOLayout(vboLayout = [], modify = true){
-        if(modify){ this.bind(); }
+      setVBOLayout(vboLayout = [], target = 'default'){
+        //if(modify){ this.bind(); }
+        this.bind(target);
         for(let index = 0; index < vboLayout.length; index++){
           const params = vboLayout[index];
           // null/undefinedの場合はスルー
           if(params === null || params === undefined){ continue; }
-          this.setIndexedVBOLayout(index, params, false);
+          this.setIndexedVBOLayout(index, params, null);
         }
-        if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      setIndexedVBOLayout(index = 0, params = {}, modify = true){
+      setIndexedVBOLayout(index = 0, params = {}, target = 'default'){
         // おそらくほとんど使われないが、配列でnullを頭に並べるのが気になるんで、
         // paramsがindexを持っている場合にはそれを採用する形にしようか。まあ使わないだろうけど。
         const {gl} = this;
-        if(modify){ this.bind(); }
+        this.bind(target);
         const {
           index:customIndex = -1, // 手動でindexを決めたい場合
           buffer = '',
@@ -10003,28 +10253,32 @@ available waveTables:
         const properIndex = (customIndex < 0 ? index : customIndex);
 
         // 専用関数で書き換える
-        this.pointer(properIndex, {buffer, size, type, normalized, stride, offset, isInteger}, false);
-        this.divisor(properIndex, divisor, false);
+        this.pointer(properIndex, {buffer, size, type, normalized, stride, offset, isInteger}, null);
+        this.divisor(properIndex, divisor, null);
         if(enable){
-          this.enable(properIndex, false);
+          this.enable(properIndex, null);
         }else{
-          this.disable(properIndex, false);
+          this.disable(properIndex, null);
         }
 
-        if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      setVAOLayout(vaoLayout = '', dict = {}, modify = true){
-        const parsed = VAOWrapper.parse(vaoLayout, dict);
-        //const parsed = parseDesignDescription(vaoLayout, VAO_DESIGN, {dict});
-        //console.log(parsed);
+      setVAOLayout(params = {}, target = 'default'){
+        // paramsがstringの場合にはlayoutをそれとする
+        if(typeof(params) === 'string'){
+          this.setVAOLayout({layout:params}, target);
+          return this;
+        }
+        const {layout = ``, dict = {}} = params;
+        const parsed = VAOWrapper.parse(layout, dict);
 
         // bufferとlayoutに分かれてる。bufferのvboとiboのcontentで個別に、
         // nameだけ切り離して残りで作る。
         // layoutの方も同様でpointerはindexだけ切り離してbufferで名前であと残りで作る
         // divisorとenableについても同じようにする
 
-        if(modify){ this.bind(); }
+        this.bind(target);
 
         const {vbo = null, ibo = null} = parsed.buffer;
         if(vbo !== null){
@@ -10036,24 +10290,24 @@ available waveTables:
           for(const data of ibo.content){
             this.initIBO(data.name, data.data, data);
             // IBOは最後に作ったものが暫定的に採用される
-            this.bindIBO(data.name, false);
+            this.bindIBO(data.name, null);
           }
         }
 
         const {pointer = null, divisor = null, enable = null, ibo:iboSpecification = null} = parsed.layout;
         if(pointer !== null){
           for(const data of pointer.content){
-            this.pointer(data.index, data, false);
+            this.pointer(data.index, data, null);
             // pointerと同時に基本的にenableにする。
             // もし何らかの理由であとからdisableにしたい場合に<enable>タグでfalseを指定する
             // divisorと違ってデフォルトでは利用できないのでこの仕様は必須
-            this.enable(data.index, false);
+            this.enable(data.index, null);
           }
         }
         if(divisor !== null){
           // divisorのデフォルトは0である。指定がある場合のみ、逐次的に上書きする。
           for(const data of divisor.content){
-            this.divisor(data.index, data.divisor, false);
+            this.divisor(data.index, data.divisor, null);
           }
         }
         if(enable !== null){
@@ -10061,9 +10315,9 @@ available waveTables:
           // デフォルトでfalseにしたところをenableする、もしくは何らかの理由でdisableにするときに使う
           for(const data of enable.content){
             if(data.enable){
-              this.enable(data.index, false);
+              this.enable(data.index, null);
             }else{
-              this.disable(data.index, false);
+              this.disable(data.index, null);
             }
           }
         }
@@ -10071,15 +10325,17 @@ available waveTables:
         if(iboSpecification !== null){
           const iboName = iboSpecification.content[0].ibo;
           if(this.ibos[iboName] !== undefined){
-            this.bindIBO(iboName, false);
+            this.bindIBO(iboName, null);
           }
         }
 
-        if(modify){ this.unbind(); }
+        this.unbind(target);
+        //if(modify){ this.unbind(); }
         return this;
       }
       initIBO(name, data, params = {}){
-        // data別にしました。バカすぎるので。
+        // dataは分ける。
+        TypeErrorCatcher.throw(name, 'string', 'initIBO: ibo name type must be string.');
         // 無ければ作る
         if(this.ibos[name] === undefined){
           this.ibos[name] = new IBOWrapper(this.gl);
@@ -10109,27 +10365,44 @@ available waveTables:
 
         return this;
       }
-      bindIBO(name, modify = true){
+      bindIBO(name, target = 'default'){
         // setIBO改めbindIBOにしましょう。
         // modifyがtrueの場合にサンドイッチする。これはvaoのバインド中に呼び出すことが多いので、そのようにする。
-        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
-        if(modify){ this.bind(); }
-        this.ibos[name].bind();
-        if(modify){ this.unbind(); }
+        TypeErrorCatcher.throw(name, 'string', 'bindIBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.ibos[name], `bindIBO: ibo ${name} not found.`);
+        //if(this.ibos[name] === undefined){ throw new Error('ibo not found'); return this; }
+        const ibo = this.ibos[name];
+        //if(modify){ this.bind(); }
+        this.bind(target);
+
+        ibo.bind();
+        // ここでカレントがnullではない場合にセットする
+        if(this.currentVAO !== null){
+          this.currentVAO.ibo = ibo;
+        }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      unbindIBO(modify = true){
+      unbindIBO(target = 'default'){
         // IBOをクリアする処理。VAOはIBOのみ、バインド状態を記録できる。
-        // 現状それをクリアする方法が無いので、用意する。
-        if(modify){ this.bind(); }
+        // 現状それをクリアする方法が無いので、用意する。用途は今のところ不明。
+        //if(modify){ this.bind(); }
+        this.bind(target);
         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, null);
-        if(modify){ this.unbind(); }
+        // ここでカレントがnullではない場合にはずす
+        if(this.currentVAO !== null){
+          this.currentVAO.ibo = null;
+        }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      pointer(index, params = {}, modify = true){
+      pointer(index, params = {}, target = 'default'){
         // index主体に書き換える。vboの名前はbufferという形でparamsに含める
         const {buffer = ""} = params;
-        if(this.vbos[buffer] === undefined){ console.log('vbo not found'); return this; }
+        UndefinedErrorCatcher.throw(this.vbos[buffer], `pointer: vbo ${buffer} not found.`);
+        //if(this.vbos[buffer] === undefined){ throw new Error('vbo not found'); return this; }
         const vbo = this.vbos[buffer];
 
         const {
@@ -10139,7 +10412,8 @@ available waveTables:
         // typeは文字列OKにしよう
         const properType = glEnum(type, 'float');
 
-        if(modify){ this.bind(); }
+        //if(modify){ this.bind(); }
+        this.bind(target);
         vbo.bind();
         // isIntegerをtrueにすると整数で登録できる
         if(!isInteger){
@@ -10148,54 +10422,73 @@ available waveTables:
           this.gl.vertexAttribIPointer(index, size, properType, stride, offset);
         }
         vbo.unbind();
-        if(modify){ this.unbind(); }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
 
         return this;
       }
-      divisor(index = 0, divisor = 0, modify = true){
-        if(modify){ this.bind(); }
+      divisor(index = 0, divisor = 0, target = 'default'){
+        //if(modify){ this.bind(); }
+        this.bind(target);
         this.gl.vertexAttribDivisor(index, divisor);
-        if(modify){ this.unbind(); }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      enable(index = 0, modify = true){
-        if(modify){ this.bind(); }
+      enable(index = 0, target = 'default'){
+        //if(modify){ this.bind(); }
+        this.bind(target);
         this.gl.enableVertexAttribArray(index);
-        if(modify){ this.unbind(); }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
-      disable(index = 0, modify = true){
-        if(modify){ this.bind(); }
+      disable(index = 0, target = 'default'){
+        //if(modify){ this.bind(); }
+        this.bind(target);
         this.gl.disableVertexAttribArray(index);
-        if(modify){ this.unbind(); }
+        //if(modify){ this.unbind(); }
+        this.unbind(target);
         return this;
       }
       updateVBO(name, data, options = {}){
-        if(this.vbos[name] === undefined){ console.log('vbo not found'); return this; }
+        TypeErrorCatcher.throw(name, 'string', 'updateVBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.vbos[name], `updateVBO: vbo ${name} not found.`);
+        //if(this.vbos[name] === undefined){ throw new Error('vbo not found'); return this; }
         this.vbos[name].update(data, options);
         return this;
       }
       updateIBO(name, data, options = {}){
-        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
+        TypeErrorCatcher.throw(name, 'string', 'updateIBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.ibos[name], `updateIBO: ibo ${name} not found.`);
+        //if(this.ibos[name] === undefined){ throw new Error('ibo not found'); return this; }
         this.ibos[name].update(data, options);
         return this;
       }
       outputVBO(name, data, options = {}){
-        if(this.vbos[name] === undefined){ console.log('vbo not found'); return this; }
+        TypeErrorCatcher.throw(name, 'string', 'outputVBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.vbos[name], `outputVBO: vbo ${name} not found.`);
+        //if(this.vbos[name] === undefined){ throw new Error('vbo not found'); return this; }
         this.vbos[name].output(data, options);
         return this;
       }
       outputIBO(name, data, options = {}){
-        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
+        TypeErrorCatcher.throw(name, 'string', 'outputIBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.ibos[name], `outputIBO: ibo ${name} not found.`);
+        //if(this.ibos[name] === undefined){ throw new Error('ibo not found'); return this; }
         this.ibos[name].output(data, options);
         return this;
       }
       showVBO(name, options = {}){
-        if(this.vbos[name] === undefined){ console.log('vbo not found'); return null; }
+        TypeErrorCatcher.throw(name, 'string', 'showVBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.vbos[name], `showVBO: vbo ${name} not found.`);
+        //if(this.vbos[name] === undefined){ throw new Error('vbo not found'); return null; }
         return this.vbos[name].show(options);
       }
       showIBO(name, options = {}){
-        if(this.ibos[name] === undefined){ console.log('ibo not found'); return null; }
+        TypeErrorCatcher.throw(name, 'string', 'showIBO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.ibos[name], `showIBO: ibo ${name} not found.`);
+        //if(this.ibos[name] === undefined){ throw new Error('ibo not found'); return null; }
         return this.ibos[name].show(options);
       }
       drawArrays(drawCall = 'triangles', options = {}){
@@ -10211,9 +10504,13 @@ available waveTables:
         }
         return this;
       }
-      drawElements(name, drawCall = 'triangles', options = {}){
-        if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
-        const ibo = this.ibos[name];
+      drawElements(drawCall = 'triangles', options = {}){
+        // nameをなくす。currentVAO.iboで描画する。
+        //if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
+        if(this.currentVAO === null){ throw new Error('vao null'); return this; }
+        //const ibo = this.ibos[name];
+        const ibo = this.currentVAO.ibo;
+        if(ibo === null){ throw new Error('ibo null'); return this; }
         const {count = 0, offset = 0, size = ibo.length, type = ibo.type} = options;
         //const properDrawCall = VAOWrapper.parseDrawCall(this.gl, drawCall);
         // glEnum使いましょう
@@ -10225,14 +10522,16 @@ available waveTables:
         }
         return this;
       }
-      registTFO(name = '', bufferDescription = ''){
+      registTFO(name, bufferDescription = ''){
         const {gl} = this;
-        if(typeof(name) !== 'string' || name.length === 0){ return this; }
+        TypeErrorCatcher.throw(name, 'string', 'registTFO: name type must be string.');
+        // 文字列指定の場合は,で名前を区切る。半角スペースの長さは任意。左から順に連番。
         if(typeof(bufferDescription) === 'string'){
-          const bufferNames = bufferDescription.split(',').map((u) => u.trim());
+          const bufferNames = bufferDescription.split(',').map(s => s.trim()).filter(s => s.length > 0);
           this.registTFO(name, bufferNames);
           return this;
         }
+        // もしくは、配列でvbo名を並べる。
         if(!Array.isArray(bufferDescription)){ return this; }
         const tfo = gl.createTransformFeedback();
         let tfoIndex = 0;
@@ -10247,8 +10546,10 @@ available waveTables:
         this.tfos[name] = tfo;
         return this;
       }
-      bindTFO(name = ''){
-        if(this.tfos[name] === undefined){ console.log('tfo not found'); return this; }
+      bindTFO(name){
+        TypeErrorCatcher.throw(name, 'string', 'bindTFO: name type must be string.');
+        UndefinedErrorCatcher.throw(this.tfos[name], `bindTFO: tfo ${name} not found.`);
+        //if(this.tfos[name] === undefined){ console.log('tfo not found'); return this; }
         this.gl.bindTransformFeedback(this.gl.TRANSFORM_FEEDBACK, this.tfos[name]);
         return this;
       }
@@ -10272,11 +10573,18 @@ available waveTables:
           showArrayBuffer = false, showIndexBuffer = false
         } = options;
 
+        // 一応バージョンチェック
+        const isWebGL1 = (gl.getParameter(gl.VERSION).match(/WebGL 1.0/) !== null);
+        if(isWebGL1){
+          console.error('WebGL1には対応していません。内容の取得のみできます。');
+        }
+
         // そのタイミングでのVAAの状態からVAOWrapperを生成する
         // その都合上、そのときbindされているVAOが無い場合は良いが、ある場合は後で復元する
         // それも取得すれば大丈夫
         // 一応取得し、nullでない場合は最後にこれを戻す
-        const curVAO = gl.getParameter(gl.VERTEX_ARRAY_BINDING);
+        // WebGL1の場合この機能は使えないので、ここでnullして切ってしまおう。
+        const curVAO = (isWebGL1 ? null : gl.getParameter(gl.VERTEX_ARRAY_BINDING));
 
         // 順に取得していく。まずスロット数の上限を取得（基本16）
         const vaaCount = gl.getParameter(gl.MAX_VERTEX_ATTRIBS);
@@ -10300,8 +10608,19 @@ available waveTables:
           const normalized = gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_NORMALIZED);
           const stride = gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_STRIDE);
           const offset = gl.getVertexAttribOffset(index, gl.VERTEX_ATTRIB_ARRAY_POINTER);
-          const isInteger = gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_INTEGER);
-          const divisor = gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_DIVISOR);
+          // WebGL1ではisIntegerは計算できない
+          const isInteger = (isWebGL1 ? null : gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_INTEGER));
+          // WebGL1ではdivisorは拡張機能で取得する。まあどうせp5にちょっかい出す時しか使わんけどな。
+          const divisor = (function(){
+            if(isWebGL1){
+              // 拡張機能で取得
+              const ext = gl.getExtension("ANGLE_instanced_arrays");
+              if(ext === null) return null;
+              return gl.getVertexAttrib(index, ext.VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE);
+            }
+            // WebGL2の場合は普通に取得
+            return gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_DIVISOR);
+          })();
           const enabled = gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_ENABLED);
 
           if(showArrayBuffer){
@@ -10309,16 +10628,27 @@ available waveTables:
             WBOWrapper.showBuffer(gl, buffer, gl.ARRAY_BUFFER, {arrayType:properArrayType});
           }
 
-          vboData[`vbo_${index}`] = {data:buffer, usage:bufferUsage};
-          vaaLayout[index] = {buffer:`vbo_${index}`, size, type, normalized, stride, offset, isInteger, divisor, enabled};
-          if(showVAAState){ console.log(`${index}: size:${size}, type:${type}, normalized:${normalized}, stride:${stride}, offset:${offset}, isInteger:${isInteger}, divisor:${divisor}, enabled:${enabled}`); }
-          const attributeTypeByteLength = VAOWrapper.getAttributeTypeByteLength(vaaLayout[index].type);
-
+          const attributeTypeByteLength = VAOWrapper.getAttributeTypeByteLength(type);
           const arrayCount = bufferSize / (attributeTypeByteLength*size);
-          // インスタンスアトリビュートは無視。足りないのも無視。
-          if(divisor === 0){ properVAOcount = Math.max(properVAOcount, arrayCount); }
-        }
+          // countを追加
+          if(showVAAState){ console.log(`${index}: count:${arrayCount}, size:${size}, type:${type}, normalized:${normalized}, stride:${stride}, offset:${offset}, isInteger:${isInteger}, divisor:${divisor}, enabled:${enabled}`); }
 
+          // vbo名はindex番号で暫定的に決める
+          // なお構築に際してはenableなものしか採用しないとする（現状の仕様では頂点数が異なる場合は併用できない）
+          if(enabled){
+            vboData[`vbo_${index}`] = {data:buffer, usage:bufferUsage};
+            vaaLayout[index] = {buffer:`vbo_${index}`, size, type, normalized, stride, offset, isInteger, divisor, enabled};
+          }
+
+          // インスタンスアトリビュートは無視。足りないのも無視。enabledでなければ無視。
+          // あくまで「その状態での描画に寄与している内容をコピーする」ので。
+          // enabledのものはすべて同じ...が想定されている。
+          // まあ頂点数の異なるvboを併用して描画するのは異常な状況だろう。
+
+          // webgl1ではdivisorは拡張機能ですが取れるようにしました
+          // webgl1かつextが機能しない場合だけnullとなります。問題ないですね。
+          if((divisor === null || divisor === 0) && enabled){ properVAOcount = arrayCount; }
+        }
         if(showVAAState){ console.log(`vaoCount:${properVAOcount}`); }
 
         // 情報を格納していく。
@@ -10354,6 +10684,8 @@ available waveTables:
           // scanしたいだけの場合は、ここで離脱する。
           return null;
         }
+        // WebGL1の場合もここで切る
+        if(isWebGL1) return null;
 
         // 情報が揃ったのでVAOWrapperを生成する。その過程で、最初に紐付けられていたVAOはクリアされてしまう。
         // const vao = this.create(gl, {...})...
@@ -10364,6 +10696,12 @@ available waveTables:
           gl.bindVertexArray(curVAO);
         }
         return vao;
+      }
+      static showVAA(gl, options = {}){
+        // 面倒な場合のための簡易版。showArrayBufferとshowIndexBufferのみ追加指定できる。glだけからVAAの状態をのぞき見できる。
+        // scanもだが、基本的にp5にちょっかいを出すための関数。threeはガードが固そうなので難しいかも。
+        const {showArrayBuffer = false, showIndexBuffer = false} = options;
+        this.scan(gl, {scanonly:true, showVAAState:true, showArrayBuffer, showIndexBuffer});
       }
       static getAttributeTypeByteLength(type){
         // アトリビュートタイプのバイト長を取得する。typeはenumもしくは文字列、いずれも可。
@@ -10474,7 +10812,10 @@ available waveTables:
 
     const {parseDesignDescription} = foxParse;
     const {glEnum, glTypedArray, ProgramWrapper, WBOWrapper, VBOWrapper, UBOWrapper, IBOWrapper, VAOWrapper} = webglUtils;
-    const {Damper, Tree, saveCanvas, ResourceLoader, getTextAlign, getTextBoundingRect, mapAmount, Gun} = foxUtils;
+    const {
+      Easing, Damper, Tree, saveCanvas, getTextAlign, getTextBoundingRect, mapAmount, Gun,
+      loadImage, loadArrayBuffer, loadJSON
+    } = foxUtils;
     const {Interaction, Inspector} = foxIA;
     const {Vecta, MT3, MT4, QCameraPerse, QCameraOrtho} = fox3Dtools;
     const {coulour3} = foxColor;
@@ -10482,9 +10823,11 @@ available waveTables:
     // isActiveを追加。カメラが動いてるときだけ更新するなどの用途がある。
     // configも追加。操作性をいじるための機能。actionCoeffを変更できる。デフォルトは1. thresholdも0.01とかでいいかもだしな。
     // moveはmoveNDCでないとまずいでしょう
+
+    // options使わんからやめちゃおう。デフォルトでいいよ。邪魔。ダブルクリックも別途処理でいいし。
     class CameraController extends Interaction{
-      constructor(canvas, options = {}, params = {}){
-        super(canvas, options);
+      constructor(canvas, params = {}){
+        super(canvas, {});
         const {cam} = params;
         this.mouseScaleFactor = 0.0001;
         this.mouseRotationFactor = 0.001;
@@ -10627,6 +10970,10 @@ available waveTables:
       isActive(){
         return this.dmp.isActive();
       }
+      static create(){
+        // create関数
+        return new this(...arguments);
+      }
     }
 
     // コンストラクタ
@@ -10694,7 +11041,7 @@ available waveTables:
         }
         const result = new Vecta(0,0,0);
         for(let i=0; i<4; i++){
-          result.addScalar(mats[i].multV(this.v, true), this.weight[i]);
+          result.addScalar(mats[i].applyP(this.v, true), this.weight[i]);
         }
         return result;
       }
@@ -10742,7 +11089,7 @@ available waveTables:
             curMat.multM(t.joint);
             // ここでのcurMatが求めるglobalなので、
             // これを元にpositionとinverseBindを計算する
-            curMat.multV(t.position.set(0,0,0));
+            curMat.applyP(t.position.set(0,0,0));
             t.inverseBind.set(curMat).invert();
           },
           lastArrived:(t) => {
@@ -10868,7 +11215,7 @@ available waveTables:
       }
       getLocalPosition(x, y){
         // globalを適用した結果(x,y)になる点の位置ベクトルを算出する（z成分は1）
-        return this.global.invert(true).multV(new Vecta(x,y,1));
+        return this.global.invert(true).applyP(new Vecta(x,y,1));
       }
     }
 
@@ -12472,7 +12819,8 @@ available waveTables:
     // createGltf.
     // gl, url, optionsから作る。
     async function createGltf(url, options = {}){
-      const gltfjson = await ResourceLoader.getJSON(url);
+      //const gltfjson = await ResourceLoader.getJSON(url);
+      const gltfjson = await loadJSON(url);
       return new Gltf(gltfjson, options);
     }
 
@@ -12481,7 +12829,8 @@ available waveTables:
     // 「BIN 」のあとが単独のバイナリデータになっているのでそれを取得し、
     // 前半のJSONパートと合わせて解釈する
     async function createGlb(url, options = {}){
-      const bin = await ResourceLoader.getArrayBuffer(url);
+      //const bin = await ResourceLoader.getArrayBuffer(url);
+      const bin = await loadArrayBuffer(url);
       const ua = new Uint8Array(bin);
       // バイナリ文字列に変換する
       const hexString = ua.toHex();
@@ -13010,7 +13359,12 @@ available waveTables:
         // もうこの時点で行列にしてしまった方が合理的。
         return {data:result, frames};
       }
-      createVAO(gl, options = {}){
+      /*
+      createVAO_old(gl, options = {}){
+        // location設定がデフォルトになってるので破棄します。
+        // 理由は、結局これだと複数のvaoをバッファを元に作りたいときに不便。
+        // 具体的には複数頂点色、複数UV、スキンメッシュなど。
+
         // VAOWrapperを作ろう
         // meshesの翻訳データに基づいて新しく作る
         // locationですが、指定したものだけ用意する形にする。指定してなければ何にも起きない
@@ -13052,6 +13406,80 @@ available waveTables:
         // あとは作るだけ
         const vao = VAOWrapper.create(gl, {count, vbo, ibo, layout});
         return vao;
+      }
+      */
+      createVAO(gl, options = {}){
+        // VAOWrapperを作ろう
+        // meshesの翻訳データに基づいて作る
+        // bufferは一通り用意するが、locationで指定されたものだけをpointerでVAAに落とす。
+        // COLOR_1とかTEXCOORD_1とかも使えるようになる。
+        // faceは使う場合は文字列で名前を指定する。nullにすると使われない。そういう場合もある。
+        // bufferOnlyのオプションでバッファだけ用意し、レイアウトはこっちで決めたりできる。
+        // その場合はcreateVBOLayoutと併用して使うデータを取得して色々決める。
+
+        const {meshId = 0, primitiveId = 0, location = {}, face = 'f', bufferOnly = false} = options;
+        const primitive = this.meshes[meshId].primitives[primitiveId];
+        const {attributes, indices} = primitive;
+
+        // POSITIONとかいろいろ入ってる。indexBuffer関連はINDICESを使おう。
+        const attributeNames = Object.keys(location);
+
+        let count;
+        const buffer = {};
+        // vaoのソースを作る
+        let vaoSource = `@buffer \n <vbo> \n`;
+        for(const [name, attribute] of Object.entries(attributes)){
+          buffer[name] = attribute.data;
+          // countはこれでいいのかって感じだけど同じメッシュでこれ違ってたら問題なのでいいかと
+          count = attribute.count;
+          vaoSource += `${name} buffer.${name};\n`;
+        }
+        vaoSource += `<ibo> \n`;
+        if(face !== null){
+          vaoSource += `${face} indices.data;\n`;
+        }
+
+        // bufferOnlyの場合、バッファだけ用意して、空っぽのVAOを作る。
+        // たとえば同じバッファ群から複数のVAOを生成するのに使う。
+        // locationが未指定の場合もそうしよう。これ以降の処理ができないからね。
+        if(bufferOnly || Object.keys(location).length === 0){
+          return VAOWrapper.create(gl, {
+            count:count,
+            layout:vaoSource,
+            dict:{buffer:buffer, indices:indices}
+          });
+        }
+
+        // 以下はbufferOnlyではなく、locationから一気にVAOを作ってしまう場合（デフォルト）
+        // createVBOLayoutの重複呼び出しを避けるための処理
+        // locationが未指定の場合は実行されず、これの一つ前までで終了とする。
+        const vboLayout = this.createVBOLayout(gl, meshId, primitiveId);
+
+        vaoSource += `@layout \n <pointer> \n`;
+        for(const [name, index] of Object.entries(location)){
+          vaoSource += `${index} ${vboLayout[name]};\n`;
+        }
+
+        return VAOWrapper.create(gl, {
+          count:count,
+          layout:vaoSource,
+          dict:{buffer:buffer, indices:indices}
+        });
+      }
+      createVBOLayout(gl, options = {}){
+        // vboのlayout「だけ」を作る関数。他の情報は不要。
+        const {meshId = 0, primitiveId = 0} = options;
+        const primitive = this.meshes[meshId].primitives[primitiveId];
+        const {attributes, indices} = primitive;
+        const result = {};
+
+        for(const [name, attribute] of Object.entries(attributes)){
+          // typeのところは5126とか許されるよ。知らんかったかな？
+          const {size, type, normalized} = attribute;
+          const isInteger = (!normalized && (type === 5125 || type === 5213 || type === 5121));
+          result[name] = ` ${name} ${size} ${type} ${normalized} 0 0 ${isInteger}`;
+        }
+        return result;
       }
       createTransformAnimations(gl, options = {}){
         // meshのtreeのglobalを取得できるようにするか。アクセスできるようにしよう。
@@ -13395,7 +13823,8 @@ available waveTables:
 
           const mime = img.mimeType;
           const url = `data:${mime};base64,${base64String}`;
-          const texture = await ResourceLoader.getImage(url);
+          //const texture = await ResourceLoader.getImage(url);
+          const texture = await loadImage(url);
           this.textures.push(texture);
         }
       }
@@ -13552,15 +13981,42 @@ vec3 softLight(in float srcRed, in float srcGreen, in float srcBlue, in float ds
 }
 `,
 'transform':`
-void applyTransformV(inout vec3 v, in mat4 tf){
-  v = (vec4(v, 1.0) * tf).xyz;
+// 簡易版を用意しておく。すべてローカル、オーバーロードなし。
+void scale(inout mat4 m, in vec3 s){
+  mat4 scaleMatrix = mat4(s.x, 0.0, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, 0.0, s.z, 0.0, 0.0, 0.0, 0.0, 1.0);
+  m = scaleMatrix * m;
+}
+void translation(inout mat4 m, in vec3 t){
+  mat4 translationMatrix = mat4(1.0, 0.0, 0.0, t.x, 0.0, 1.0, 0.0, t.y, 0.0, 0.0, 1.0, t.z, 0.0, 0.0, 0.0, 1.0);
+  m = translationMatrix * m;
+}
+void rotation(inout mat4 m, in vec3 axis, in float t){
+  mat4 rotationMatrix = mat4(
+    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
+    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
+    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+  m = rotationMatrix * m;
+}
+void rotationQ(inout mat4 m, in vec4 q){
+  mat4 rotationQMatrix = mat4(
+    2.0*q.w*q.w-1.0+2.0*q.x*q.x, 2.0*(q.x*q.y-q.z*q.w), 2.0*(q.x*q.z+q.y*q.w), 0.0,
+    2.0*(q.x*q.y+q.z*q.w), 2.0*q.w*q.w-1.0+2.0*q.y*q.y, 2.0*(q.y*q.z-q.x*q.w), 0.0,
+    2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+  m = rotationQMatrix * m;
+}
+void applyTransformP(inout vec3 p, in mat4 tf){
+  p = (vec4(p, 1.0) * tf).xyz;
 }
 void applyTransformN(inout vec3 n, in mat4 tf){
   n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
 }
-void applyTransform(inout vec3 v, inout vec3 n, in mat4 tf){
-  applyTransformV(v, tf);
-  applyTransformN(n, tf);
+void applyTransform(inout vec3 p, inout vec3 n, in mat4 tf){
+  p = (vec4(p, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
 }
 `,
 'scale':`
@@ -13600,14 +14056,14 @@ void setScale(inout mat4 m, in float sx, in float sy, in float sz){
 void setScale(inout mat4 m, in float s){
   m = getScale(vec3(s));
 }
-void applyScaleV(inout vec3 v, in vec3 s){
-  v = (vec4(v, 1.0) * getScale(s)).xyz;
+void applyScaleP(inout vec3 p, in vec3 s){
+  p = (vec4(p, 1.0) * getScale(s)).xyz;
 }
-void applyScaleV(inout vec3 v, in float sx, in float sy, in float sz){
-  v = (vec4(v, 1.0) * getScale(vec3(sx, sy, sz))).xyz;
+void applyScaleP(inout vec3 p, in float sx, in float sy, in float sz){
+  p = (vec4(p, 1.0) * getScale(vec3(sx, sy, sz))).xyz;
 }
-void applyScaleV(inout vec3 v, in float s){
-  v = (vec4(v, 1.0) * getScale(vec3(s))).xyz;
+void applyScaleP(inout vec3 p, in float s){
+  p = (vec4(p, 1.0) * getScale(vec3(s))).xyz;
 }
 void applyScaleN(inout vec3 n, in vec3 s){
   n = (vec4(n, 0.0) * inverse(transpose(getScale(s)))).xyz;
@@ -13618,19 +14074,19 @@ void applyScaleN(inout vec3 n, in float sx, in float sy, in float sz){
 void applyScaleN(inout vec3 n, in float s){
   n = (vec4(n, 0.0) * inverse(transpose(getScale(vec3(s))))).xyz;
 }
-void applyScale(inout vec3 v, inout vec3 n, in vec3 s){
+void applyScale(inout vec3 p, inout vec3 n, in vec3 s){
   mat4 tf = getScale(s);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
 }
-void applyScale(inout vec3 v, inout vec3 n, in float sx, in float sy, in float sz){
+void applyScale(inout vec3 p, inout vec3 n, in float sx, in float sy, in float sz){
   mat4 tf = getScale(vec3(sx, sy, sz));
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
 }
-void applyScale(inout vec3 v, inout vec3 n, in float s){
+void applyScale(inout vec3 p, inout vec3 n, in float s){
   mat4 tf = getScale(vec3(s));
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
 }
 `,
@@ -13659,11 +14115,11 @@ void setTranslation(inout mat4 m, in vec3 t){
 void setTranslation(inout mat4 m, in float tx, in float ty, in float tz){
   m = getTranslation(vec3(tx, ty, tz));
 }
-void applyTranslationV(inout vec3 v, in vec3 t){
-  v = (vec4(v, 1.0) * getTranslation(t)).xyz;
+void applyTranslationP(inout vec3 p, in vec3 t){
+  p = (vec4(p, 1.0) * getTranslation(t)).xyz;
 }
-void applyTranslationV(inout vec3 v, in float tx, in float ty, in float tz){
-  v = (vec4(v, 1.0) * getTranslation(vec3(tx, ty, tz))).xyz;
+void applyTranslationP(inout vec3 p, in float tx, in float ty, in float tz){
+  p = (vec4(p, 1.0) * getTranslation(vec3(tx, ty, tz))).xyz;
 }
 void applyTranslationN(inout vec3 n, in vec3 t){
   // 何も起きない
@@ -13671,14 +14127,14 @@ void applyTranslationN(inout vec3 n, in vec3 t){
 void applyTranslationN(inout vec3 n, in float tx, in float ty, in float tz){
   // 何も起きない
 }
-void applyTranslation(inout vec3 v, inout vec3 n, in vec3 t){
+void applyTranslation(inout vec3 p, inout vec3 n, in vec3 t){
   mat4 tf = getTranslation(t);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nは何にもしない
 }
-void applyTranslation(inout vec3 v, inout vec3 n, in float tx, in float ty, in float tz){
+void applyTranslation(inout vec3 p, inout vec3 n, in float tx, in float ty, in float tz){
   mat4 tf = getTranslation(vec3(tx, ty, tz));
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nは何にもしない
 }
 `,
@@ -13736,17 +14192,17 @@ void setRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t
 void setRotation(inout mat4 m, in float t){
   m = getRotation(vec3(0.0, 0.0, 1.0), t);
 }
-void applyRotationV(inout vec3 v, in vec3 axis, in float t){
-  v = (vec4(v, 1.0) * getRotation(axis, t)).xyz;
+void applyRotationP(inout vec3 p, in vec3 axis, in float t){
+  p = (vec4(p, 1.0) * getRotation(axis, t)).xyz;
 }
-void applyRotationV(inout vec3 v, in vec4 axisAndT){
-  v = (vec4(v, 1.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
+void applyRotationP(inout vec3 p, in vec4 axisAndT){
+  p = (vec4(p, 1.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
 }
-void applyRotationV(inout vec3 v, in float rx, in float ry, in float rz, in float t){
-  v = (vec4(v, 1.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
+void applyRotationP(inout vec3 p, in float rx, in float ry, in float rz, in float t){
+  p = (vec4(p, 1.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
 }
-void applyRotationV(inout vec3 v, in float t){
-  v = (vec4(v, 1.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
+void applyRotationP(inout vec3 p, in float t){
+  p = (vec4(p, 1.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
 }
 void applyRotationN(inout vec3 n, in vec3 axis, in float t){
   // nはイントラ不要
@@ -13764,27 +14220,27 @@ void applyRotationN(inout vec3 n, in float t){
   // nはイントラ不要
   n = (vec4(n, 0.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
 }
-void applyRotation(inout vec3 v, inout vec3 n, in vec3 axis, in float t){
+void applyRotation(inout vec3 p, inout vec3 n, in vec3 axis, in float t){
   mat4 tf = getRotation(axis, t);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
-void applyRotation(inout vec3 v, inout vec3 n, in vec4 axisAndT){
+void applyRotation(inout vec3 p, inout vec3 n, in vec4 axisAndT){
   mat4 tf = getRotation(axisAndT.xyz, axisAndT.w);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
-void applyRotation(inout vec3 v, inout vec3 n, in float rx, in float ry, in float rz, in float t){
+void applyRotation(inout vec3 p, inout vec3 n, in float rx, in float ry, in float rz, in float t){
   mat4 tf = getRotation(vec3(rx, ry, rz), t);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
-void applyRotation(inout vec3 v, inout vec3 n, in float t){
+void applyRotation(inout vec3 p, inout vec3 n, in float t){
   mat4 tf = getRotation(vec3(0.0, 0.0, 1.0), t);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
@@ -13819,11 +14275,11 @@ void setRotationQ(inout mat4 m, in vec4 q){
 void setRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
   m = getRotationQ(vec4(x, y, z, w));
 }
-void applyRotationQV(inout vec3 v, in vec4 q){
-  v = (vec4(v, 1.0) * getRotationQ(q)).xyz;
+void applyRotationQP(inout vec3 p, in vec4 q){
+  p = (vec4(p, 1.0) * getRotationQ(q)).xyz;
 }
-void applyRotationQV(inout vec3 v, in float x, in float y, in float z, in float w){
-  v = (vec4(v, 1.0) * getRotationQ(vec4(x, y, z, w))).xyz;
+void applyRotationQP(inout vec3 p, in float x, in float y, in float z, in float w){
+  p = (vec4(p, 1.0) * getRotationQ(vec4(x, y, z, w))).xyz;
 }
 void applyRotationQN(inout vec3 n, in vec4 q){
   // nはイントラ不要
@@ -13833,15 +14289,15 @@ void applyRotationQN(inout vec3 n, in float x, in float y, in float z, in float 
   // nはイントラ不要
   n = (vec4(n, 0.0) * getRotationQ(vec4(x, y, z, w))).xyz;
 }
-void applyRotationQ(inout vec3 v, inout vec3 n, in vec4 q){
+void applyRotationQ(inout vec3 p, inout vec3 n, in vec4 q){
   mat4 tf = getRotationQ(q);
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
-void applyRotationQ(inout vec3 v, inout vec3 n, in float x, in float y, in float z, in float w){
+void applyRotationQ(inout vec3 p, inout vec3 n, in float x, in float y, in float z, in float w){
   mat4 tf = getRotationQ(vec4(x, y, z, w));
-  v = (vec4(v, 1.0) * tf).xyz;
+  p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
   n = (vec4(n, 0.0) * tf).xyz;
 }
@@ -13890,6 +14346,13 @@ vec4 powQ(in vec4 q, in float a, in float threshold){
   vec3 axis = (q.xyz/n)/s;
   float phi = a*t;
   return multiplier * vec4(sin(phi)*axis, cos(phi));
+}
+vec3 applyV(in vec4 q, in vec3 v){
+  // そとではq*v*(conj(q))なので逆に並べればいい
+  vec4 vq = vec4(v, 0.0);
+  vec4 q0 = multQ(conjQ(q), vq);
+  vec4 q1 = multQ(q0, q);
+  return q1.xyz;
 }
 vec4 powQ(in vec4 q, in float a){
   return powQ(q, a, 1e-10);
@@ -15589,7 +16052,7 @@ void main(){
         if(this.cam !== null && typeof(cc) === 'string'){
           // 変な文字列の場合はnull.
           if(cc === 'none' || cc === 'axis' || cc === 'free'){
-            this.cc = new CameraController(this.cvs, {}, {
+            this.cc = new CameraController(this.cvs, {
               cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:cc
             });
           }else{
@@ -15608,7 +16071,7 @@ void main(){
             // fov:Math.PI/3, aspect:WIW/WIH, near:0.01, far:400
             this.cam = (easySettingKey.cam === 'perse' ? new QCameraPerse() : new QCameraOrtho());
             if(easySettingKey.cc !== 'none'){
-              this.cc = new CameraController(this.cvs, {}, {
+              this.cc = new CameraController(this.cvs, {
                 cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:easySettingKey.cc
               });
             }
@@ -15618,7 +16081,7 @@ void main(){
             this.cam = new QCameraPerse();
             if(this.cc === 'axis' || this.cc === 'free'){
               const rotationMode = this.cc;
-              this.cc = new CameraController(this.cvs, {}, {
+              this.cc = new CameraController(this.cvs, {
                 cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:rotationMode
               });
             }else{
@@ -15632,26 +16095,28 @@ void main(){
         this.resetMode = reset;
         this.resetter = null;
         this.resetInteraction = null;
+        this.easing = null;
         if(this.resetMode === 'manual' || this.resetMode === 'auto'){
           // リセットはGunで書こう。
+          this.easing = new Easing();
           this.resetter = new Gun();
-          this.resetter.registWeapon('reset', ()=>{
+          this.resetter.registWeapon('reset', (cs, duration, easeType)=>{
             return {
               construct:{
-                life:20, type:'discrete', group:"reset"
+                life:duration, type:'discrete', group:"reset"
               },
               init:(b)=>{
-                this.cam.saveState("tmp");
-                this.pause();
+                cs.cam.saveState("tmp");
+                cs.pause();
               },
               update:(b)=>{
-                const prg = b.progress;
-                this.cam.lerpState("tmp", "default", prg*prg*(3-2*prg));
+                const prg = cs.easing.apply(easeType, b.progress);
+                cs.cam.lerpState("tmp", "default", prg);
               },
               remove:(b)=>{
-                this.cam.loadState("default");
-                this.start();
-                this.reset();
+                cs.cam.loadState("default");
+                cs.start();
+                cs.reset();
               }
             }
           });
@@ -15683,13 +16148,13 @@ void main(){
         if(this.cc === null){ return; }
         this.cc.reset();
       }
-      cameraReset(){
+      cameraReset(duration = 20, easeType = 'easeInOutQuad'){
         // 移植。manualの場合はこれを手動で実行する。
         if(this.resetMode === 'none'){ return; }
         // countはresetグループのbulletの個数を数えます。無かったら作ります。
         // updateのあとremoveで破棄されて無くなります。そういうサイクル。
         if(this.resetter.count('reset') === 0){
-          this.resetter.fire('reset');
+          this.resetter.fire('reset', this, duration, easeType);
         }
       }
       resize(w, h){
@@ -15945,8 +16410,8 @@ void main(){
 
         if(cam !== null && !this.viewMode){
           const view = cam.getView();
-          if(prevDirection !== null){ view.multN(this.direction); }
-          if(prevPosition !== null){ view.multV(this.position); }
+          if(prevDirection !== null){ view.applyN(this.direction); }
+          if(prevPosition !== null){ view.applyP(this.position); }
         }
         pg.setUniform(name, this);
         if(prevDirection !== null){ this.direction.set(prevDirection); }

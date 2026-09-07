@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.3.2/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.3.3/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.2/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.3.3/src/index.min.js"></script>
 ```
 
 memo  
@@ -742,7 +742,7 @@ PBRの方は変な構造体だったんですが、StandardLightの方と同じ�
 　仮に全ての処理をmodifyフラグ無しで実行したとしてもすべて問題なく改変は実行される。  
 　ユースケースとしてはどうしてもbind/unbindを繰り返しやる事による負荷が気になる場合に限られるが、レアケースだろうから。内部では使っている。  
 
-　VAO_DESIGNの@layoutの枠に<ibo>を追加。使えるのは文字が1つだけ。ibo名を指定することで、そのiboが使われる。複数あっても0番しか作用しない。  
+　VAO_DESIGNの@layoutの枠に\<ibo\>を追加。使えるのは文字が1つだけ。ibo名を指定することで、そのiboが使われる。複数あっても0番しか作用しない。  
 #### VAOWrapperにTFOを導入  
 　逐次更新などでTFFを使いたい場合のためにregistTFO,bindTFO,unbindTFOを導入。  
 　registTFOは('tfo0', ['v','n'])でもいいが('tfo0', 'v, n')といった簡易記法も使える。  
@@ -755,3 +755,70 @@ PBRの方は変な構造体だったんですが、StandardLightの方と同じ�
 　TFFは「リンク前」という強い制約があるので、UBOのように後から用意することはできない。  
 
 　今回の更新は以上です。
+
+### 1.3.3  
+　今回の更新は主にVAOWrapperの使いやすさを改善するのと、いくつかのパッチです。大きな変更もあります。ResourceLoaderはこれ以降廃止。  
+　理由はリソースの一元管理がぶっちゃけ役に立たない、アドレスからリソース想定するのも役に立たない、あれもこれも役に立たないので。  
+　いちいちResourceLoader.ほにゃららでアクセスするのが面倒、ついloadImageなどと書いてしまう、その辺です。  
+　いくつかの新機能も盛り込まれました。  
+　vaoまわりはdrawElementsの第一引数の廃止こそ大きいですが、それほどの大きな変更はありません。ほぼ従来通りの挙動です。  
+
+#### cameraResetでdurationとeaseTypeをマニュアル化  
+　cameraReset関数でカメラをリセットする際、durationとeaseTypeを自由に決められるようにしました。順に指定します。  
+　マニュアルだけです。オートの方は引き続き20とeaseInOutQuadです。まあマニュアルですから、自由に決められる方がいいだろうというわけです。  
+　autoの方もいじれるようにするかどうかは未定です。まあオートですから、勝手に決めてくれって感じでいいと思います。  
+#### parseDesignDescriptionとcreateTFOの軽微な改善  
+　半角スペースが連続するときに通常のスペースとして扱われない不具合を改善しました。  
+#### GltfのcreateVAOの分割処理  
+　従来の仕様では、locationが指定されたバッファのみ用意される仕組みだったが、スキンメッシュなどの場合に不便だった。  
+　それを改善するため、バッファはすべて用意し、ロケーション指定があった場合にそこだけレイアウトが決まる仕組みにした。  
+　これにより、たとえばまずバッファだけ一通り用意してから、頂点色ごとにvaoで切り分けたり、スキンメッシュのようにupdate部分だけ切り離したりできる。  
+  なおレイアウトについては手動でもいいが、createVBOLayoutという関数で別途バッファ名以降だけ取り出すことができる。  
+#### VAOWrapper.scanにまつわるいくつかの変更  
+　VAOWrapper.scanの変種として、showVAAを用意。中を見るだけ。引数はglだけでいい。追加オプションとしてshowArrayBufferとshowIndexBufferがある。  
+　VAOWrapper.scanについて、中身は全て見れるが、生成される際にはそのときenableなものに対してしかバッファを作らないとした。  
+　さらにcountの計算にもenableでないものは寄与しないとする。  
+　ついでに閲覧のみについて、WebGL1対応を実装。中を見るだけであればWebGL1でも出来るようにした。  
+#### 複数vaoの管理方法を変更  
+　VAOWrapperで複数vaoを管理する際に単にvaoだけにしていたが、それだとibo情報を取り出せないので、そのときにbindされているiboの情報をセットで扱うことにした。  
+　これにより、drawElementsにおいてibo名を指定する必要がなくなった。つまり単独IBOの場合は何にも指定しなくていい。  
+　マルチIBOの場合はbind処理で切り替えることになる。  
+　その関連でsetVAOLayoutとaddVAOの指定方法を変更。layout,dictとなっていたところはオブジェクト形式とした。  
+　理由はいずれも基本事後的に使われるため、dictがあまり仕事しないから。単に文字列の場合、dictが存在せず、それをlayoutとして処理される。  
+#### modifyを廃止してtargetに変更  
+　さっきの内容に関連するが、modifyを廃止。代わりにtarget. デフォルトは'default'で、これは基本vaoの名前。  
+　つまり指定が無い場合は常に、ひとつだけ最初にできるvaoである。なぜならマルチvaoはやはりマイナーケースで、メジャーな場合に対応させるため。  
+　要するに以前のtrueと挙動の違いは無いので、デフォルトがbindされunbindされる。なおnullにすると従来のfalse指定の挙動になる。  
+　名前を指定することで特定のvaoをいじることができる。  
+　すなわちcurrentVAOの挙動が変わっている。以前と違い、bindされている場合のみcurrentVAOはnullではないということ。  
+#### snipetのtransformに関数を追加  
+　transformのsnipetにtranslation,scale,rotation,rotationQを追加。すべてローカル、オーバーロードなし。たとえばrotationはvec3とfloat.  
+　ちなみにmat4(1.0)で単位行列がセットされる。これを元に、ローカル変換で行列を作っていける。  
+#### multV,multNの名称変更  
+　MT4,MT3のmultV,multNを改名してapplyP,applyNに変更。  
+　理由は、position,normalならp,nが自然だろう、というもの。これに応じてtransform関連のsnipetもVをPに変更してある。  
+　なおQuarternionのapplyVのVは「Vecta(vector)」のVなので据え置き。  
+#### NullErrorCatcherを追加  
+　nullかどうか見るだけ。  
+#### VAOWrapperのエラー処理強化  
+　vbo指定で間違ってロケーション番号を書いちゃうバグが発生したのでその辺も含めてエラー処理を強化。  
+#### WBOWrapper.byteLengthの追加  
+　WBOWrapperのinitが実行されるたびにbyteLengthが更新されるように仕様変更。いつでも取り出せる。用途は今のところ未定。  
+#### domUtilsにEasyConsoleを実装  
+　使い方？そのままnewで作って、addTextやwriteTextで追加するだけ。左上のコンフィグは最低限。  
+　隠すやつと、自動更新やめるやつと、全消去。  
+　addとwriteは第二引数でstyleをいじれる。たとえばfontWeight:'bold'で太字にできる。  
+#### foxUtilsにgetPerformanceLevelを実装  
+　文字列high/lowでパフォーマンスを取得する。iPhoneやAndroidでlowが出る仕様のはず。スマホ向けにパフォーマンスを落としたい場合用。  
+#### fox3DtoolsのVecta以外の様々なクラスにcreateを実装  
+　たとえばQuarternion.createを実装。引数は列挙で4つの数字であれば従来通りだが、ベクトルと数の場合はAAだったり、ベクトル3本で正規直交基底の場合はAxesだったり。  
+　いくつかのオーバーロードが用意されている。MT4のcreateもrotationMatrixをサクッと作ったりできる。MT3,QCameraPerseなどは通常のコンストラクション。  
+#### ResourceLoaderの廃止  
+　長らくResourceLoaderはstatic関数しか使われてこなかった。見積ミス。今後はこれらのstatic関数を改名した「load～～」のみ使うものとし、クラスは廃止。  
+　たとえばResourceLoader.getImageはloadImageでサクッと書ける。まあ要らなかったですね。一元管理なんて出来なくていいんです。  
+#### CameraControllerの第二引数のoptionsを廃止  
+　ここは長らく「{}」が使われていた。しかし中に何か入れたことはないし、これから先もおそらく何にも入らない。  
+  そこで廃止することとした。この仕様を作った頃、コンストラクタの仕様をきちんと理解していなかったことが原因（必須だと思っていた）。  
+　今後はキャンバスとパラメータ群のみで作るとする。若干の影響があるかもですけど、改善にはなってると思います。  
+
+更新は以上です。  
