@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.3.3
+ * @version 1.4.0
  */
 
 (function (global, factory) {
@@ -20,9 +20,7 @@
 
   /*
     今後の移植予定
-    Timer
-    FisceToyBoxのいろいろ
-    Geometry関連(v,n,f,あとはoptionでc,uv,l)
+    FisceToyBoxのスライス処理。tessはlibtessでやるのですべて無視。
 
     板ポリ芸やライティング、shaderの改変機構、テクスチャ関連、VAO関連
     1.1.0～1.1.15
@@ -35,6 +33,8 @@
     カスタムシェーダー
     もちろん直書きも従来通り可能。ProgramWrapperの使用により、uniformのセットがめっちゃ楽になったよ。
     writeやbuildなどによりシェーダーカスタマイズが楽になった
+    1.4.0～
+    foxGeometryToolsの導入。あらゆるジオメトリを楽々作成。vao作るのも簡単。
   */
 
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
@@ -46,7 +46,8 @@
     const parser = {};
 
     // コメントなどをカットする。タブを半角スペースにしたりする。最終的に改行で区切り、配列を出力する。
-    function executePreProcess(code = ""){
+    // 最初のフォーマッタイズであり、あらゆるパースプロセスの基本となる。
+    function firstFormattize(code = ""){
       let result = code;
       // 全角スペースがあったら半角スペースにする
       result = result.replaceAll("　", " ");
@@ -138,7 +139,7 @@
       const currentPath = [];
 
       // 最初の整形
-      const array = executePreProcess(code);
+      const array = firstFormattize(code);
 
       // resultの計算ここから
       for(let i=0; i<array.length; i++){
@@ -309,8 +310,9 @@
       return result;
     }
 
-    // 「@」を使わない正規品
+    // '@'を使わない正規品
     // この時に配列内の半角スペースを排除することで、配列で半角スペースを使えるようにする。
+    // ','が無い場合、単に配列表記内の' 'をなくすだけの処理となり、長さ1の配列が返る。
     function separateWithComma(s){
       let parenthesisCount = 0;
       const properSplitted = [];
@@ -441,21 +443,21 @@
     function applyDict(s, dict = {}, path = []){
       // dictを見る
       const dictCheck = s.split('.').reduce((cur, next) => {
-       if(cur === null || cur[next] === undefined){ return null; }
-       return cur[next];
+        if(cur === null || cur[next] === undefined){ return null; }
+        return cur[next];
       }, dict);
       if(dictCheck !== null){
-       return dictCheck;
+        return dictCheck;
       }
       // pathを見る
       for(let i=0; i<path.length; i++){
-       const pathCheck = s.split('.').reduce((cur, next) => {
-         if(cur === null || cur[next] === undefined){ return null; }
-         return cur[next];
-       }, dict[path[i]]);
-       if(pathCheck !== null){
-         return pathCheck;
-       }
+        const pathCheck = s.split('.').reduce((cur, next) => {
+          if(cur === null || cur[next] === undefined){ return null; }
+          return cur[next];
+        }, dict[path[i]]);
+        if(pathCheck !== null){
+          return pathCheck;
+        }
       }
       // 通常文字列
       return s;
@@ -485,8 +487,64 @@
       return result;
     }
 
+    // createProcess.
+    // 記法
+    // ,または;区切りの半角スペース区切りで記述。ただし配列内の半角スペースは利用可能。
+    // 第一引数が関数の実行主、第二引数が関数名、それ以降は引数列となり関数にぶち込まれる。
+    // それらを指定順に実行する関数が返される。自動実行機能は無いので、その場で実行してほしい場合は()をつけること。
+    // オプション
+    // dict, executor, command.
+    // dict: 中身を翻訳する機能。いつものやつ。オブジェクトの翻訳はこれが無いと無理だが、後述するオプションによっては省略可能。
+    // executor: 関数実行主。コマンド列の第一引数（実行主）がすべて一緒の場合にはこれで代用し省略できる。
+    // command: 関数名。コマンド列の第二引数（関数名）がすべて一緒の場合にはこれで代用し省略できる。
+    // レアケースだろうが第二引数だけ省略するパターンも存在するだろう。
+    function createProcess(processDescription, options = {}){
+      const {dict = {}, executor = null, command = null} = options;
+
+      const array = firstFormattize(processDescription);
+      const commands = [];
+      for(let i=0; i<array.length; i++){
+        const splitted = array[i].split(';');
+        commands.push(...splitted);
+      }
+
+      const functions = [];
+      for(let i=0; i<commands.length; i++){
+        const com0 = commands[i];
+        const com1 = separateWithComma(com0);
+        for(let k=0; k<com1.length; k++){
+          const args = com1[k].split(' ').map(s => s.trim()).filter(s => s.length > 0).map(v => parseVariable(v, dict));
+          // executorがいる場合は、頭に付ける。これにより想定上はexecutorから始まるわけ。
+          if(executor !== null){
+            args.unshift(executor);
+          }
+          // commandがある場合は、頭から次の位置に付ける。insertionにはspliceを使う（とても便利）。
+          if(command !== null){
+            args.splice(1, 0, command);
+          }
+          if(typeof(args[0]) !== 'object'){
+            console.error('invalid executor.');
+            continue;
+          }
+          if(typeof(args[1]) !== 'string'){
+            console.error('invalid command name.');
+            continue;
+          }
+          functions.push((function(){
+            args[0][args[1]](...args.slice(2));
+          }));
+        }
+      }
+
+      const executeFunction = () => { for(let i=0; i<functions.length; i++){ functions[i](); } };
+      return executeFunction;
+    }
+
+    parser.firstFormattize = firstFormattize;
     parser.parseDesignDescription = parseDesignDescription;
+    parser.separateWithComma = separateWithComma;
     parser.parseVariable = parseVariable;
+    parser.createProcess = createProcess;
 
     return parser;
   })();
@@ -1466,6 +1524,18 @@
       return coulour(...args).slice(0, 3);
     }
 
+    function coulour_255(...args){
+      const col = coulour(...args);
+      for(let i=0; i<4; i++){ col[i] = Math.round(col[i]*255); }
+      return col;
+    }
+
+    function coulour3_255(...args){
+      const col = coulour(...args).slice(0, 3);
+      for(let i=0; i<3; i++){ col[i] = Math.round(col[i]*255); }
+      return col;
+    }
+
     color.presetColors = presetColors; // 色パレット
     color.hsv2rgb = hsv2rgb;
     color.hsvArray = hsvArray;
@@ -1475,6 +1545,8 @@
     color.hslArray_overlay = hslArray_overlay;
     color.coulour = coulour; // 汎用色指定関数
     color.coulour3 = coulour3; // ...の、RGB版
+    color.coulour_255 = coulour_255; // ...の、255倍版
+    color.coulour3_255 = coulour3_255; // ...の、RGBの255倍版
 
     return color;
   })();
@@ -4970,8 +5042,6 @@
         // サンドイッチは必要ないでしょう。煩雑になる。
         // 結局それは、スケッチの方向性としてステートマシンで行くのかステートレスで行くのかっていうことになる。
         // 2DはWebGLと一緒でステートマシンなので、ステートレスは疑似的にしか実現できない。それでもその方が都合がいい場合は、こうするというわけ。
-        // なおWebGPUはステートレスですが、p5のWebGPUはWebGLに寄せた「似非WebGPU」なので実質ステートマシンとなっています。
-        // なんだかな...
 
         for(let i=0; i<targetRows.length; i++){
           const row = targetRows[i];
@@ -5223,6 +5293,10 @@
         this.firstTapped = {x:0, y:0};
         // コンストラクタで初期化しましょ
         this.initialize(canvas, options);
+      }
+      getCanvas(){
+        // なんか必要になったので用意する
+        return this.canvas;
       }
       initialize(canvas, options = {}){
         // 念のためpointersを空にする
@@ -6126,8 +6200,7 @@ available waveTables:
         this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
       }
       createPinkNoiseBuffer(duration = 1, name = "pink_1"){
-        // p5から移植してみる
-        // https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5579
+        // cf: https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5579
         const {actx} = this;
 
         const bufferSize = Math.round(actx.sampleRate * duration);
@@ -6157,8 +6230,7 @@ available waveTables:
         this.audioBuffers[`noise_${name}`] = noiseBuffer; // audioBufferにも登録
       }
       createBrownNoiseBuffer(duration = 1, name = "brown_1"){
-        // p5から移植してみる
-        // https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5604
+        // cf: https://github.com/processing/p5.js/blob/v1.11.11/lib/addons/p5.sound.js#L5604
         const {actx} = this;
 
         const bufferSize = Math.round(actx.sampleRate * duration);
@@ -7237,7 +7309,11 @@ available waveTables:
               return {x:args[0], y:args[0], z:args[0], im:args[1]};
             }
           }else if(Array.isArray(args[0])){
-            return {x:args[0][0], y:args[0][1], z:args[0][2], im:args[1]};
+            // 足りない部分は0で埋める
+            const x = (args[0][0] !== undefined ? args[0][0] : 0);
+            const y = (args[0][1] !== undefined ? args[0][1] : 0);
+            const z = (args[0][2] !== undefined ? args[0][2] : 0);
+            return {x, y, z, im:args[1]};
           }
         }else if(args.length === 4){
           // 長さ4の場合は数限定。
@@ -8054,6 +8130,26 @@ available waveTables:
         // 単位クォータニオン限定。wはQuarternion可
         return this.init().localRotationQ(...arguments);
       }
+      translation(){
+        // localTranslationのエイリアス
+        this.localTranslation(...arguments);
+        return this;
+      }
+      rotation(){
+        // localRotationのエイリアス
+        this.localRotation(...arguments);
+        return this;
+      }
+      scale(){
+        // localScaleのエイリアス
+        this.localScale(...arguments);
+        return this;
+      }
+      rotationQ(){
+        // localRotationQのエイリアス
+        this.localRotationQ(...arguments);
+        return this;
+      }
       setPerseProjection(fov, aspect, near, far){
         // パース射影行列。
         const factor = 1/Math.tan(fov/2);
@@ -8065,11 +8161,13 @@ available waveTables:
         ]);
         return this;
       }
-      setOrthoProjection(_width, _height, near, far){
+      setOrthoProjection(width, height, near, far){
         // 平行投影射影行列
+        // '_'をwidthとheightに付けていたのはとあるライブラリのglobal変数に忖度してたんです
+        // もう不要ですね
         this.set([
-          2/_width, 0, 0, 0,
-          0, 2/_height, 0, 0,
+          2/width, 0, 0, 0,
+          0, 2/height, 0, 0,
           0, 0, -2/(far-near), -(far+near)/(far-near),
           0, 0, 0, 1
         ]);
@@ -8124,6 +8222,10 @@ available waveTables:
         return new this(...arguments);
       }
       static getRotationMatrix(axis, angle){
+        // 引数が1個の場合には数である場合に(0,0,1)固定にするか
+        if(arguments.length === 1 && typeof(axis) === 'number'){
+          return this.getRotationMatrix(0, 0, 1, axis);
+        }
         // 回転行列部分だけ取り出すか
         // 軸の指定方法は3種類
         if(Array.isArray(axis)){
@@ -8344,6 +8446,11 @@ available waveTables:
       getProj(invert = false){
         if(invert){ return this.invProj; }
         return this.proj;
+      }
+      getViewProj(){
+        // viewProjection行列を取る。内容的にはビューしてからプロジェクションする。
+        // これをpostProcessにおいてglobalPosition（の1.0付与版）に適用すると、別カメラのNDCをサクッと入手できる...はず。
+        return this.proj.copy().multM(this.view);
       }
       cameraWork(params = {}){
         // qRotは作用子、globalは左乗算（falseで右乗算）、
@@ -8744,7 +8851,7 @@ available waveTables:
       }
       applyP(v, immutable = false){
         // vは3次元ベクトルでx,y,z成分を持つ
-        // Vectaでもp5.Vectorでも{x,y,z}でも何でもあり。
+        // {x,y,z}なら何でもあり。
         if(immutable){
           // 不変
           return this.applyP(v.copy(), false);
@@ -8900,6 +9007,7 @@ available waveTables:
     const {UndefinedErrorCatcher, TypeErrorCatcher} = foxErrors;
     const {parseDesignDescription} = foxParse;
     const {Vecta, MT3, MT4, Quarternion} = fox3Dtools;
+    const {createOffscreen} = domUtils;
 
     // gl定数
     const gls = {
@@ -8971,7 +9079,6 @@ available waveTables:
       rgba: 6408,
       luminance: 6409,
       luminance_alpha: 6410,
-      unsigned_byte: 5121,
       unsigned_short_4_4_4_4: 32819,
       unsigned_short_5_5_5_1: 32820,
       unsigned_short_5_6_5: 33635,
@@ -9168,6 +9275,82 @@ available waveTables:
       invalid_index: 4294967295,
       timeout_ignored: -1,
       max_client_wait_timeout_webgl: 37447,
+      sampler_3d: 35679,
+      sampler_2d_shadow: 35682,
+      sampler_2d_array: 36289,
+      sampler_2d_array_shadow: 36292,
+      sampler_cube_shadow: 36293,
+      int_sampler_2d: 36298,
+      int_sampler_3d: 36299,
+      int_sampler_cube: 36300,
+      int_sampler_2d_array: 36303,
+      unsigned_int_sampler_2d: 36306,
+      unsigned_int_sampler_3d: 36307,
+      unsigned_int_sampler_cube: 36308,
+      unsigned_int_sampler_2d_array: 36311,
+      max_samples: 36183,
+      sampler_binding: 35097,
+      framebuffer: 36160,
+      renderbuffer: 36161,
+      rgba4: 32854,
+      rgb5_a1: 32855,
+      rgb565: 36194,
+      depth_component16: 33189,
+      stencil_index8: 36168,
+      depth_stencil: 34041,
+      renderbuffer_width: 36162,
+      renderbuffer_height: 36163,
+      renderbuffer_internal_format: 36164,
+      renderbuffer_red_size: 36176,
+      renderbuffer_green_size: 36177,
+      renderbuffer_blue_size: 36178,
+      renderbuffer_alpha_size: 36179,
+      renderbuffer_depth_size: 36180,
+      renderbuffer_stencil_size: 36181,
+      framebuffer_attachment_object_type: 36048,
+      framebuffer_attachment_object_name: 36049,
+      framebuffer_attachment_texture_level: 36050,
+      framebuffer_attachment_texture_cube_map_face: 36051,
+      color_attachment0: 36064,
+      depth_attachment: 36096,
+      stencil_attachment: 36128,
+      depth_stencil_attachment: 33306,
+      none: 0,
+      framebuffer_complete: 36053,
+      framebuffer_incomplete_attachment: 36054,
+      framebuffer_incomplete_missing_attachment: 36055,
+      framebuffer_incomplete_dimensions: 36057,
+      framebuffer_unsupported: 36061,
+      framebuffer_binding: 36006,
+      renderbuffer_binding: 36007,
+      max_renderbuffer_size: 34024,
+      invalid_framebuffer_operation: 1286,
+      framebuffer_attachment_color_encoding: 33296,
+      framebuffer_attachment_component_type: 33297,
+      framebuffer_attachment_red_size: 33298,
+      framebuffer_attachment_green_size: 33299,
+      framebuffer_attachment_blue_size: 33300,
+      framebuffer_attachment_alpha_size: 33301,
+      framebuffer_attachment_depth_size: 33302,
+      framebuffer_attachment_stencil_size: 33303,
+      framebuffer_default: 33304,
+      depth24_stencil8: 35056,
+      draw_framebuffer_binding: 36006,
+      read_framebuffer: 36008,
+      draw_framebuffer: 36009,
+      read_framebuffer_binding: 36010,
+      renderbuffer_samples: 36011,
+      framebuffer_attachment_texture_layer: 36052,
+      framebuffer_incomplete_multisample: 36182,
+      unsigned_int_2_10_10_10_rev: 33640,
+      unsigned_int_10f_11f_11f_rev: 35899,
+      unsigned_int_5_9_9_9_rev: 35902,
+      float_32_unsigned_int_24_8_rev: 36269,
+      unsigned_int_24_8: 34042,
+      half_float: 5131,
+      rg: 33319,
+      rg_integer: 33320,
+      int_2_10_10_10_rev: 36255,
       cube_px: 34069,
       cube_nx: 34070,
       cube_py: 34071,
@@ -9201,29 +9384,26 @@ available waveTables:
       sampler2DArray: 36289,
       DBB: 256,
       SBB: 1024,
-      CBB: 16384,
+      CBB: 16384
     };
 
     // 運用上は「glEnum」という関数にしよう。そんで、数の場合はそのまま。
-    // 余談ですが「enum」という変数名はタブーなので使わないように...「glEnum」はセーフのようです。まあぎりぎりね。
-    function glEnum(value = '', defaultValue = 0){
+    // defaultValueは廃止。理由は新規追加がしにくくなるから。
+    function glEnum(value = ''){
       // 数の場合はそのまま返す
       if(typeof(value) === 'number'){ return value; }
-      // stringの場合は検索して返す。undefinedの場合はデフォルト値が返る。
-      // さらにデフォルト値に対しても、stringであればglsから返せるようにする。
+      // stringの場合は検索して返す。
+      // 見つからない場合はエラーを返す。null.
       if(typeof(value) === 'string'){
         const v = gls[value];
         if(v !== undefined){ return v; }
+        console.error('glEnum: invalid key.');
+        return null;
       }
-      if(typeof(defaultValue) === 'number'){ return defaultValue; }
-      // typoですね。stringがstirngになってた。それで-1が返ったのか。
-      if(typeof(defaultValue) === 'string'){
-        const d = gls[defaultValue];
-        if(d !== undefined){ return d; }
-      }
-      return -1;
+      console.error('glEnum: invalid type.')
+      return null;
     }
-    // 運用事例：const drawCallEnum = glEnum(drawCall, 'triangles');
+    // 運用事例：const drawCallEnum = glEnum(drawCall);
 
     const glt = {
       Int8Array:Int8Array,
@@ -9242,20 +9422,18 @@ available waveTables:
     };
 
     // 'Float32Array' -> Float32Array
-    function glTypedArray(value = '', defaultValue = Float32Array){
+    // defaultValueは廃止。理由は新規追加がしにくくなるから。
+    function glTypedArray(value = ''){
       // 型付配列の場合はそのまま返す
       if(glt.isTypedArray(value)){ return value; }
       // 文字列の場合は調べてそれを返す。
       if(typeof(value) === 'string'){
         const v = glt[value];
         if(v !== undefined){ return v; }
+        console.error('glTypedArray: invalid key.');
+        return null;
       }
-      // 無い場合はdefaultが返る。文字列の場合とそうでない場合で分ける
-      if(glt.isTypedArray(defaultValue)){ return defaultValue; }
-      if(typeof(defaultValue) === 'string'){
-        const d = glt[defaultValue];
-        if(d !== undefined){ return d; }
-      }
+      console.error('glTypedArray: invalid type.');
       return null;
     }
 
@@ -9333,6 +9511,7 @@ available waveTables:
           case gl.SAMPLER_3D: return 'sampler3D';
           case gl.SAMPLER_CUBE: return 'samplerCube';
           case gl.SAMPLER_2D_ARRAY: return 'sampler2DArray';
+          case gl.SAMPLER_2D_SHADOW: return 'sampler2DShadow'; // sampler2DShadowを追加
           case gl.FLOAT_MAT2: return 'mat2';
           case gl.FLOAT_MAT3: return 'mat3';
           case gl.FLOAT_MAT4: return 'mat4';
@@ -9343,6 +9522,7 @@ available waveTables:
           case gl.FLOAT_MAT4x2: return 'mat4x2';
           case gl.FLOAT_MAT4x3: return 'mat4x3';
         }
+        console.error(`parseUniformType: parse type failed... I can't parse this type, sorry.`);
         return 'null';
       }
       static parseUniformSize(gl, type){
@@ -9354,7 +9534,10 @@ available waveTables:
         }
         // 他の場合は単純に数を取る
         const numbers = type.match(/[0-9]{1}/);
-        if(numbers === null){ return null; }
+        if(numbers === null){
+          console.error(`parseUniformSize: parse size failed...`);
+          return null;
+        }
         return numbers[0];
       }
       static getUniformFunction(gl, location, size, type, isArray = false){
@@ -9425,9 +9608,467 @@ available waveTables:
             case '4x3': return (data) => { gl.uniformMatrix4x3fv(location, false, data); }
           }
         }
+        console.error(`getUniformFunction: get function failed...`);
         return () => {};
       }
     }
+
+    // shader library. snipetsで使う関数を適宜補うための関数群。ユーザーが直接指定することは無い、裏方の役割。
+    // 仕様は単純で、基本codeSnipetsと同じ単純置き換えだが、シェーダー内で一番上にあるもののみ置き換えられ、それ以降はすべて無視される。
+    // つまり同じ宣言は一番上の一つしか変換されず、それ以降の同じ宣言はすべて破棄される。
+    // さしあたり、get系のtransformを一通り。
+    const codeLibrary = {
+'libraryTest': `
+// これはcodeLibraryのテストです
+`,
+'coreScale':`
+mat4 coreScale(in vec3 s){
+  return mat4(s.x, 0.0, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, 0.0, s.z, 0.0, 0.0, 0.0, 0.0, 1.0);
+}
+`,
+'coreTranslation':`
+mat4 coreTranslation(in vec3 t){
+  return mat4(1.0, 0.0, 0.0, t.x, 0.0, 1.0, 0.0, t.y, 0.0, 0.0, 1.0, t.z, 0.0, 0.0, 0.0, 1.0);
+}
+`,
+'coreRotation':`
+mat4 coreRotation(in vec3 axis, in float t){
+  return mat4(
+    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
+    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
+    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+}
+`,
+'coreRotationQ':`
+mat4 coreRotationQ(in vec4 q){
+  return mat4(
+    2.0*q.w*q.w-1.0+2.0*q.x*q.x, 2.0*(q.x*q.y-q.z*q.w), 2.0*(q.x*q.z+q.y*q.w), 0.0,
+    2.0*(q.x*q.y+q.z*q.w), 2.0*q.w*q.w-1.0+2.0*q.y*q.y, 2.0*(q.y*q.z-q.x*q.w), 0.0,
+    2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+}
+`
+    };
+
+    // shader snipets. ユーザーが使いたい関数を指定する。基本的には関数ごと切り分けられているが、一部まとめられているのもある。
+    const codeSnipets = {
+'snipetTest':`
+// これはcodeSnipetsのテストです
+`,
+'hsv2rgb':`
+vec3 hsv2rgb(in vec3 color){
+  vec3 rgb = clamp(abs(mod(color.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+  rgb = rgb * rgb * (3.0 - 2.0 * rgb);
+  return color.z * mix(vec3(1.0), rgb, color.y);
+}
+vec3 hsv2rgb(in float r, in float g, in float b){ return hsv2rgb(vec3(r, g, b)); }
+`,
+'overlay':`
+vec3 overlay(in vec3 src, in vec3 dst){
+  vec3 result;
+    if(dst.r < 0.5){ result.r = 2.0*src.r*dst.r; }else{ result.r = 2.0*(src.r+dst.r-src.r*dst.r)-1.0; }
+    if(dst.g < 0.5){ result.g = 2.0*src.g*dst.g; }else{ result.g = 2.0*(src.g+dst.g-src.g*dst.g)-1.0; }
+    if(dst.b < 0.5){ result.b = 2.0*src.b*dst.b; }else{ result.b = 2.0*(src.b+dst.b-src.b*dst.b)-1.0; }
+  return result;
+}
+vec3 overlay(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
+  return overlay(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
+}
+`,
+'softLight':`
+vec3 softLight(in vec3 src, in vec3 dst){
+  vec3 result;
+  if(src.r < 0.5){ result.r = 2.0*src.r*dst.r + dst.r*dst.r*(1.0-2.0*src.r); }
+  else{ result.r = 2.0*dst.r*(1.0-src.r) + sqrt(dst.r)*(2.0*src.r-1.0); }
+  if(src.g < 0.5){ result.g = 2.0*src.g*dst.g + dst.g*dst.g*(1.0-2.0*src.g); }
+  else{ result.g = 2.0*dst.g*(1.0-src.g) + sqrt(dst.g)*(2.0*src.g-1.0); }
+  if(src.b < 0.5){ result.b = 2.0*src.b*dst.b + dst.b*dst.b*(1.0-2.0*src.b); }
+  else{ result.b = 2.0*dst.b*(1.0-src.b) + sqrt(dst.b)*(2.0*src.b-1.0); }
+  return result;
+}
+vec3 softLight(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
+  return softLight(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
+}
+`,
+'transform':`
+void applyTransformP(inout vec3 p, in mat4 tf){
+  p = (vec4(p, 1.0) * tf).xyz;
+}
+void applyTransform(inout vec3 p, inout vec3 n, in mat4 tf){
+  p = (vec4(p, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+`,
+'getScale':`
+#lib coreScale;
+mat4 getScale(in vec3 s){
+  return coreScale(s);
+}
+mat4 getScale(in float sx, in float sy, in float sz){
+  return coreScale(vec3(sx, sy, sz));
+}
+mat4 getScale(in float s){
+  return coreScale(vec3(s));
+}
+`,
+'localScale':`
+#lib coreScale;
+void localScale(inout mat4 m, in vec3 s){
+  m = coreScale(s) * m;
+}
+void localScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m = coreScale(vec3(sx, sy, sz)) * m;
+}
+void localScale(inout mat4 m, in float s){
+  m = coreScale(vec3(s)) * m;
+}
+`,
+'globalScale':`
+#lib coreScale;
+void globalScale(inout mat4 m, in vec3 s){
+  m *= coreScale(s);
+}
+void globalScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m *= coreScale(vec3(sx, sy, sz));
+}
+void globalScale(inout mat4 m, in float s){
+  m *= coreScale(vec3(s));
+}
+`,
+'setScale':`
+#lib coreScale;
+void setScale(inout mat4 m, in vec3 s){
+  m = coreScale(s);
+}
+void setScale(inout mat4 m, in float sx, in float sy, in float sz){
+  m = coreScale(vec3(sx, sy, sz));
+}
+void setScale(inout mat4 m, in float s){
+  m = coreScale(vec3(s));
+}
+`,
+'applyScaleP':`
+#lib coreScale;
+void applyScaleP(inout vec3 p, in vec3 s){
+  p = (vec4(p, 1.0) * coreScale(s)).xyz;
+}
+void applyScaleP(inout vec3 p, in float sx, in float sy, in float sz){
+  p = (vec4(p, 1.0) * coreScale(vec3(sx, sy, sz))).xyz;
+}
+void applyScaleP(inout vec3 p, in float s){
+  p = (vec4(p, 1.0) * coreScale(vec3(s))).xyz;
+}
+`,
+'applyScale':`
+#lib coreScale;
+void applyScale(inout vec3 p, inout vec3 n, in vec3 s){
+  mat4 tf = coreScale(s);
+  p = (vec4(p, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+void applyScale(inout vec3 p, inout vec3 n, in float sx, in float sy, in float sz){
+  mat4 tf = coreScale(vec3(sx, sy, sz));
+  p = (vec4(p, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+void applyScale(inout vec3 p, inout vec3 n, in float s){
+  mat4 tf = coreScale(vec3(s));
+  p = (vec4(p, 1.0) * tf).xyz;
+  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
+}
+`,
+'getTranslation':`
+#lib coreTranslation;
+mat4 getTranslation(in vec3 t){
+  return coreTranslation(t);
+}
+mat4 getTranslation(in float tx, in float ty, in float tz){
+  return coreTranslation(vec3(tx, ty, tz));
+}
+`,
+'localTranslation':`
+#lib coreTranslation;
+void localTranslation(inout mat4 m, in vec3 t){
+  m = coreTranslation(t) * m;
+}
+void localTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m = coreTranslation(vec3(tx, ty, tz)) * m;
+}
+`,
+'globalTranslation':`
+#lib coreTranslation;
+void globalTranslation(inout mat4 m, in vec3 t){
+  m *= coreTranslation(t);
+}
+void globalTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m *= coreTranslation(vec3(tx, ty, tz));
+}
+`,
+'setTranslation':`
+#lib coreTranslation;
+void setTranslation(inout mat4 m, in vec3 t){
+  m = coreTranslation(t);
+}
+void setTranslation(inout mat4 m, in float tx, in float ty, in float tz){
+  m = coreTranslation(vec3(tx, ty, tz));
+}
+`,
+'applyTranslationP':`
+#lib coreTranslation;
+void applyTranslationP(inout vec3 p, in vec3 t){
+  p = (vec4(p, 1.0) * coreTranslation(t)).xyz;
+}
+void applyTranslationP(inout vec3 p, in float tx, in float ty, in float tz){
+  p = (vec4(p, 1.0) * coreTranslation(vec3(tx, ty, tz))).xyz;
+}
+`,
+'applyTranslation':`
+#lib coreTranslation;
+void applyTranslation(inout vec3 p, inout vec3 n, in vec3 t){
+  mat4 tf = coreTranslation(t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nは何にもしない
+}
+void applyTranslation(inout vec3 p, inout vec3 n, in float tx, in float ty, in float tz){
+  mat4 tf = coreTranslation(vec3(tx, ty, tz));
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nは何にもしない
+}
+`,
+'getRotation':`
+#lib coreRotation;
+mat4 getRotation(in vec3 axis, in float t){
+  return coreRotation(axis, t);
+}
+mat4 getRotation(in vec4 axisAndT){
+  return coreRotation(axisAndT.xyz, axisAndT.w);
+}
+mat4 getRotation(in float rx, in float ry, in float rz, in float t){
+  return coreRotation(vec3(rx, ry, rz), t);
+}
+mat4 getRotation(in float t){
+  return coreRotation(vec3(0.0, 0.0, 1.0), t);
+}
+`,
+'localRotation':`
+#lib coreRotation;
+void localRotation(inout mat4 m, in vec3 axis, in float t){
+  m = coreRotation(axis, t) * m;
+}
+void localRotation(inout mat4 m, in vec4 axisAndT){
+  m = coreRotation(axisAndT.xyz, axisAndT.w) * m;
+}
+void localRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m = coreRotation(vec3(rx, ry, rz), t) * m;
+}
+void localRotation(inout mat4 m, in float t){
+  m = coreRotation(vec3(0.0, 0.0, 1.0), t) * m;
+}
+`,
+'globalRotation':`
+#lib coreRotation;
+void globalRotation(inout mat4 m, in vec3 axis, in float t){
+  m *= coreRotation(axis, t);
+}
+void globalRotation(inout mat4 m, in vec4 axisAndT){
+  m *= coreRotation(axisAndT.xyz, axisAndT.w);
+}
+void globalRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m *= coreRotation(vec3(rx, ry, rz), t);
+}
+void globalRotation(inout mat4 m, in float t){
+  m *= coreRotation(vec3(0.0, 0.0, 1.0), t);
+}
+`,
+'setRotation':`
+#lib coreRotation;
+void setRotation(inout mat4 m, in vec3 axis, in float t){
+  m = coreRotation(axis, t);
+}
+void setRotation(inout mat4 m, in vec4 axisAndT){
+  m = coreRotation(axisAndT.xyz, axisAndT.w);
+}
+void setRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
+  m = coreRotation(vec3(rx, ry, rz), t);
+}
+void setRotation(inout mat4 m, in float t){
+  m = coreRotation(vec3(0.0, 0.0, 1.0), t);
+}
+`,
+'applyRotationP':`
+#lib coreRotation;
+void applyRotationP(inout vec3 p, in vec3 axis, in float t){
+  p = (vec4(p, 1.0) * coreRotation(axis, t)).xyz;
+}
+void applyRotationP(inout vec3 p, in vec4 axisAndT){
+  p = (vec4(p, 1.0) * coreRotation(axisAndT.xyz, axisAndT.w)).xyz;
+}
+void applyRotationP(inout vec3 p, in float rx, in float ry, in float rz, in float t){
+  p = (vec4(p, 1.0) * coreRotation(vec3(rx, ry, rz), t)).xyz;
+}
+void applyRotationP(inout vec3 p, in float t){
+  p = (vec4(p, 1.0) * coreRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
+}
+`,
+'applyRotation':`
+#lib coreRotation;
+void applyRotation(inout vec3 p, inout vec3 n, in vec3 axis, in float t){
+  mat4 tf = coreRotation(axis, t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 p, inout vec3 n, in vec4 axisAndT){
+  mat4 tf = coreRotation(axisAndT.xyz, axisAndT.w);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 p, inout vec3 n, in float rx, in float ry, in float rz, in float t){
+  mat4 tf = coreRotation(vec3(rx, ry, rz), t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotation(inout vec3 p, inout vec3 n, in float t){
+  mat4 tf = coreRotation(vec3(0.0, 0.0, 1.0), t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+`,
+'getRotationQ':`
+#lib coreRotationQ;
+mat4 getRotationQ(in vec4 q){
+  return coreRotationQ(q);
+}
+mat4 getRotationQ(in float x, in float y, in float z, in float w){
+  return coreRotationQ(vec4(x, y, z, w));
+}
+`,
+'localRotationQ':`
+#lib coreRotationQ;
+void localRotationQ(inout mat4 m, in vec4 q){
+  m = coreRotationQ(q) * m;
+}
+void localRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m = coreRotationQ(vec4(x, y, z, w)) * m;
+}
+`,
+'globalRotationQ':`
+#lib coreRotationQ;
+void globalRotationQ(inout mat4 m, in vec4 q){
+  m *= coreRotationQ(q);
+}
+void globalRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m *= coreRotationQ(vec4(x, y, z, w));
+}
+`,
+'setRotationQ':`
+#lib coreRotationQ;
+void setRotationQ(inout mat4 m, in vec4 q){
+  m = coreRotationQ(q);
+}
+void setRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
+  m = coreRotationQ(vec4(x, y, z, w));
+}
+`,
+'applyRotationQP':`
+#lib coreRotationQ;
+void applyRotationQP(inout vec3 p, in vec4 q){
+  p = (vec4(p, 1.0) * coreRotationQ(q)).xyz;
+}
+void applyRotationQP(inout vec3 p, in float x, in float y, in float z, in float w){
+  p = (vec4(p, 1.0) * coreRotationQ(vec4(x, y, z, w))).xyz;
+}
+`,
+'applyRotationQ':`
+#lib coreRotationQ;
+void applyRotationQ(inout vec3 p, inout vec3 n, in vec4 q){
+  mat4 tf = coreRotationQ(q);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyRotationQ(inout vec3 p, inout vec3 n, in float x, in float y, in float z, in float w){
+  mat4 tf = coreRotationQ(vec4(x, y, z, w));
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+`,
+'quarternion':`
+vec4 multQ(in vec4 q1, in vec4 q2){
+  // 外でのq2, q1の順に掛け算する。そうしないと回転としての取り扱いで不整合が出るので。
+  float w = q2.w * q1.w - q2.x * q1.x - q2.y * q1.y - q2.z * q1.z;
+  float x = q2.w * q1.x + q2.x * q1.w + q2.y * q1.z - q2.z * q1.y;
+  float y = q2.w * q1.y + q2.y * q1.w + q2.z * q1.x - q2.x * q1.z;
+  float z = q2.w * q1.z + q2.z * q1.w + q2.x * q1.y - q2.y * q1.x;
+  return vec4(x, y, z, w);
+}
+vec4 conjQ(in vec4 q){
+  return vec4(-q.x, -q.y, -q.z, q.w);
+}
+vec4 getQuarternionFromAA(in vec3 axis, in float angle){
+  return vec4(sin(angle*0.5)*normalize(axis), cos(angle*0.5));
+}
+vec4 getQuarternionFromAA(in vec4 v){
+  return getQuarternionFromAA(v.xyz, v.w);
+}
+vec4 getQuarternionFromAA(in float x, in float y, in float z, in float angle){
+  return getQuarternionFromAA(vec3(x, y, z), angle);
+}
+vec4 powQ(in vec4 q, in float a, in float threshold){
+  float m = dot(q, q);
+  if(m < threshold){
+    return vec4(0.0);
+  }
+  if(q.w < 0.0){
+    q *= -1.0;
+  }
+  float n = sqrt(m);
+  float c = q.w/n;
+  float s = sqrt(m - q.w*q.w)/n;
+  float t = atan(s, c); // 0～PI/2
+  float multiplier = pow(n, a);
+  if(abs(t) < threshold){
+    q.w = (q.w/n)*multiplier;
+    q.x = (q.x/n)*multiplier;
+    q.y = (q.y/n)*multiplier;
+    q.z = (q.z/n)*multiplier;
+    return q;
+  }
+  vec3 axis = (q.xyz/n)/s;
+  float phi = a*t;
+  return multiplier * vec4(sin(phi)*axis, cos(phi));
+}
+vec3 applyV(in vec4 q, in vec3 v){
+  // そとではq*v*(conj(q))なので逆に並べればいい
+  vec4 vq = vec4(v, 0.0);
+  vec4 q0 = multQ(conjQ(q), vq);
+  vec4 q1 = multQ(q0, q);
+  return q1.xyz;
+}
+vec4 powQ(in vec4 q, in float a){
+  return powQ(q, a, 1e-10);
+}
+vec4 slerpQ(in vec4 q1, in vec4 q2, in float r, in float threshold){
+  float m = dot(q1, q1);
+  if(m < threshold){
+    return vec4(0.0);
+  }
+  // multQが逆になっているので掛ける順序を逆にする
+  vec4 q = multQ(conjQ(q1), q2) * (1.0/m);
+  return multQ(q1, powQ(q, r, threshold));
+}
+vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
+  return slerpQ(q1, q2, r, 1e-10);
+}
+`
+    };
 
     class ProgramWrapper{
       constructor(gl, params = {}){
@@ -9450,10 +10091,20 @@ available waveTables:
         this.attributes = {}; // attribute
         this.program = null;
       }
-      compile(){
+      compile(options = {}){
         const {gl, vs, fs} = this;
+        const {showVertexShader = false, showFragmentShader = false} = options;
+
+        // modify.
+        const modifiedVertexShaderSource = ProgramWrapper.modifyShaderSource(vs);
+        const modifiedFragmentShaderSource = ProgramWrapper.modifyShaderSource(fs);
+
+        // modifyしたあとで出力する
+        if(showVertexShader){ console.log(modifiedVertexShaderSource); }
+        if(showFragmentShader){ console.log(modifiedFragmentShaderSource); }
+
         const vsShader = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vsShader, vs);
+        gl.shaderSource(vsShader, modifiedVertexShaderSource);
         gl.compileShader(vsShader);
 
         if(!gl.getShaderParameter(vsShader, gl.COMPILE_STATUS)){
@@ -9466,7 +10117,7 @@ available waveTables:
         this.vsShader = vsShader;
 
         const fsShader = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fsShader, fs);
+        gl.shaderSource(fsShader, modifiedFragmentShaderSource);
         gl.compileShader(fsShader);
 
         if(!gl.getShaderParameter(fsShader, gl.COMPILE_STATUS)){
@@ -9511,12 +10162,14 @@ available waveTables:
 
         return this;
       }
-      registActiveUniforms(showInformation = false){
+      registActiveUniforms(options = {}){
         const {gl, program} = this;
+        const {showUniforms = false} = options;
+
         this.uniforms = {};
         // active uniformの個数を取得。
         const numActiveUniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
-        if(showInformation){
+        if(showUniforms){
           console.log(`active uniform count:${numActiveUniforms}`);
         }
         for(let i=0; i<numActiveUniforms; i++){
@@ -9533,16 +10186,18 @@ available waveTables:
           }else{
             this.uniforms[u.name] = uniform;
           }
-          if(showInformation){ uniform.show(); }
+          if(showUniforms){ uniform.show(); }
         }
         return this;
       }
-      registActiveAttributes(showInformation = false){
+      registActiveAttributes(options = {}){
         const {gl, program} = this;
+        const {showAttributes = false} = options;
+
         this.attributes = {};
         // active attributeの個数を取得。
         const numActiveAttributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
-        if(showInformation){
+        if(showAttributes){
           console.log(`active attribute count:${numActiveAttributes}`);
         }
         for(let i=0; i<numActiveAttributes; i++){
@@ -9551,7 +10206,7 @@ available waveTables:
           const location = gl.getAttribLocation(program, attribute.name);
           const attrType = ProgramWrapper.parseAttributeType(gl, attribute.type);
           const isInteger = ProgramWrapper.integerAttributeTypes.includes(attrType);
-          if(showInformation){
+          if(showAttributes){
             console.log(`name:${attribute.name}, location:${location}, type:${attrType}, isInteger:${isInteger}`);
           }
 
@@ -9577,14 +10232,17 @@ available waveTables:
           gl.uniformBlockBinding(this.program, ubi, index);
         }
       }
-      createProgram(params = {}){
+      createProgram(options = {}){
         // まとめてやる
-        const {showUniforms = false, showAttributes = false} = params;
-        this.compile();
+        const {
+          showVertexShader = false, showFragmentShader = false,
+          showUniforms = false, showAttributes = false
+        } = options;
+        this.compile({showVertexShader, showFragmentShader});
         this.attach();
         this.link();
-        this.registActiveUniforms(showUniforms);
-        this.registActiveAttributes(showAttributes);
+        this.registActiveUniforms({showUniforms});
+        this.registActiveAttributes({showAttributes});
         return this;
       }
       use(){
@@ -9761,6 +10419,75 @@ available waveTables:
         const outputText = lines.reduce((s, t) => s.concat('\n').concat(t), '');
         console.log(outputText, ...styles);
       }
+      static modifyShaderSource(source = ""){
+        // 他にもあるかもしれないのでその辺
+        // 「#snipet ~~~;」を探す
+        // 「~~~」をsnipetsで置き換える。おわり。
+        let src = source.replaceAll(/#snipet .+;/g, (target) => {
+      		const splitted = target.split(" "); // 「 」の後ろを取る
+      		if(splitted.length < 2){ console.error("no snipet definition."); return ""; }
+      		const name = splitted[1].replace(";", ""); // ;を切る
+      		const snipet = codeSnipets[name];
+      		if(snipet === undefined){ console.error("invalid snipet definition."); return ""; }
+      		return snipet;
+      	});
+
+        // #snipetsを全て置き換えた段階で、#libを排除する。
+        // 複数の定義がある場合、最初の定義をlib関数で置き換え、それ以降の同じlibの宣言はカットする。そういう仕様。
+        // はじめに、「/#lib +*;/」でヒットする全ての箇所を整形する。invalidな定義ならカット、ライブラリを検索できないならカット。
+        // そして半角スペースは1つにする。
+        const libraryNames = Object.keys(codeLibrary);
+        src = src.replaceAll(/#lib .+;/g, (target) => {
+          const splitted = target.split(" ").map(s=>s.trim()).filter(s=>s.length>0);
+          if(splitted.length < 2){ return ''; }
+          const name = splitted[1].replace(";", ""); // ;を切る
+          if(libraryNames.includes(name)){ return `#lib ${name};`; }
+          return '';
+        });
+        const getLibName = (s) => s.split(" ")[1].replace(';', '');
+        // いずれなくすけれど...
+        let debug = 9999;
+        while(debug-- > 0){
+          const checkLib = src.match(/#lib .+;/);
+          if(checkLib === null) break;
+          const libName = getLibName(checkLib[0]);
+          // 見つかった一番上だけ変える
+          src = src.replace(/#lib .+;/, codeLibrary[libName]);
+          // そして、それ以降の同じ宣言をすべて排除する
+          src = src.replaceAll(/#lib .+;/g, (target) => {
+            const name = getLibName(target);
+            if(name === libName) return '';
+            return target;
+          });
+        }
+        // 以上です。
+
+        // ここのタイミングでどうでもいい空行を消す
+        let blancFlag = true;
+        // linesに改名。blancsはおかしいでしょ。
+        const lines = src.split(/\r?\n/);
+        // 後ろから空行を見て行ってすべて消す
+        for(let i=lines.length-1; i>=0; i--){
+          const line = lines[i];
+          if(line.trim().length === 0){ lines.pop(); }else{ break; }
+        }
+        // ルール：1. 冒頭の空行はカット。2. 空行が2行以上続くなら1行にする。
+        // インデントは当面は考えなくていいです
+        let result = "";
+        for(let i=0; i<lines.length; i++){
+          const line = lines[i];
+          if(line.trim().length === 0){
+            if(blancFlag){ continue; }
+            result += line.trim().concat('\n');
+            blancFlag = true;
+          }else{
+            result += line.concat('\n');
+            blancFlag = false;
+          }
+        }
+        return result;
+        //return modifiedShaderSource;
+      }
     }
     ProgramWrapper.integerAttributeTypes = ['int', 'ivec2', 'ivec3', 'ivec4', 'uint', 'uvec2', 'uvec3', 'uvec4'];
 
@@ -9839,14 +10566,87 @@ available waveTables:
 
         return WBOWrapper.showBuffer(gl, buf, target, options);
       }
+      static convertToArray(data){
+        // dataが配列であることを前提とし、適切に配列化したものを返す。
+        if(!Array.isArray(data)){
+          console.error('convertToArray: data is not array.');
+          return [];
+        }
+        if(data.length === 0){ return []; }
+        const sample = data[0];
+        // 0番が数の場合が普通である。ほとんどはここで終わりだろう。そのまま返す。
+        if(typeof(sample) === 'number'){
+          if(!data.every(x => typeof(x) === 'number')){
+            console.error('convertToArray: all elements must be type number.');
+            return [];
+          }
+          // そのまま返す。
+          return data;
+        }
+        // 0番が配列の場合、全て配列とみなし、シャロー配列化を適用。
+        if(Array.isArray(sample)){
+          if(!data.every(a => Array.isArray(a))){
+            console.error('convertToArray: all elements must be array.');
+            return [];
+          }
+          return data.flat();
+        }
+        // 特殊なオブジェクトの場合
+        const result = [];
+        // Vecta. 普通にarrayをかます。
+        if(sample instanceof Vecta){
+          if(!data.every(v => v instanceof Vecta)){
+            console.error('convertToArray: all elements must be Vecta class instance.');
+            return [];
+          }
+          for(let i=0; i<data.length; i++){ result.push(...data[i].array()); }
+          return result;
+        }
+        // Quarternionの場合、GPU上ではx,y,z,wで扱うので、そこだけ注意。arrayはw,x,y,zで返すので、使わない。
+        if(sample instanceof Quarternion){
+          if(!data.every(q => q instanceof Quarternion)){
+            console.error('convertToArray: all elements must be Quarternion class instance.');
+            return [];
+          }
+          for(let i=0; i<data.length; i++){
+            result.push(data[i].x, data[i].y, data[i].z, data[i].w);
+          }
+          return result;
+        }
+        // MT3の場合。array()でOK.
+        if(sample instanceof MT3){
+          if(!data.every(v => v instanceof MT3)){
+            console.error('convertToArray: all elements must be Matrix-3 class instance.');
+            return [];
+          }
+          for(let i=0; i<data.length; i++){ result.push(...data[i].array()); }
+          return result;
+        }
+        // MT4の場合。array()でOK.
+        if(sample instanceof MT4){
+          if(!data.every(v => v instanceof MT4)){
+            console.error('convertToArray: all elements must be Matrix-4 class instance.');
+            return [];
+          }
+          for(let i=0; i<data.length; i++){ result.push(...data[i].array()); }
+          return result;
+        }
+        // なんかよくわからんの場合
+        console.error('convertToArray: something wrong.');
+        return [];
+      }
       static getProperData(data, arrayType = Float32Array){
         // arrayTypeは文字列OKにしよう
-        const properArrayType = glTypedArray(arrayType, 'Float32Array');
+        const properArrayType = glTypedArray(arrayType);
 
         // dataがDataViewもしくは型付配列の場合、arrayTypeは無視され、そのままdataが返る
         if(ArrayBuffer.isView(data)){ return data; }
         // 通常配列の場合はarrayTypeに応じた型付配列が返る
-        if(Array.isArray(data)){ return new properArrayType(data); }
+        // なお内容がベクトルや行列の場合などは然るべくコンバートされる仕組み
+        if(Array.isArray(data)){
+          const convertedData = WBOWrapper.convertToArray(data);
+          return new properArrayType(convertedData);
+        }
         // まあなんか返すか
         return new Uint8Array(1);
       }
@@ -9871,9 +10671,9 @@ available waveTables:
         const {offset = -1, size = -1, usage = gl.STATIC_DRAW, arrayType = Float32Array} = options;
 
         // usageは文字列OKにしよう
-        const properUsage = glEnum(usage, 'static_draw');
+        const properUsage = glEnum(usage);
         // arrayTypeも文字列OKにしよう
-        const properArrayType = glTypedArray(arrayType, 'Float32Array');
+        const properArrayType = glTypedArray(arrayType);
 
         gl.bindBuffer(target, buf);
 
@@ -9914,7 +10714,7 @@ available waveTables:
         const {cpu = 0, gpu = 0} = offset;
 
         // arrayTypeは文字列OKにしよう
-        const properArrayType = glTypedArray(arrayType, 'Float32Array');
+        const properArrayType = glTypedArray(arrayType);
 
         gl.bindBuffer(target, buf);
         const properData = WBOWrapper.getProperData(data, properArrayType);
@@ -9938,7 +10738,7 @@ available waveTables:
         const {cpu = 0, gpu = 0} = offset;
 
         // arrayTypeは文字列OKにしよう
-        const properArrayType = glTypedArray(arrayType, 'Float32Array');
+        const properArrayType = glTypedArray(arrayType);
 
         gl.bindBuffer(target, buf);
         const properData = WBOWrapper.getProperData(data, properArrayType);
@@ -9963,7 +10763,7 @@ available waveTables:
         gl.bindBuffer(target, buf);
 
         // arrayTypeは文字列OKにしよう
-        const properArrayType = glTypedArray(arrayType, 'Float32Array');
+        const properArrayType = glTypedArray(arrayType);
 
         const bytesPerElement = properArrayType.BYTES_PER_ELEMENT;
         const properSize = (size < 0 ? gl.getBufferParameter(target, gl.BUFFER_SIZE) / bytesPerElement : size);
@@ -10153,9 +10953,17 @@ available waveTables:
         // vaoを加える。nameはstringでなければならない。
         TypeErrorCatcher.throw(name, 'string', 'addVAO: vao name type must be string.');
 
-        // paramsがstringの場合はそれをlayoutとする。dictが邪魔な場合。
+        // paramsがstringの場合はそれをlayoutとする。
+        // さらに次の引数があるなら、dictであることを許そう。
         if(typeof(params) === 'string'){
-          this.addVAO(name, {layout:params});
+          const args = [...arguments];
+          if(args.length < 3){
+            this.addVAO(name, {layout:args[1]});
+          }else if(typeof(args[2]) === 'object'){
+            this.addVAO(name, {layout:args[1], dict:args[2]});
+          }else{
+            console.error('addVAO: if string-string, args 2 must be dict object.');
+          }
           return this;
         }
         // vaoを作る。
@@ -10222,6 +11030,8 @@ available waveTables:
         } = params;
 
         // WBOWrapperの方でusageとarrayTypeをいいように解釈するんで、ここでのパースは不要。
+        // ここの「data」ですけどVecta,Quarternionの場合に...直したい...な～とか。もしくはMT4.またはMT3.
+        // まあ実行するならここじゃないな。WBOのコア部分。
         vbo.init(data, {usage, arrayType});
 
         return this;
@@ -10266,8 +11076,22 @@ available waveTables:
       }
       setVAOLayout(params = {}, target = 'default'){
         // paramsがstringの場合にはlayoutをそれとする
+        // 次がobjectであるならdictとみなそう
         if(typeof(params) === 'string'){
-          this.setVAOLayout({layout:params}, target);
+          const args = [...arguments];
+          if(typeof(args[1]) === 'object'){
+            if(args.length < 3){
+              this.setVAOLayout({layout:args[0], dict:args[1]});
+            }else{
+              this.setVAOLayout({layout:args[0], dict:args[1]}, args[2]);
+            }
+          }else{
+            if(args.length < 2){
+              this.setVAOLayout({layout:args[0]});
+            }else{
+              this.setVAOLayout({layout:args[0]}, args[1]);
+            }
+          }
           return this;
         }
         const {layout = ``, dict = {}} = params;
@@ -10410,7 +11234,7 @@ available waveTables:
           isInteger = false
         } = params;
         // typeは文字列OKにしよう
-        const properType = glEnum(type, 'float');
+        const properType = glEnum(type);
 
         //if(modify){ this.bind(); }
         this.bind(target);
@@ -10496,7 +11320,7 @@ available waveTables:
         // sizeに頂点数などを指定します。sizeが未指定の場合、頂点数（自身のカウント）が使われます。
         // 通常、sizeがいじられることは無いので、countってどっちだ！？とかなることは無いです。
         const {count = 0, offset = 0, size = this.count} = options;
-        const drawCallEnum = glEnum(drawCall, 'triangles');
+        const drawCallEnum = glEnum(drawCall);
         if(count === 0){
           this.gl.drawArrays(drawCallEnum, offset, size);
         }else{
@@ -10507,14 +11331,14 @@ available waveTables:
       drawElements(drawCall = 'triangles', options = {}){
         // nameをなくす。currentVAO.iboで描画する。
         //if(this.ibos[name] === undefined){ console.log('ibo not found'); return this; }
-        if(this.currentVAO === null){ throw new Error('vao null'); return this; }
+        if(this.currentVAO === null){ throw new Error('drawElements: vao null'); return this; }
         //const ibo = this.ibos[name];
         const ibo = this.currentVAO.ibo;
-        if(ibo === null){ throw new Error('ibo null'); return this; }
+        if(ibo === null){ throw new Error('drawElements: ibo null'); return this; }
         const {count = 0, offset = 0, size = ibo.length, type = ibo.type} = options;
         //const properDrawCall = VAOWrapper.parseDrawCall(this.gl, drawCall);
         // glEnum使いましょう
-        const drawCallEnum = glEnum(drawCall, 'triangles');
+        const drawCallEnum = glEnum(drawCall);
         if(count === 0){
           this.gl.drawElements(drawCallEnum, size, type, offset);
         }else{
@@ -10610,7 +11434,7 @@ available waveTables:
           const offset = gl.getVertexAttribOffset(index, gl.VERTEX_ATTRIB_ARRAY_POINTER);
           // WebGL1ではisIntegerは計算できない
           const isInteger = (isWebGL1 ? null : gl.getVertexAttrib(index, gl.VERTEX_ATTRIB_ARRAY_INTEGER));
-          // WebGL1ではdivisorは拡張機能で取得する。まあどうせp5にちょっかい出す時しか使わんけどな。
+          // WebGL1ではdivisorは拡張機能で取得する。
           const divisor = (function(){
             if(isWebGL1){
               // 拡張機能で取得
@@ -10699,7 +11523,6 @@ available waveTables:
       }
       static showVAA(gl, options = {}){
         // 面倒な場合のための簡易版。showArrayBufferとshowIndexBufferのみ追加指定できる。glだけからVAAの状態をのぞき見できる。
-        // scanもだが、基本的にp5にちょっかいを出すための関数。threeはガードが固そうなので難しいかも。
         const {showArrayBuffer = false, showIndexBuffer = false} = options;
         this.scan(gl, {scanonly:true, showVAAState:true, showArrayBuffer, showIndexBuffer});
       }
@@ -10801,6 +11624,1831 @@ available waveTables:
     return utils;
   })();
 
+  // ジオメトリ関連の道具箱
+  const foxGeometryTools = (function(){
+    const geometryTools = {};
+    const {parseDesignDescription, createProcess} = foxParse;
+    const {Vecta, Quarternion, MT3, MT4} = fox3Dtools;
+    const {coulour, coulour3, coulour_255, coulour3_255} = foxColor;
+    const {VAOWrapper} = webglUtils;
+
+    const {unionFind} = foxUtils;
+    const {clamp} = foxMathTools;
+
+    // これだけ。とりあえず...
+    class Attribute{
+      constructor(type, value){
+        this.type = type;
+        this.value = null;
+        this.init();
+        if(value !== undefined){
+          this.setValue(value);
+        }
+      }
+      init(){
+        this.value = Attribute.getInitialAttributeValue(this.type);
+      }
+      setValue(value){
+        Attribute.setAttributeValue(this, value);
+      }
+      getValue(){
+        return this.value;
+      }
+      static create(){
+        return new this(...arguments);
+      }
+      static getInitialAttributeValue(type){
+        switch(type){
+          case 'number':
+            return 0;
+          case 'vector':
+            return Vecta.create();
+          case 'quarternion':
+            return Quarternion.create();
+          case 'matrix3':
+            return MT3.create();
+          case 'matrix4':
+            return MT4.create();
+          case 'array':
+          case 'color3':
+          case 'color4':
+          case 'color3_255':
+          case 'color4_255':
+            return [];
+          case 'string':
+            return '';
+          case 'variant':
+            return null;
+        }
+        console.error(`getInitialAttributeValue/${type}: invalid type.`);
+        return null;
+      }
+      static setAttributeValue(attribute, v){
+        // 横着
+        switch(attribute.type){
+          case 'number':
+            // Number化して代入
+            attribute.value = Number(v);
+            return;
+          case 'array':
+            // vは配列とする。vの長さに合わせる。
+            for(let i=0; i<v.length; i++){
+              attribute.value[i] = v[i];
+            }
+            return;
+          case 'vector':
+          case 'quarternion':
+          case 'matrix3':
+          case 'matrix4':
+            attribute.value.set(v);
+            return;
+          case 'color3':
+            attribute.value = coulour3(v);
+            return;
+          case 'color4':
+            attribute.value = coulour(v);
+            return;
+          case 'color3_255':
+            attribute.value = coulour3_255(v);
+            return;
+          case 'color4_255':
+            attribute.value = coulour_255(v);
+            return;
+          case 'string':
+            attribute.value = v.toString();
+            return;
+          case 'variant':
+            attribute.value = v;
+            return;
+        }
+        console.error(`setAttributeValue/${attribute.type}, ${v}: invalid specification.`);
+      }
+      static convertToArray(attribute){
+        const {type, value} = attribute;
+        // stringとvariantは配列にできない
+        switch(type){
+          case 'number':
+            return [value];
+          case 'vector':
+          case 'quarternion':
+          case 'matrix3':
+          case 'matrix4':
+            return value.array();
+          case 'array':
+          case 'color3':
+          case 'color4':
+          case 'color3_255':
+          case 'color4_255':
+            return value;
+          case 'string':
+          case 'variant':
+            console.error(`convertToArray/${type}: string/variant cannot use to create vao.`);
+            return null;
+        }
+        console.error(`convertToArray/${type}: invalid type.`);
+        return null;
+      }
+    }
+
+    class Vertex{
+      constructor(params = {}){
+        this.attrs = {};
+        const {index = 0, types = {}} = params;
+        this.index = index;
+        for(const [name, type] of Object.entries(types)){
+          this.addAttribute(name, type);
+        }
+      }
+      setIndex(i){
+        this.index = i;
+        return this;
+      }
+      addAttribute(name, type){
+        this.attrs[name] = Attribute.create(type);
+        return this;
+      }
+      removeAttribute(name){
+        delete this.attrs[name];
+        return this;
+      }
+      setValue(name, value){
+        if(this.attrs[name] === undefined){ console.error(`setValue: no ${name} attribute.`); return this; }
+        this.attrs[name].setValue(value);
+        return this;
+      }
+      getValue(name){
+        if(this.attrs[name] === undefined){ console.error(`getValue: no ${name} attribute.`); return; }
+        return this.attrs[name].getValue();
+      }
+      setValues(values = {}){
+        for(const [name, value] of Object.entries(values)){
+          this.attrs[name].setValue(value);
+        }
+        return this;
+      }
+      set p(value){
+        if(this.attrs.p === undefined){ console.error(`setter: attribute p not found.`); return; }
+        this.setValue('p', value);
+      }
+      set n(value){
+        if(this.attrs.n === undefined){ console.error(`setter: attribute n not found.`); return; }
+        this.setValue('n', value);
+      }
+      set uv(value){
+        if(this.attrs.uv === undefined){ console.error(`setter: attribute uv not found.`); return; }
+        this.setValue('uv', value);
+      }
+      set vc(value){
+        if(this.attrs.vc === undefined){ console.error(`setter: attribute vc not found.`); return; }
+        this.setValue('vc', value);
+      }
+      get p(){
+        if(this.attrs.p === undefined){ console.error(`getter: attribute p not found.`); return; }
+        return this.getValue('p');
+      }
+      get n(){
+        if(this.attrs.n === undefined){ console.error(`getter: attribute n not found.`); return; }
+        return this.getValue('n');
+      }
+      get uv(){
+        if(this.attrs.uv === undefined){ console.error(`getter: attribute uv not found.`); return; }
+        return this.getValue('uv');
+      }
+      get vc(){
+        if(this.attrs.vc === undefined){ console.error(`getter: attribute vc not found.`); return; }
+        return this.getValue('vc');
+      }
+      set a(values){
+        // 汎用設定関数。使う機会はあんまないかもだけどね。
+        for(const [name, attribute] of Object.entries(values)){
+          this.setValue(name, attribute);
+        }
+      }
+      get a(){
+        // まあ一応用意するか。内容的にはsetの逆に当たる。だいたいで。
+        const attributes = {};
+        for(const name of Object.keys(this.attrs)){ attributes[name] = this.getValue(name); }
+        return attributes;
+      }
+      static create(params = {}){
+        return new this(params);
+      }
+    }
+
+    class Geometry{
+      constructor(params = {}){
+        const {count = 0, types = {}} = params;
+        this.count = count;
+        this.vertices = [];
+        for(let i=0; i<count; i++){
+          this.vertices.push(Vertex.create({index:i, types:types}));
+        }
+        this.ibos = {};
+        // typesを保持させる。addやremoveの際に増減させる。単なる文字列のリスト。
+        this.types = {};
+        for(const [name, type] of Object.entries(types)){
+          this.types[name] = type;
+        }
+        // vao生成デスクリプタの履歴機能は廃止
+      }
+      init(){
+        // verticesはすっからかんになるがtypesは残る
+        // iboは全て空っぽになるが名前は残る
+        this.count = 0;
+        this.vertices.length = 0;
+        for(const ibo of Object.values(this.ibos)){
+          ibo.length = 0;
+        }
+        // 以下、3D.
+      }
+      copy(){
+        // ああなるほど。
+        // だからGeometry -> new Geometry, Geometry3D -> new Geometry3D, GeometryBuilder -> new GeometryBuilder
+        // そういうことですね。
+        const g = new this.constructor({count:this.count, types:this.types});
+        // this.typesでアトリビュートの名前を取ろう
+        const attributeNames = Object.keys(this.types);
+
+        // modifyでいいじゃん
+        g.modify((v) => {
+          for(const name of attributeNames){
+            v.setValue(name, this.vertices[v.index].getValue(name));
+          }
+        });
+        // はいおわり
+
+        for(const [iboName, ibo] of Object.entries(this.ibos)){
+          g.ibos[iboName] = [];
+          for(let k=0; k<ibo.length; k++){
+            const fragment = [];
+            for(let i=0; i<ibo[k].length; i++){
+              fragment.push(ibo[k][i]);
+            }
+            g.ibos[iboName].push(fragment);
+          }
+        }
+
+        return g;
+      }
+      addAttribute(name, type){
+        for(const v of this.vertices){ v.addAttribute(name, type); }
+        // typeのリストに加える
+        this.types[name] = type;
+        return this;
+      }
+      removeAttribute(name){
+        if(arguments.length > 1){
+          const args = [...arguments];
+          for(const eachName of args){ this.removeAttribute(eachName); }
+          return this;
+        }
+        for(const v of this.vertices){ v.removeAttribute(name); }
+        // typeのリストから排除する
+        delete this.types[name];
+        return this;
+      }
+      setValue(index, name, value){
+        if(!Object.keys(this.types).includes(name)){
+          console.error(`setValue: no ${name} attribute.`);
+        }
+        // おそらくほぼ使われないかな...modifyが有能すぎて。
+        this.vertices[index].setValue(name, value);
+        return this;
+      }
+      setUniformValue(name, value){
+        // すべての頂点に同じ値を設定する。要するに頂点グループのようなものか。
+        // 法線マージの際のグルーピングが主な用途だが、色んな事に使えるだろう。
+        if(!Object.keys(this.types).includes(name)){
+          console.error(`setUniformValue: no ${name} attribute.`);
+        }
+        for(const v of this.vertices){
+          v.setValue(name, value);
+        }
+        return this;
+      }
+      setValues(index, values = {}){
+        this.vertices[index].setValues(values);
+        return this;
+      }
+      modify(modifyFunction = (v) => {}){
+        // まとめて
+        for(const v of this.vertices){
+          modifyFunction(v);
+        }
+        return this;
+      }
+      modifyIndexed(index, modifyFunction = (v) => {}){
+        // 個別
+        modifyFunction(this.vertices[index]);
+        return this;
+      }
+      addIBO(name, ibo = []){
+        // iboはダイレクトアタッチでいいと思う。配列をはめる。
+        // もしかしたらフォーマットとしてすべての成分は同じ長さの配列、というのがあるので、それをチェックするかもしれない。
+        // もっというと2と3以外ありえないので、2か3でなければエラーを出すかも。
+        // 例外的に名前だけ指定して空配列を作る使い方もありとする。だから「add」IBOである。
+        this.ibos[name] = ibo;
+        return this;
+      }
+      removeIBO(name){
+        if(arguments.length > 1){
+          const args = [...arguments];
+          for(const eachName of args){ this.removeIBO(eachName); }
+          return this;
+        }
+        // IBOを無くす処理。compositeで使いそう。
+        delete this.ibos[name];
+        return this;
+      }
+      renameIBO(oldName, newName){
+        // IBOの改名処理。何に使うかは知らない。
+        if(oldName === newName){ return this; }
+        if(this.ibos[oldName] === undefined){ console.error('renameIBO: ibo not found.'); return this; }
+        const ibo = this.ibos[oldName];
+        const newIBO = [];
+        for(let i=0; i<ibo.length; i++){
+          newIBO.push(ibo[i].slice());
+        }
+        this.addIBO(newName, newIBO);
+        this.removeIBO(oldName);
+        return this;
+      }
+      set f(data = []){
+        // fとl限定でセッターを用意する
+        // 3区切りで放り込む形
+        this.ibos.f = [];
+        for(let i=0; i<data.length/3; i++){
+          this.ibos.f.push([data[3*i], data[3*i+1], data[3*i+2]]);
+        }
+      }
+      set l(data = []){
+        // fとl限定でセッターを用意する
+        // 2区切りで放り込む形
+        this.ibos.l = [];
+        for(let i=0; i<data.length/2; i++){
+          this.ibos.l.push([data[2*i], data[2*i+1]]);
+        }
+      }
+      get f(){
+        // fとl限定でゲッターを用意する
+        return this.ibos.f;
+      }
+      get l(){
+        // fとl限定でゲッターを用意する
+        return this.ibos.l;
+      }
+      resetIndices(){
+        // indexをリセットする。verticesの並びをsortしてindexMapを作りIBOに設定する。
+        // 手順としてはthis.verticesをindex順にsortして通し番号でindexMapを作ってIBOに適用して終わり。
+        // 具体的には頂点を排除して欠番が出た場合に生じるIBOの不整合を是正するのに使う。
+        const indexMap = Array(this.count).fill(0);
+        this.vertices.sort((v0,v1) => v0.index - v1.index);
+        for(let i=0; i<this.vertices.length; i++){ indexMap[this.vertices[i].index] = i; }
+        // index修正
+        for(let i=0; i<this.vertices.length; i++){ this.vertices[i].index = i; }
+        // ibo修正
+        for(const ibo of Object.values(this.ibos)){
+          for(const fragment of ibo){
+            for(let k=0; k<fragment.length; k++){
+              fragment[k] = indexMap[fragment[k]];
+            }
+          }
+        }
+        // count修正
+        this.count = this.vertices.length;
+        return this;
+      }
+      convertAttributesToArray(name, size){
+        // 3Dでない場合は普通に配列化して並べるだけ。3Dの方はちょっと変える。
+        // なお現行の仕様では2Dでジオメトリを扱う場合でも3Dとみなして扱う必要があるんですが、
+        // transformに2Dも3Dもないし、描画に使うのであればどっちでもいいでしょ。
+        // 現行の仕様なら出力時にvec2もvec3も自由に選べるので全く問題ない。
+        const data = [];
+        for(let i=0; i<this.vertices.length; i++){
+          const attr = this.vertices[i].attrs[name];
+          const array = Attribute.convertToArray(attr);
+          for(let k=0; k<size; k++){
+            data.push(array[k]);
+          }
+        }
+        return data;
+      }
+      createVAO(gl, buffer = ``, layout = ``){
+        // @bufferは省略可能にする。
+        const properBufferDescription = (buffer.match(/@buffer/) === null ? `@buffer\n`.concat(buffer) : buffer);
+
+        const result = parseDesignDescription(properBufferDescription, Geometry.GEOMETRY_BUFFER_DESIGN);
+        const {vbo = null, ibo = null} = result.buffer;
+        const vbos = {};
+        const ibos = {};
+        if(vbo !== null){
+          for(const data of vbo.content){
+            const {name, size, type, usage} = data;
+            // 通常と3Dで分岐処理
+            const geometryData = this.convertAttributesToArray(name, size);
+            const arrayType = VAOWrapper.getAttributeArrayType(type);
+            vbos[name] = {data:geometryData, usage, arrayType};
+          }
+        }
+        if(ibo !== null){
+          for(const data of ibo.content){
+            // flatして一本にする
+            ibos[data.name] = {data:this.ibos[data.name].flat()};
+          }
+        }
+        // これでそろったので...
+        const vao = VAOWrapper.create(gl, {count:this.count, vbo:vbos, ibo:ibos});
+        // 判定にはlayoutDescription（加工前）を使う。
+        if(layout.length > 0){
+          // @layoutは省略可能にする
+          const properLayoutDescription = (layout.match(/@layout/) === null ? `@layout\n`.concat(layout) : layout);
+          vao.setVAOLayout(properLayoutDescription);
+        }
+        // 終わったらしいです。運用テストしよう。
+        return vao;
+      }
+      composite(geom){
+        if(arguments.length > 1){
+          const args = [...arguments];
+          for(let i=0; i<args.length; i++){
+            this.composite(args[i]);
+          }
+          return this;
+        }
+        // まず、geom.countが0の場合はいきなり終了する。
+        if(geom.count === 0){
+          return this;
+        }
+        // 始めよう。
+        // Geometryサイドではくっつけるところまでやる。3Dの方でgeomのtransformMatrixを付け加えられた頂点と法線に適用する。
+        // 先に不要な頂点とiboをカットする
+        // uvとかあっても使わなければ蓄積していくだけですね。要らないならユーザーサイドで自由に消せるので問題ない。自由、自由、自由。
+        // iboの比較処理は0番が取得できない場合はOKとする。長さ0の場合という意味。
+        const removeAttributes = [];
+        const removeIBOs = [];
+        const {types, ibos} = geom;
+        for(const [name, type] of Object.entries(this.types)){
+          if(!Object.keys(types).includes(name)){ removeAttributes.push(name); continue; }
+          // この時点でgeomに同じ名前のアトリビュートがあることが保証される。
+          // typeが違う場合、compositeできないので破棄する。
+          if(type !== types[name]){ removeAttributes.push(name); continue; }
+        }
+        this.removeAttribute(...removeAttributes);
+        for(const [name, ibo] of Object.entries(this.ibos)){
+          if(!Object.keys(ibos).includes(name)){ removeIBOs.push(name); continue; }
+          // この時点でgeomに同じ名前のiboがあることが保証されている。
+          // 基本的には0番を見て比較するが、両者のうち少なくとも一方が長さ0の場合に限り、おとがめなしとする。
+          if(ibo.length === 0 || ibos[name].length === 0){ continue; }
+          // いずれも0番が取得できるのであれば、その長さが違う場合は、削除対象とする。
+          if(ibo[0].length !== ibos[name][0].length){ removeIBOs.push(name); continue; }
+        }
+        this.removeIBO(...removeIBOs);
+        // カットが終わったらくっつけていく。なお対象のgeomはびくともしないので問題ない。
+        // 出現するアトリビュートも既にあるものしかないんで、単純にこっちのtypesで初期化して、setして、おわり。
+        // 最後にindexいじって終了。
+        // iboもくっつけてthis.countを足すだけ。
+        // 仕上げでthis.countにgeom.countを足す。
+
+        // 頂点の増設。typesは修正済み。
+        for(let i=0; i<geom.count; i++){
+          const v = geom.vertices[i];
+          const newVertex = new Vertex({index:i+this.count, types:this.types});
+          for(const name of Object.keys(this.types)){
+            newVertex.setValue(name, v.getValue(name));
+          }
+          this.vertices.push(newVertex);
+        }
+        // iboの増設。同じものしか出てこないように修正済み。向こうしか持ってないものは無視される。こっちしか持ってないものも然り。
+        // 例外的に、いずれかが長さ0の場合は許容される。
+        // たとえば？
+        // あらかじめ名前を変えておいて、ibo違いであっちが描画されたりこっちが描画されたりするようにする...くらいしか思いつかんな。
+        // つまりgeomにf1とかいうiboがあったとして、直前にaddIBO('f1')しておくと、geomのiboがそのままセパレートでくっつくわけ。
+        // こっちはfで引き続き持っておくと、fを使った場合こっちだけ描画され、f1を使った場合geomだけ描画される。何に使うかは知らない。
+        // もちろんユーザーが何もしなければf1は付与されず、何も起きない。それはユーザーに委ねるべきだろう。
+        for(const [name, ibo] of Object.entries(this.ibos)){
+          const otherIBO = geom.ibos[name];
+          for(let k=0; k<otherIBO.length; k++){
+            ibo.push(otherIBO[k].map((i) => i+this.count));
+          }
+        }
+
+        // countの更新
+        this.count += geom.count;
+        // ここまで。ここから先は3Dの追加処理。
+        return this;
+      }
+      static create(params = {}){
+        // 数を入れると数をcountとするプレーンなジオメトリが生成される
+        // 3Dなら3Dが生成される
+        if(typeof(params) === 'number'){
+          return new this({count:params});
+        }
+        return new this(params);
+      }
+      static build(layout = ``, dict = {}){
+        // 簡易生成。3Dの場合、pとnはベクトルで用意される。
+        // @build <attribute> <ibo> という形で指定する
+        // attribute: name, data, size, type
+        // ibo: name, data, size
+        // @buildは省略可能にしよう。
+        const properLayout = (layout.match(/@build/) === null ? `@build\n`.concat(layout) : layout);
+        const result = parseDesignDescription(properLayout, Geometry.GEOMETRY_BUILD_DESIGN, {dict});
+        const {attribute = null, ibo = null} = result.build;
+        const counts = {};
+        const types = {};
+        const sources = {};
+        const sizes = {};
+        // atttibuteがnullの場合、countすら作れないので、nullを返す。
+        if(attribute === null){ console.error('build: no attribute.'); return null; }
+        for(const attr of attribute.content){
+          const {name, data, size, type} = attr;
+          // number,string,variantでもエラーを出さないこととするが、0番だけ使う。
+          counts[name] = Math.ceil(data.length/size);
+          sources[name] = data;
+          sizes[name] = size;
+          types[name] = type;
+          if(this.is3D){
+            // is3Dでp,nの場合はvectorがdefaultになる。
+            if(name === 'p' || name === 'n'){ types[name] = 'vector'; }
+          }
+        }
+        const attributeNames = Object.keys(counts);
+        const count = Math.max(...Object.values(counts));
+        const geom = new this({count, types});
+        // データをはめていく。
+        for(let i=0; i<count; i++){
+          for(const name of attributeNames){
+            const value = sources[name].slice(i*sizes[name], (i+1)*sizes[name]);
+            // 足りない部分は0埋め。
+            if(value.length < sizes[name]){
+              for(let k=0; k<sizes[name]-value.length; k++){ value.push(0); }
+            }
+            const type = types[name];
+            // number,string,variantはsizeによらず0番のみ使用
+            if(type === 'number' || type === 'string' || type === 'variant'){
+              geom.setValue(i, name, value[0]);
+            }else{
+              geom.setValue(i, name, value);
+            }
+          }
+        }
+        // あとはiboか。
+        if(ibo !== null){
+          for(const iboData of ibo.content){
+            const {name, data, size} = iboData;
+            // dataをsize個ずつ取って配列にする
+            const source = [];
+            const dataCount = Math.ceil(data.length/size);
+            for(let i=0; i<dataCount; i++){
+              const fragment = data.slice(i*size, (i+1)*size);
+              if(fragment.length < size){
+                for(let k=0; k<size-fragment.length; k++){ fragment.push(0); }
+              }
+              source.push(fragment);
+            }
+            geom.addIBO(name, source);
+          }
+        }
+        // 一応できました
+        return geom;
+      }
+    }
+    Geometry.is3D = false;
+
+    // 法線は用意はするが、もちろん使わないこともできる。
+    // だってcreateVAOで指定しなきゃいいだけだからね。
+    // pとnが前提のいくつかのメソッドを追加していく形になると思います。
+    // modelはscale,rotation,translationでローカル限定で、いじっていく形で、applyTransformでinitしつつpとnをいじる形でいいです。
+    // 生成するための座標軸が動いていくイメージ。
+    // fも固定で追加しておく。普通に上書きしてOK. もうiboは配列上書きで。それしかできんし。
+    class Geometry3D extends Geometry{
+      constructor(params = {}){
+        super(params);
+        this.addAttribute('p', 'vector');
+        this.addAttribute('n', 'vector');
+        this.ibos.f = [];
+        this.transformMatrix = MT4.create();
+        this.transformHistory = [];
+      }
+      init(){
+        // 上記の処理に加え、transformもリセットし、historyもクリアする。
+        super.init();
+        this.initTransform();
+        this.transformHistory.length = 0;
+      }
+      initTransform(){
+        this.transformMatrix.init();
+        return this;
+      }
+      getTransform(){
+        return this.transformMatrix;
+      }
+      applyTransform(){
+        // initFlagは今のところ必要性を感じないので見送り。
+        // 法線行列をmodify内部で作ると負荷が凄いので、外で作ります。当然。
+        const normalMatrix = MT3.create(this.transformMatrix.getInverseTranspose3x3());
+        this.modify((v) => {
+          // vのp,nはゲッターで取れるのでこれでいいはず
+          this.transformMatrix.applyP(v.p);
+          normalMatrix.applyP(v.n);
+        });
+        // applyが終わったらきちんとinitします。
+        this.initTransform();
+        return this;
+      }
+      pushTransform(){
+        // いわゆるpush.
+        this.transformHistory.push(this.transformMatrix.copy());
+        return this;
+      }
+      popTransform(){
+        // いわゆるpop.
+        if(this.transformHistory.length === 0){ return this; }
+        const latestTransform = this.transformHistory.pop();
+        this.transformMatrix.set(latestTransform);
+        return this;
+      }
+      transform(process = ``, dict = {}){
+        // transformでまとめて実行できるようにしよう。なおapplyは実行しない。transformMatrixをいじるだけ。
+        createProcess(process, {dict:dict, executor:this})();
+        return this;
+      }
+      copy(options = {}){
+        // 3Dの場合は普通にコピーしたうえで、transformMatrixをコピーする。
+        // apply:trueの場合はできたあとでtransformをapplyする。そのままvao出力したりcompositeで材料に使うことを想定。
+        // デフォルトはfalseです。まあfalseで運用することが多いでしょう。作る->composite/vao出力の間にワンクッションするかしないかの違い。
+        // ワンクッションがデフォルトというわけ。ダイレクトに作っちゃう方がパターンとしては少ないだろうという。
+
+        const {apply = false} = options;
+        const copyGeometry = super.copy();
+        copyGeometry.transformMatrix.set(this.transformMatrix);
+        // 冷静に考えたらhistoryをコピーするのはおかしいだろう。なのでhistoryはコピーしないものとする。
+
+        if(apply){ copyGeometry.applyTransform(); }
+        return copyGeometry;
+      }
+      convertAttributesToArray(name, size){
+        // 3Dの場合は事前にnormalMatrixを作っておき、もしnameが'p'/'n'であるなら、
+        // pとnの場合に然るべくtransformを実行する。
+        // 何故丸ごと書き換えるかというと結局normalMatrixをいちいち用意するのが手間だから
+        // 頂点の個数分、同じ行列を計算するのはありえないだろう。
+        const normalMatrix = MT3.create(this.transformMatrix.getInverseTranspose3x3());
+        const data = [];
+        const tmpVector = Vecta.create();
+        for(let i=0; i<this.vertices.length; i++){
+          const attr = this.vertices[i].attrs[name];
+          // 避難させる
+          if(name === 'p' || name === 'n'){ tmpVector.set(attr.value); }
+          // transformを適用する
+          if(name === 'p'){ this.transformMatrix.applyP(attr.value); }
+          else if(name === 'n'){ normalMatrix.applyP(attr.value); }
+          const array = Attribute.convertToArray(attr);
+          for(let k=0; k<size; k++){
+            data.push(array[k]);
+          }
+          // 戻す
+          if(name === 'p' || name === 'n'){ attr.value.set(tmpVector); }
+        }
+        return data;
+      }
+      merge(options = {}){
+        const {threshold = 1e-6, compare = null} = options;
+        // unionFindで頂点をまとめる。マージはまずthresholdの...マンハッタンで調べた方が負荷が低い。
+        // マンハッタンで調べてアウトなら無視、ヒットした場合のみユークリッドで調べてペアになったら放り込む。
+        const pairs = [];
+        for(let i=0; i<this.vertices.length; i++){
+          const v0 = this.vertices[i];
+          const p0 = v0.getValue('p');
+          for(let k=i+1; k<this.vertices.length; k++){
+            const v1 = this.vertices[k];
+            const p1 = v1.getValue('p');
+            // compareに文字列が設定されている場合、まずそのアトリビュートを比較し、一致しなければまとめない。
+            if(compare !== null){ if(v0.getValue(compare) !== v1.getValue(compare)){ continue; } }
+            // compareが同じか、もしくは未設定の場合に、位置で比較する。
+            if(Math.abs(p0.x-p1.x) + Math.abs(p0.y-p1.y) + Math.abs(p0.z-p1.z) > threshold){ continue; }
+            if(p0.dist(p1) < threshold){ pairs.push([i,k]); }
+          }
+        }
+        const uf = unionFind(this.count, pairs);
+
+        // pとn（未定義）だけのGeometry3Dを生成する。なおibosは後で作る。
+        // (Geometry3Dの継承ができたので、コンストラクタで書き換え)
+        const g = this.constructor.create(uf.count);
+        // uf.ufは長さthis.countの配列でlvがそのままindexMapになっている。そのまま作ればいい。
+        // indexMapでthis.ibosをそのまま翻訳してgのibosを作ることができる。
+        // repを使えば簡単に元のpのデータをコピーできる。
+        const indexMap = Array(this.count);
+        for(let i=0; i<this.count; i++){
+          indexMap[i] = uf.uf[i].lv;
+        }
+        for(const [iboName, ibo] of Object.entries(this.ibos)){
+          const copyIBO = [];
+          for(let k=0; k<ibo.length; k++){
+            copyIBO.push(ibo[k].map(index => indexMap[index]));
+          }
+          g.addIBO(iboName, copyIBO);
+        }
+        g.modify((v) => { v.p = this.vertices[uf.rep[v.index]].p; });
+
+        // mergeの際に重複辺ができてしまうのを回避するコードも検討したが、保留とする。
+        // なおmergeはまっさらなものができる。何が言いたいかというとtransformは無視される。
+        // これfaceNormalsと絡めると混乱する人がいると思うので説明するね。
+        // まず基本的にfaceNormalsをmerge:trueで実行する場合、mergedGeometryはtransform未適用のGeometryをmergeしたものとなる。
+        // そしてそこから法線を抽出するため、法線は適用前のものに設定される。そしてそのあとでtransformにより法線計算が為される。
+        // しかし先にapplyTransformで法線をいじってからmergeする場合もあるだろう。法線は再計算される。結果が異なることはあるか？
+        // おそらく無い。
+        // おそらく無いが、無難なのはapplyTransformしてからmergeする場合だろうと思う。おそらく後で変換するより正確な結果が期待できる。
+
+        // geomとindexMapを返すね
+        return {geom:g, indexMap};
+      }
+      flatten(options = {}){
+        // fが存在しない場合、計算のしようがないので、自分自身を返す。
+        if(this.ibos.f === undefined){
+          // mapでiのみを使う場合であっても、0など何らかの値で初期化しないとエラーを食らうので注意。
+          const trivialIndexMap = Array(this.count).fill(0).map((e,i,a) => i);
+          return {geom:this.copy(), indexMap:trivialIndexMap};
+        }
+
+        // flatNormals:trueの場合、faceNormalsが実行される。使ってください...これデフォルトでもいいか？
+        // use caseとしてどうもflatNormalsであることを要求することが多いっぽいんで、trueデフォルトにしようか。
+        const {flatNormals = true} = options;
+
+        // this.ibos.fの情報に基づきすべての三角形をバラバラにする処理。
+        // アトリビュートはすべてderiveされる。indexMapも然るべく通し番号で作られる。mergeに比べるとかなり楽ちん。
+        const vertexCount = this.ibos.f.length*3;
+        // ああここcountのみだとまずいですね。
+        const g = this.constructor.create({count:vertexCount, types:this.types});
+        // fをflatしたものがそのままindexMapになる
+        const indexMap = this.ibos.f.flat();
+        // それに基づいてすべてのアトリビュートがderiveされる。頂点も法線もすべて。
+        const attributeNames = Object.keys(this.types);
+        g.modify((v) => {
+          const targetVertex = this.vertices[indexMap[v.index]];
+          // こう書くと一瞬やで！
+          v.a = targetVertex.a;
+        });
+        // g自身のibosはfのみ作られ、普通に0,1,2,...するだけ。他のiboがあっても無視される。まあせいぜいlしかないが。
+        // なぜかといえばfに基づいて頂点を分裂させるため、他のIBOとのシナジーが無い。
+        // たとえば線にしても、両端が分裂した場合、どういう組み合わせで線を引いたらいいのかわかんないだろう。なので破棄するしかない。
+        // 説明不足でした。ごめんね。
+        for(let i=0; i<this.ibos.f.length; i++){
+          g.ibos.f.push([3*i, 3*i+1, 3*i+2]);
+        }
+
+        // flatNormalsの場合、flatなnormalたちが生成される。
+        if(flatNormals){ g.faceNormals(); }
+        return {geom:g, indexMap};
+      }
+      faceNormals(options = {}){
+        // face情報からnormalベクトルを生成するのでfaceNormalsという名前になりました。
+        // 手順
+        // この処理で角度を算出するのになぜangleBetweenを使わないかというと外と中で計算が重複するから。
+        // mergeにcompareが追加されたので、ここにも追加します。mergeしないなら不要なoption.
+        const {
+          areaThreshold = 1e-6, normalizeThreshold = 1e-6,
+          merge = false, mergeThreshold = 1e-6, compare = null
+        } = options;
+
+        if(merge){
+          // mergeの場合、まずこれのマージを作り、merge:falseでfaceNormalsを実行する。
+          // おわったらindexMapを元にnormal情報を引き戻す。おわり。
+          const {geom, indexMap} = this.merge({threshold:mergeThreshold, compare});
+          geom.faceNormals({areaThreshold, normalizeThreshold, merge:false});
+          this.modify((v) => v.n = geom.vertices[indexMap[v.index]].n);
+          return this;
+        }
+
+        // step1: normals.
+        const normals = Array(this.count);
+        for(let i=0; i<this.count; i++){ normals[i] = Vecta.create(); }
+        // step2: vectors.
+        const v0 = Vecta.create();
+        const v1 = Vecta.create();
+        const v2 = Vecta.create();
+        const v01 = Vecta.create();
+        const v02 = Vecta.create();
+        const v12 = Vecta.create();
+        const v012 = Vecta.create();
+        // step3: scan faces（あっちと違って面ごとに分かれてるので楽ちんです）
+        if(this.ibos.f.length === 0){ console.error('faceNormals: no faces.'); return this; }
+        for(const f of this.ibos.f){
+          v0.set(this.vertices[f[0]].p);
+          v1.set(this.vertices[f[1]].p);
+          v2.set(this.vertices[f[2]].p);
+          v01.set(v1).sub(v0);
+          v02.set(v2).sub(v0);
+          v12.set(v2).sub(v1);
+          v012.set(v01).cross(v02); // crossがnon-immutableで機能する珍しい例。まあここで変化しなかったら困るわ。
+          const area = v012.mag();
+          if (area < areaThreshold) {
+            continue; // 0割回避
+          }
+          const angle0 = Math.atan2(area, v01.dot(v02));   // 0におけるなす角
+          const angle1 = Math.atan2(area, -v01.dot(v12));  // 1におけるなす角
+          const angle2 = Math.atan2(area, v02.dot(v12));   // 2におけるなす角
+          v012.normalize();
+          // addScalarは当時からあった。
+          normals[f[0]].addScalar(v012, angle0);
+          normals[f[1]].addScalar(v012, angle1);
+          normals[f[2]].addScalar(v012, angle2);
+        }
+        // step4: normalize.
+        this.modify((v) => {
+          const n = normals[v.index];
+          // 段階に分けるのはnormalizeを使ってしまうと二度手間になるため
+          const magnitude = n.mag();
+          if(magnitude > normalizeThreshold){
+            n.div(magnitude);
+            v.n = n;
+          }
+        });
+        // faceNormalsはnormalを上書きするだけの処理なので、ここで終わりです。
+        return this;
+      }
+      composite(geom){
+        if(arguments.length > 1){
+          const args = [...arguments];
+          for(let i=0; i<args.length; i++){
+            this.composite(args[i]);
+          }
+          return this;
+        }
+        const count = this.count;
+        // この過程でcountが更新される。
+        super.composite(geom);
+        // geomのtransformMatrixをapplyする。ただし追加頂点に対してのみ、である。
+        // そしてこっちのtransformがあっても無視。つまりcompositeをtransform込みで実行したうえで、
+        // 最終的にはこっちのtransformが全体にかかる形となる。
+        const transformMatrix = geom.getTransform();
+        // ああここgeomですね
+        const normalMatrix = MT3.create(geom.transformMatrix.getInverseTranspose3x3());
+        this.modify((v) => {
+          if(v.index >= count){
+            transformMatrix.applyP(v.p);
+            normalMatrix.applyP(v.n);
+          }
+        });
+        // 当然だが、他のあれこれが影響することはないので、これで処理は終わり。
+        return this;
+      }
+      static quad(params = {}){
+        const quad = createQuad(this, params);
+        // なぜquadのみここにfaceNormalsがあるかというと、quadが根っこで、そのうえにplane,halfPlane,各種meshがあるためです。
+        // それゆえ内部でやってしまうとどうしたって二度手間になる。だから「quadとして表現する」という明確な意思がある場合だけ、
+        // ここで法線計算して提供しようってわけです。なおその場合transform計算におけるnormal計算は無視されます。まあ非線形だしな。
+        // 結局あの時点でnは0,0,1でしかないため、どうしたって正確な値にはなりません。
+        // これ以降いくつかメッシュが出てきますが、hemiSphereやconeなどの一部のメッシュはfaceNormalsせず、然るべき正確な値を設定しています。
+        quad.faceNormals();
+        return quad;
+      }
+      static plane(params = {}){
+        const plane = createPlane(this, params);
+        return plane;
+      }
+      static halfPlane(params = {}){
+        const halfPlane = createHalfPlane(this, params);
+        return halfPlane;
+      }
+      static torus(params = {}){
+        const torus = createTorus(this, params);
+        return torus;
+      }
+      static sphere(params = {}){
+        const sphere = createSphere(this, params);
+        return sphere;
+      }
+      static cube(params = {}){
+        const cube = createCube(this, params);
+        return cube;
+      }
+      static circle(params = {}){
+        const circle = createCircle(this, params);
+        return circle;
+      }
+      static cone(params = {}){
+        const cone = createCone(this, params);
+        return cone;
+      }
+      static hemiSphere(params = {}){
+        const hemiSphere = createHemiSphere(this, params);
+        return hemiSphere;
+      }
+      static cylinder(params = {}){
+        const cylinder = createCylinder(this, params);
+        return cylinder;
+      }
+      static quadStrip(params = {}){
+        const quadStrip = createQuadStrip(this, params);
+        return quadStrip;
+      }
+      static rotoid(params = {}){
+        const rotoid = createRotoid(this, params);
+        return rotoid;
+      }
+      static transformSurface(params = {}){
+        const transformSurface = createTransformSurface(this, params);
+        return transformSurface;
+      }
+      static roundCuboid(params = {}){
+        const roundCuboid = createRoundCuboid(this, params);
+        return roundCuboid;
+      }
+      static triangleFan(params = {}){
+        const triangleFan = createTriangleFan(this, params);
+        return triangleFan;
+      }
+    }
+    Geometry3D.is3D = true;
+
+    // builder. save,load,add,buildを加えただけ。
+    // 名称はGeometryBuilderでいいっすね。3D要らないか。
+    class GeometryBuilder extends Geometry3D{
+      constructor(params = {}){
+        super(params);
+        this.slot = Array(4);
+      }
+      set save(geom){ this.slot[0] = geom.copy(); }
+      set save0(geom){ this.slot[0] = geom.copy(); }
+      set save1(geom){ this.slot[1] = geom.copy(); }
+      set save2(geom){ this.slot[2] = geom.copy(); }
+      set save3(geom){ this.slot[3] = geom.copy(); }
+      get load(){ return this.slot[0].copy(); }
+      get load0(){ return this.slot[0].copy(); }
+      get load1(){ return this.slot[1].copy(); }
+      get load2(){ return this.slot[2].copy(); }
+      get load3(){ return this.slot[3].copy(); }
+      add(geom){
+        // geomをcompositeするが、自身のtransformMatrixをgeomのtransformMatrixに左から掛けてからやる。
+        // なのでpushしたあとgetして左から掛けて(inverseMultM)あとでpopすることで影響が出ないようにする
+        // 行列を掛けたタイミングでcompositeでつなげる
+        geom.pushTransform();
+        const tf = geom.getTransform();
+        tf.inverseMultM(this.transformMatrix);
+        this.composite(geom);
+        geom.popTransform();
+        return this;
+      }
+      build(buildFunction = () => {}){
+        // ここで自分自身を好きにいじる。内容的にはaddが基本だがinit/save/loadも使うしtransformも頻繁に使うんだろう
+        buildFunction(this);
+        // builderのtransformは自身に掛けられるものではないので、
+        // 最後に切ってしまおう。
+        this.initTransform();
+      }
+    }
+    // これでGeometryBuilderもbuildを使えるはず...
+    GeometryBuilder.is3D = true;
+
+    // transformMatrixに適用する。すべてchainable.
+    const derivedMethodsFromMT4 = [
+      'setTranslation', 'setRotation', 'setRotationQ', 'setScale',
+      'localTranslation', 'localRotation', 'localRotationQ', 'localScale',
+      'globalTranslation', 'globalRotation', 'globalRotationQ', 'globalScale',
+      'translation', 'rotation', 'rotationQ', 'scale'
+    ];
+    for(const method of derivedMethodsFromMT4){
+      Geometry3D.prototype[method] = (function(){
+        this.transformMatrix[method](...arguments);
+        return this;
+      });
+    }
+
+    // こんなもんでいいです
+    Geometry.GEOMETRY_BUFFER_DESIGN = {
+      layout:{
+        buffer:{
+          vbo:{
+            type:'enum',
+            keys:['name', 'size', 'type', 'usage'],
+            values:['p', 3, 'float', 'static_draw']
+          },
+          ibo:{
+            type:'enum',
+            keys:['name'],
+            values:['']
+          }
+        }
+      }
+    }
+
+    // 即席でGeometryが欲しい場合用
+    // typeで許されるのはstring,variant以外のすべて。dataはlengthで長さを取得できる配列なら何でも可とする。
+    // つまり配列または数で初期化できるものに限る。なお'number'の場合サイズは自動的に1にされる。
+    // またクラスがis3Dの場合、p,nに関しては自動的にvectorとなる。3のところは2が可能である。
+    Geometry.GEOMETRY_BUILD_DESIGN = {
+      layout:{
+        build:{
+          attribute:{
+            type:'enum',
+            keys:['name', 'data', 'size', 'type'],
+            values:['p', [], 3, 'array']
+          },
+          ibo:{
+            type:'enum',
+            keys:['name', 'data', 'size'],
+            values:['f', [], 3]
+          }
+        }
+      }
+    }
+
+    // meshのための汎用関数
+
+    // 範囲に基づいてdetail指定を解釈する。オブジェクト指定は廃止。すべて同じ場合に数で指定するのみとする。
+    // 指定のない範囲は0が然るべくclampされて埋まる。
+    function createDetails(data, ranges = [[1,Infinity]]){
+      const detailCount = ranges.length;
+      const properData = Array(detailCount);
+      if(typeof(data) === 'number'){
+        properData.fill(data);
+      }else if(Array.isArray(data)){
+        for(let i=0; i<detailCount; i++){
+          if(i < data.length){ properData[i] = data[i] }else{ properData[i] = 0; }
+        }
+      }
+      const result = Array(detailCount).fill(0);
+      for(let i=0; i<detailCount; i++){
+        result[i] = clamp(ranges[i][0], properData[i], ranges[i][1]);
+      }
+      return result;
+    }
+
+    // 数の並びやベクトルの並びをベクトルの並びに解釈する。
+    function createVectors(data, size=1){
+      const result = Array(size);
+      // 初期化
+      for(let i=0; i<size; i++){ result[i] = Vecta.create(); }
+      if(!Array.isArray(data)){
+        // 配列でないなら無視
+        return result;
+      }
+      if(data.every((d) => typeof(d) === 'number')){
+        // size*2以下の場合は2次元解釈
+        // size*3以下の場合は3次元解釈
+        // 余計な数値は無視
+        if(data.length <= size*2){
+          for(let i=0; i<size; i++){
+            const x = (2*i < data.length ? data[2*i] : 0);
+            const y = (2*i+1 < data.length ? data[2*i+1] : 0);
+            result[i].set(x, y);
+          }
+        }else{
+          for(let i=0; i<size; i++){
+            const x = (3*i < data.length ? data[3*i] : 0);
+            const y = (3*i+1 < data.length ? data[3*i+1] : 0);
+            const z = (3*i+2 < data.length ? data[3*i+2] : 0);
+            result[i].set(x, y, z);
+          }
+        }
+      }else if(data.every((d) => Array.isArray(d)) || data.every((d) => d instanceof Vecta)){
+        // 配列またはVectaの場合
+        for(let i=0; i<Math.min(size,data.length); i++){
+          result[i].set(data[i]);
+        }
+      }
+      // 数でもベクトルでもないなら無視
+      return result;
+    }
+
+    // meshes. いろいろ。
+
+    // quad. とりあえずこっちか。quadからplaneを定義すればいいと思う。
+    // lineはnone:なし,lattice:正方形並び、lurd: 左上から右下、ruld:右上から左下、cross:両方。
+    function createQuad(geometry3DClass, params = {}){
+      const {positions = [-1,-1,1,-1,-1,1,1,1], details = [1,1], line = 'none', transform = ``, dict = {}} = params;
+      // positionに使えるのは数、ベクトル、配列、なんでもあり。
+      // cornerの指定は左下、右下、左上、右上の順のイメージで指定する。
+      const corners = createVectors(positions, 4);
+      // detailは数の並び、もしくは一括で数。
+      const [dx, dy] = createDetails(details, [[1, 4096], [1, 4096]]);
+
+      const geom = geometry3DClass.create({count:(dx+1)*(dy+1), types:{grid:'array', uv:'array'}});
+      geom.modify((v) => {v.setValue('grid', [v.index % (dx+1), Math.floor(v.index / (dx+1))])});
+
+      const [vLD, vRD, vLU, vRU] = corners;
+
+      geom.modify((v) => {
+        const [x, y] = v.getValue('grid');
+        const rx = x/dx;
+        const ry = y/dy;
+        v.uv = [rx, 1-ry, 0];
+        const pd = vLD.lerp(vRD, rx, true);
+        const pu = vLU.lerp(vRU, rx, true);
+        v.p = pd.lerp(pu, ry);
+        // 一応デフォルトで0,0,1を付与しておく
+        v.n = [0,0,1];
+      });
+
+      // あとは全部一緒。
+      const faces = [];
+      const lines = [];
+      // vが右上隅でない限り全ての場合に対して処理する
+      // gridアトリビュート便利っすね
+      for(const v of geom.vertices){
+        const [x, y] = v.getValue('grid');
+        if(x<dx && y<dy){
+          const ld = v.index;
+          const rd = v.index+1;
+          const lu = v.index+dx+1;
+          const ru = v.index+dx+2;
+          faces.push(ld, rd, lu, lu, rd, ru);
+          if(line === 'lattice' || line === 'lurd' || line === 'ruld' || line === 'cross'){
+            lines.push(ld, rd, ld, lu);
+          }
+          if(line === 'lurd'){ lines.push(lu, rd); }
+          if(line === 'ruld'){ lines.push(ru, ld); }
+          if(line === 'cross'){ lines.push(lu, rd, ld, ru); }
+        }
+        if(x===dx && y<dy){
+          if(line === 'lattice' || line === 'lurd' || line === 'ruld' || line === 'cross'){
+            lines.push(v.index, v.index+dx+1);
+          }
+        }
+        if(y===dy && x<dx){
+          if(line === 'lattice' || line === 'lurd' || line === 'ruld' || line === 'cross'){
+            lines.push(v.index, v.index+1);
+          }
+        }
+      }
+      geom.f = faces;
+      // 法線は後で計算する。なぜなら再利用して別のメッシュを作る場合に不便だから。
+      // planeで切る場合はmethod内で事後的に計算する。
+
+      if(line !== 'none'){ geom.l = lines; }
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      return geom;
+    }
+
+    // 無修正の場合p,n,uv,fのディテール1,1の±1が生成される。zUpでx,yが±1である。
+    function createPlane(geometry3DClass, params = {}){
+      // シャローコピーを取る
+      const paramsCopy = {};
+      for(const key of Object.keys(params)){
+        paramsCopy[key] = params[key];
+      }
+      // positionsを追加
+      paramsCopy.positions = [-1,-1,0, 1,-1,0, -1,1,0, 1,1,0];
+      return createQuad(geometry3DClass, paramsCopy);
+    }
+
+    // ハーフプレーンという概念。線は半分、面は三角形。upper,lower,bothの3種類。このベースクラスはおそらく使われない。
+    // detailは横は1minで縦はupper,lowerは1minでbothは2min. transformやdictはでてこない。素材なので。
+    // 最後のfaceNormalsもしない。基本このままでは使わない。法線はデフォルトで0,0,1が入ってる。
+    // 好きにいじれるよう、リストには入れておく。後はお好きなように。
+    // upperHalf:trueまたはlowerHalf:trueのときの一番右の三角形の右側は、xSideHalf:falseであればカットしない方がいいと思う。
+    // 細かいんだけどね。ワイヤーフレーム表現を使っていきたいならこういう重箱の隅は突いた方がいい。
+    function createHalfPlane(geometry3DClass, params = {}){
+      const {upperHalf = true, lowerHalf = true, xSideHalf = true, ySideHalf = true, details = [3,3], line = 'none'} = params;
+      // detailを横で1,縦で1または2に制限
+      const limit = (upperHalf && lowerHalf ? 2 : 1);
+      const properDetails = createDetails(details, [[1, 4096], [limit, 4096]]);
+      // このdetailsとlineで...
+      const geom = createPlane(geometry3DClass, {details:properDetails, line});
+      const [dx, dy] = properDetails;
+      // upperHalf:
+      // fとlからindexが(dx+1)*dy以上のものを含むやつをカット。
+      // grid[1]がdyの点を走査。pとuvを右にずらす。ついでにfとlになんか追加する。頂点1つにつき1個ずつ。
+      // lowerHalf:
+      // fとlからindexがdx以下の物を含むやつをカット
+      // grid[1]が0の点を走査。pとuvを右にずらす。fとlになんか追加。
+      // 最後に然るべく頂点を最大で2個へらす
+      // resetIndices()でおわり。
+      // f,lはgetterがあるんで...ibosは不要です。なんならユーザーも自由にget/setできますよ。
+      let iboF = geom.f;
+      let iboL = (geom.l !== undefined ? geom.l : null);
+      const useLine = (iboL !== null);
+
+      if(upperHalf){
+        iboF = iboF.filter((fragment) => fragment.every(i => i < (dx+1)*dy));
+        if(useLine){ iboL = iboL.filter((fragment) => fragment.every(i => i < (dx+1)*dy)); }
+      }
+      if(lowerHalf){
+        iboF = iboF.filter((fragment) => fragment.every(i => i > dx));
+        if(useLine){ iboL = iboL.filter((fragment) => fragment.every(i => i > dx)); }
+      }
+      // 右端もカットするか。xSideHalfというオプションで、カットするかどうか決められる。
+      if(useLine && xSideHalf){ iboL = iboL.filter((fragment) => fragment.some(i => (i % (dx+1) !== dx))); }
+      // 上端も。この辺は線を描画しないなら関係ない話なので、あんま使う機会はないと思う。
+      // someでfilteringすると上端の辺だけ消える。everyでfilteringすると上端を含む辺がすべて消える。つまりupperHalfの場合は無駄な処理。
+      // また、下側を外すメリットは存在しない。これを使うのは基本的に上下で丸める場合なので、片方をはじくだけで足りる。
+      if(useLine && ySideHalf){ iboL = iboL.filter((fragment) => fragment.some(i => (i < (dx+1)*dy))); }
+      geom.addIBO('f', iboF);
+      if(useLine){ geom.addIBO('l', iboL); }
+      geom.modify((v) => {
+        const grid = v.getValue('grid');
+        // 隅っこは無視
+        if(upperHalf && grid[1] === dy && grid[0] < dx){
+          v.p.add(1/dx, 0, 0);
+          v.uv[0] += 0.5/dx;
+          if(useLine){
+            iboL.push([v.index, v.index-dx-1]);
+            // もしxSideHalf:falseならば、一番右の三角形は両側必要だろう。
+            if(!xSideHalf && grid[0]===dx-1){
+              iboL.push([v.index, v.index-dx]);
+            }
+          }
+          iboF.push([v.index, v.index-dx-1, v.index-dx]);
+        }
+        // 隅っこは無視
+        if(lowerHalf && grid[1] === 0 && grid[0] < dx){
+          v.p.add(1/dx, 0, 0);
+          v.uv[0] += 0.5/dx;
+          if(useLine){
+            iboL.push([v.index, v.index+dx+1]);
+            // もしxSideHalf:falseならば、一番右の三角形は両側必要だろう。
+            if(!xSideHalf && grid[0]===dx-1){
+              iboL.push([v.index, v.index+dx+2]);
+            }
+          }
+          iboF.push([v.index, v.index+dx+2, v.index+dx+1]);
+        }
+      });
+      // 隅っこの頂点をカット
+      if(upperHalf){ geom.vertices.splice(dx + (dx+1)*dy, 1); }
+      if(lowerHalf){ geom.vertices.splice(dx, 1); }
+      // 頂点カットしたら忘れずにresetIndices
+      geom.resetIndices();
+
+      return geom;
+    }
+
+    // torus.
+    // yUpのトーラスを作る。yUpの方がすっきりするので。detailのデフォルトは24,16にしましょう。
+    // radiusは軸半径を1とした場合のtubeの半径。1の場合、くっつくみたいになる。通常は0.4くらいを指定する。
+    function createTorus(geometry3DClass, params = {}){
+      const {radius = 0.4, details = [24,16], line = 'none', transform = ``, dict = {}} = params;
+      // detailは共に3以上とする。
+      const properDetails = createDetails(details, [[3, 4096], [3, 4096]]);
+      // まずplaneを作ろう。transformは無視。ここで使うものではない。lineは無視しないけど。HalfPlaneで作ろう。
+      const geom = createHalfPlane(geometry3DClass, {
+        details:properDetails, upperHalf:false, lowerHalf:false, line
+      });
+      // 軸指定のベクトルと、帯の上の位置を決めるベクトル。
+      const axisX = Vecta.create(0,0,1);
+      const axisY = Vecta.create(1,0,0);
+      const surfaceX = Vecta.create();
+      const surfaceY = Vecta.create(0,1,0);
+      // modifyさんよろしく
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        const theta = x * Math.PI;
+        v.p.set(axisX).mult(Math.cos(theta)).addScalar(axisY, Math.sin(theta));
+        surfaceX.set(0,0,1).rotate(0,1,0,theta);
+        const phi = y * Math.PI;
+        v.p.addScalar(surfaceX, radius*Math.cos(phi)).addScalar(surfaceY, radius*Math.sin(phi));
+      });
+
+      // transformは法線計算の前に実行する
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+
+      // 法線計算する。メッシュが途切れているのでmergeが必須です。
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+
+    // sphere. 球です。detail制限は共に3でいいっすね。
+    function createSphere(geometry3DClass, params = {}){
+      const {details = [24,24], line = 'none', transform = ``, dict = {}} = params;
+      const properDetails = createDetails(details, [[3, 4096], [3, 4096]]);
+      const geom = createHalfPlane(geometry3DClass, {
+        details:properDetails, line,
+        upperHalf:true, lowerHalf:true, xSideHalf:true, ySideHalf:true
+      });
+      // modifyの仕方...yUpだとして0,0,1と1,0,0で、原点をyでずらす。
+      const axisX = Vecta.create(0,0,1);
+      const axisY = Vecta.create(1,0,0);
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        const theta = y*Math.PI*0.5;
+        const phi = x*Math.PI;
+        v.p.set(0, Math.sin(theta), 0).addScalar(axisX, Math.cos(theta)*Math.cos(phi)).addScalar(axisY, Math.cos(theta)*Math.sin(phi));
+      });
+
+      // transformは法線計算の前に実行する
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+
+      // 法線計算する。メッシュが途切れているのでmergeが必須です。
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+
+    // 立方体だけ作る。一般のboxはtransformで簡単に作れるので不要。
+    // 法線mergeはoptionとし、基本的にはflat24で作る。uvは一応0,1,2,3,4,5で作る。
+    // detailはx,y,zの3つで、たとえばxDetailに関してy,zの面が影響受けるみたいな。min1max4096でいいっすね。
+    function createCube(geometry3DClass, params = {}){
+      // cubeはcubemap彩色の都合上、autoNormalとし、デフォルトtrueで、mergeしない計算でやる。
+      // cubemapしたい場合はautoNormal:falseにしてあとでmergeで法線計算する...しかし事前計算したところで結果は同じ。
+      // autoNormalのデフォルトをtrueにすれば、ユーザーがこれを明示的にfalseにすることで、法線の計算し忘れを回避しやすくなる。
+      const {details = [1,1,1], line = 'none', transform = ``, dict = {}, autoNormal = true} = params;
+
+      // 図を描いてもいいが...ベクトルでやってみようか？一応書いておく。いつもの。
+      //       +Y
+      // -Z -X +Z +X
+      //       -Y
+      // まず面のベクトルそれぞれについて「上」はどっちだ？y以外はすべて「+Y」だ。そして+Yは-Zであり、-Yは+Zだ。意外と単純。
+      // これらを「Y」とし、また面の垂直は「Z」とするなら、残りの1つは「YcrossZ」で出るだろう。
+      // これを「X」とすれば、あとはZにX,Yの(-1,-1),(1,-1),(-1,1),(1,1)をそれぞれ加えて4点を出して、quadでいけるってわけさ。
+      const axisDict = {'+X':Vecta.create(1,0,0), '+Y':Vecta.create(0,1,0), '+Z':Vecta.create(0,0,1)};
+      for(const [key, value] of Object.entries(axisDict)){ axisDict[key.replace('+','-')] = value.mult(-1, true); }
+      const fronts = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'].map((name) => axisDict[name]);
+      const ups = ['+Y', '+Y', '-Z', '+Z', '+Y', '+Y'].map((name) => axisDict[name]);
+      const sides = ups.map((v, index) => v.cross(fronts[index], true));
+      // 次にxのdetailはy,zに影響し、すべて「x」のdetail扱い。
+      // yのdetailはz,xに影響し、すべて「y」のdetail扱い。
+      // zのdetailは特殊で、x,yに影響するが、xの場合はx扱い、yの場合はy扱いである。
+
+      const [dx, dy, dz] = createDetails(details, [[1,4096],[1,4096],[1,4096]]);
+      const recipes = [];
+      const getCorner = (i, a, b) => fronts[i].copy().addScalar(sides[i], a).addScalar(ups[i], b);
+      for(let i=0; i<6; i++){
+        const recipe = {};
+        recipe.positions = [getCorner(i,-1,-1), getCorner(i,1,-1), getCorner(i,-1,1), getCorner(i,1,1)];
+        if(i===0||i===1){ recipe.details = [dz, dy]; }
+        if(i===2||i===3){ recipe.details = [dx, dz]; }
+        if(i===4||i===5){ recipe.details = [dx, dy]; }
+        recipe.line = line;
+        recipes.push(recipe);
+      }
+      // quadを作る。
+      const quads = recipes.map((recipe) => createQuad(geometry3DClass, recipe));
+      // uvの第3成分に0～5を振る。2DArray彩色などで使える。それにはuvをsize:3で登録する。
+      for(let i=0; i<6; i++){
+        quads[i].modify((v) => { v.uv[2] = i; });
+      }
+      // あとはcompositeする。
+      const geom = quads.reduce((g0, g1) => g0.composite(g1));
+
+      // transformは法線計算の前に実行する
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+
+      // 法線計算する。autoNormalの場合にmerge無しで計算する。
+      if(autoNormal){
+        geom.faceNormals();
+      }
+
+      return geom;
+    }
+
+    // 仕様上はyUpでzxの円。後ろから前。半径1でuvは正方形で覆う。detailは横が最低3で縦が最低1ですね。
+    // invertをtrueにすると、切り込みが下に来る。これはlowerHalfのHalfPlaneを使えば簡単に作れる。
+    function createCircle(geometry3DClass, params = {}){
+      const {details = [24,8], line = 'none', transform = ``, dict = {}, invert = false} = params;
+      const [dx, dy] = createDetails(details, [[3, 4096], [1, 4096]]);
+      // 頭が混乱しそうだが、invertでもupperHalfを使うんです。
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[dx,dy], line,
+        upperHalf:true, lowerHalf:false, xSideHalf:true, ySideHalf:false
+      });
+      // もともとのuvも利用価値があるので残しておこう
+      geom.addAttribute('defaultUV', 'array');
+      const vx = Vecta.create(0,0,1);
+      const vy = Vecta.create(1,0,0);
+      // invertの場合、軸ベクトルを真反対にする。他は一緒。
+      if(invert){
+        vx.mult(-1);
+        vy.mult(-1);
+      }
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        const radius = (1-y)/2;
+        const theta = Math.PI*x;
+        v.p = vx.mult(Math.cos(theta), true).addScalar(vy, Math.sin(theta)).mult(radius);
+        v.setValue('defaultUV', v.uv); // 記録しておく
+        v.uv = [(1+v.p.x)/2, (1+v.p.z)/2, 0];
+        v.n = [0,1,0];
+      });
+
+      // transformがあれば適用する。法線にも適用される。circleはここまででいいと思う。
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      // なので、staticのcircleでも法線計算はしない。これはhemiSphereも同じで。接合する際は、やるけど。
+      return geom;
+    }
+
+    // 円錐
+    // halfPlaneのupperHalfでyUpで原点中心で作る。底面の半径を1で固定し、heightで高さ指定。たとえば1:2ならheight=2. あとはtransform次第。
+    // 切れ込みは後ろ。後ろでないと駄目だろ。
+    // 底面もオプションで作る。切れ目の線は後ろにあるので、invertのcircleを使えば一瞬。
+    // detailは最大3つ指定する。1つ目が横で、これはcircleのxと共用。2つ目が縦方向、3つ目はcircleの縦で、circleが無いなら使われない。
+    // circleの有無はcap:true/falseで指定する。cylinderの場合のupperCap,lowerCapからcapだけ取った形。
+    // 法線は...見た目的には、「側面を用意する」->「一旦計算」->「円を付ける（正確なフラット法線）」->必要ならtransform
+    // でいいと思います。やっぱ全部マージだとあんま綺麗じゃないんですよ。これで行こう。
+    function createCone(geometry3DClass, params = {}){
+      const {height = 1, details = [24,1,1], line = 'none', transform = ``, dict = {}, cap = false} = params;
+      const [dx, dy0, dy1] = createDetails(details, [[3,4096], [1,4096], [1,4096]]);
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[dx, dy0], line,
+        upperHalf:true, lowerHalf:false, xSideHalf:true, ySideHalf:false
+      });
+      // 法線はまともにやると死ぬのでmergeでサクッと。だからここでは用意しない。
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        // v.yは-1～1を0～heightにmapping. 残りは半径と角度から適当に。
+        v.p.y = height * (1+y)/2;
+        const radius = (1-y)/2;
+        const theta = Math.PI*x;
+        v.p.z = radius * Math.cos(theta);
+        v.p.x = radius * Math.sin(theta);
+        // uvはそのままでOKです
+      });
+
+      // 法線に関しては側面をマージ取得したのち底面はフラット、それでデフォルトとしましょう。見栄え重視。
+      geom.faceNormals({merge:true});
+
+      if(cap){
+        // これはinvertで下に切れ込みがある。これをx軸でPI回転してハメる。
+        const circle = createCircle(geometry3DClass, {details:[dx, dy1], line, invert:true, transform:`rotation 1 0 0 ${Math.PI}`});
+        // uvの三つ目を1にしておこう。つまり0や1で切り替えてテクスチャをハメられる。
+        circle.modify((v) => { v.uv[2] = 1; });
+        geom.composite(circle);
+      }
+
+      // transform.
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+
+      return geom;
+    }
+
+    // 半球
+    // 敢えて底面をふさぐオプションは設けない。円でふさぎたかったら好きに。circleはあるのだし。
+    // あくまでキャップ用とします。法線計算は無し。球と違って開いてるため、正確な値にならない（縁で曲がってしまう）
+    function createHemiSphere(geometry3DClass, params = {}){
+      const {details = [24,8], line = 'none', transform = ``, dict = {}, invert = false} = params;
+      const [dx, dy] = createDetails(details, [[3, 4096], [1, 4096]]);
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[dx, dy], line,
+        upperHalf:true, lowerHalf:false, xSideHalf:true, ySideHalf:false
+      });
+      geom.addAttribute('defaultUV', 'array');
+      const axisX = Vecta.create(0,0,1);
+      const axisY = Vecta.create(1,0,0);
+      // invertの場合、軸ベクトルを真反対にする。他は一緒。
+      if(invert){
+        axisX.mult(-1);
+        axisY.mult(-1);
+      }
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        const theta = ((1+y)/2)*Math.PI*0.5;
+        const phi = x*Math.PI;
+        v.p.set(0, Math.sin(theta), 0).addScalar(axisX, Math.cos(theta)*Math.cos(phi)).addScalar(axisY, Math.cos(theta)*Math.sin(phi));
+        v.setValue('defaultUV', v.uv);
+        v.uv = [(1+v.p.x)/2, (1+v.p.z)/2, 0];
+        // nはまあpと一緒なのでそういうふうにしとくか
+        v.n = v.p;
+      });
+      // transformがあれば適用する。法線も線形変換が適用される。
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      // まあ法線計算は...球と違うからな。やめた方がいいだろうな。
+      return geom;
+    }
+
+    // 円柱
+    // 半径1固定で、yUpで、原点から上に伸びる。heightで高さ。あとはtransformで好き勝手。
+    // halfPlaneのxSideHalfOnlyで作る。これも切れ目は後ろに取る。2枚の円もそうする。compositeでサクッと。
+    // 上面の円はそのまま。下面の円は下切込みで反転。円錐と一緒ですね。
+    // uv[2]だが、片方の場合は1, 両方の場合は上から順に1,2. まあそこだけですね。難しいのは。
+    // こっちも底面は別計算にするか。
+    // detailですが、全部で最大で4つですね。横方向、縦方向、そして追加分。追加分はdy1については上面のみと下面のみの場合で
+    // 役割が変わるので注意です。ある方のdetailになります。uvの0,1,2も然るべく...然るべく...
+
+    // modifiableTubeは使わないことにして、代わりにこっちに「offset」を追加する。内容的には下から上に0～1.
+    // ただしcap部分は0と1でuniformとする。これは内容的にはいわゆるIBMに当たる。
+    // upperCap,lowerCap = 'none'/'butt'/'round'(mdnがbutt,roundでやってたので)...デフォルトはnoneとする。
+    // buttの場合にcircleで埋めて、roundの場合に球で埋める形。なおoffsetは下側0,上側1.
+    function createCylinder(geometry3DClass, params = {}){
+      const {height = 1, details = [24,1,16,16], line = 'none', transform = ``, dict = {}, upperCap = 'none', lowerCap = 'none'} = params;
+      const [dx, dy0, dy1, dy2] = createDetails(details, [[3,4096],[1,4096],[1,4096],[1,4096]]);
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[dx, dy0], line,
+        upperHalf:false, lowerHalf:false, xSideHalf:true, ySideHalf:false
+      });
+      // offset追加しよう
+      geom.addAttribute('offset', 'number');
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        v.p.y = height * (1+y)/2;
+        const theta = Math.PI*x;
+        v.p.z = Math.cos(theta);
+        v.p.x = Math.sin(theta);
+        // uvはそのままでOKです
+        // 1-uv[1]の形でoffsetを付与する。これはmodifyに使う。
+        v.setValue('offset', 1-v.uv[1]);
+        v.n = [v.p.x, 0, v.p.z];
+      });
+      // まあ法線はダイレクトでいいか。位置情報からyを切るだけ。
+
+      // 以下はupperCapまたはlowerCapが'none'でない場合
+      if(upperCap !== 'none' || lowerCap !== 'none'){
+        const upperDetail = dy1; // upperが無いなら無意味。あるならdy1.
+        const lowerDetail = (upperCap !== 'none' ? dy2 : dy1); // upperが無いなら必然的にlowerがdy1となるな。あるならdy2.その場合lowerが無いなら無意味。
+        const upperUVlayer = 1;
+        const lowerUVlayer = (upperCap !== 'none' ? 2 : 1); // upperが無いなら1. あるなら2.
+        const upperOffset = 1; // offsetは一律1
+        const lowerOffset = 0; // offsetは一律0
+
+        const upperGeom = (function(){
+          if(upperCap === 'butt'){
+            return createCircle(geometry3DClass, {details:[dx, upperDetail], line, transform:`translation 0 ${height} 0;`});
+          }
+          if(upperCap === 'round'){
+            return createHemiSphere(geometry3DClass, {details:[dx, upperDetail], line, transform:`translation 0 ${height} 0;`});
+          }
+          return null;
+        })();
+
+        if(upperGeom !== null){
+          upperGeom.addAttribute('offset', 'number');
+          upperGeom.modify((v) => { v.uv[2] = upperUVlayer; });
+          upperGeom.setUniformValue('offset', upperOffset);
+          geom.composite(upperGeom);
+        }
+
+        const lowerGeom = (function(){
+          if(lowerCap === 'butt'){
+            return createCircle(geometry3DClass, {details:[dx, lowerDetail], line, transform:`rotation 1 0 0 ${Math.PI}`, invert:true});
+          }
+          if(lowerCap === 'round'){
+            return createHemiSphere(geometry3DClass, {details:[dx, lowerDetail], line, transform:`rotation 1 0 0 ${Math.PI}`, invert:true});
+          }
+          return null;
+        })();
+
+        if(lowerGeom !== null){
+          lowerGeom.addAttribute('offset', 'number');
+          lowerGeom.modify((v) => { v.uv[2] = lowerUVlayer; });
+          lowerGeom.setUniformValue('offset', lowerOffset);
+          geom.composite(lowerGeom);
+        }
+        // おつかれさま。
+      }
+
+      // transform.
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      // マージ法線計算とかそういうことはしない。
+
+      return geom;
+    }
+
+    // quadStrip.
+    // 2dか3dかが重要になるのはdataがすべて数の場合である。その場合に2ないしは3で割ってそれを割り出す形。
+    // merge法線でいいですかね。flat欲しい場合はあとで...適用して...
+    // detailはやや特殊で、最初の0番がずっと横方向(x)で、それ以降は縦のdetailを延々と指定していく。
+    // uv忘れてた。まあ通し番号かな。螺旋とかだったらおそらく使わないか？まあいいか。工夫次第だろう。
+    function createQuadStrip(geometry3DClass, params = {}){
+      const {positions = [-1,-1,1,-1,-1,1,1,1], dimension = 2, details = [1,1], line = 'none', transform = ``, dict = {}} = params;
+      // sizeの計算はdata[0]から雑に。数の並びの場合のみ、dimensionが考慮される。
+      // つまりVecta配列やarray配列の場合はそのままdata.lengthを元に計算される。
+      const size = (function(){
+        if(typeof(positions[0]) === 'number'){
+          const properDimension = Math.round(clamp(2, dimension, 3));
+          const s0 = 2*Math.floor((positions.length/properDimension)/2);
+          return Math.max(s0, 4);
+        }
+        const s1 = 2*Math.floor(positions.length/2);
+        return Math.max(s1, 4);
+      })();
+      const vectors = createVectors(positions, size);
+      const detailArray = [];
+      for(let i=0; i<size/2; i++){ detailArray.push([1, 4096]); }
+      const properDetails = createDetails(details, detailArray);
+      // この時点で偶数個ですから、2つずつ取っていって、quadを作っていきます。
+      const quads = [];
+      for(let i=0; i<properDetails.length-1; i++){
+        const quad = createQuad(geometry3DClass, {
+          positions:[vectors[2*i], vectors[2*i+1], vectors[2*i+2], vectors[2*i+3]],
+          details:[properDetails[0], properDetails[i+1]], line
+        });
+        // とりあえず0,1,2...入れといて。
+        quad.modify((v) => { v.uv[2] = i; })
+        quads.push(quad);
+      }
+      const geom = quads.reduce((g0, g1) => g0.composite(g1));
+
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+    // uvもいい加減テストしないとなぁ
+
+    // rotoid. xy平面内の点列を引数とする。なおx正の範囲にあることを想定している。x<0に侵入する場合の挙動は保証しない。
+    // 点列の進行方向を下から上にすると綺麗に法線が付く
+    // upperHalf: 終点が固定の場合にこれをtrueにする。
+    // lowerHalf: 始点が固定の場合にこれをtrueにする。
+    // xSideHalf: 線の話。初めと終わりで同じ点列の場合はtrueにするとちょっとエコだけど別に不要っすよ
+    // ySideHalf: 線の話。閉曲線かつノンノンハーフの場合はtrueにするとちょっとエコだけど別に不要っすよ
+    // detailは単独にするか。半径方向だけにしよう。
+    // あ～pointsはVecta配列です。特にテストはしません。
+    function createRotoid(geometry3DClass, params = {}){
+      const {
+        points = [],
+        upperHalf = false, lowerHalf = false, xSideHalf = true, ySideHalf = false, range = Math.PI*2,
+        details = [4], line = 'none', transform = ``, dict = {}} = params;
+      const [dx] = createDetails(details, [[3, 4096]]);
+      // pointsは2次元Vecta配列で第3成分は考慮されず、かつx>=0であることを想定している。
+      // そうでない場合の挙動は考慮しない。
+      // pointsも長さ1以下の場合の挙動は考えないとする。
+      if(points.length < 2){ return null; }
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[dx, points.length-1], line,
+        upperHalf, lowerHalf, xSideHalf, ySideHalf
+      });
+      // gridが確か0～detailYまで用意されてるんで、それを使って点列から位置を計算する。
+      geom.modify((v) => {
+        const [gx, gy] = v.getValue('grid');
+        const {x, y} = v.p;
+        const q = points[gy];
+        const theta = x*range*0.5;
+        v.p = [q.x*Math.sin(theta), q.y, q.x*Math.cos(theta)];
+      });
+
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+
+    // Rotoidの一般化: transformSurface.
+    // 実験的機能なので過信はできないけど、自由度はかなり高いです。
+    // pointsはVecta列です。transformsはMT4列です。それ以外は不可です。
+
+    // upperHalf: 終点がtransformで動かない場合にこれをtrueにする。
+    // lowerHalf: 始点がtransformで動かない場合にこれをtrueにする。
+    // xSideHalf: 線の話。初めと終わりで同じ点列の場合はtrueにするとちょっとエコだけど別に不要っすよ
+    // ySideHalf: 線の話。閉曲線かつノンノンハーフの場合はtrueにするとちょっとエコだけど別に不要っすよ
+    // 例: トーラスはノンノンハーフっすよ
+    // イメージ：pointsはxを前から見てz->y, transformはyを上から見てz->xの向きです。それでうまくいきます。
+    // ハーフパラメータは手動にしました
+    // ...
+    // 協議の結果「autoNormal:true/false」で。つまり法線計算しない場合にautoNormal:falseとするわけ。
+    // autoNormalのデフォルトをtrueにすれば、ユーザーがこれを明示的にfalseにすることで、法線の計算し忘れを回避しやすくなる。
+    function createTransformSurface(geometry3DClass, params = {}){
+      const {
+        points = [], transforms = [],
+        upperHalf = false, lowerHalf = false, xSideHalf = false, ySideHalf = false,
+        line = 'none', transform = ``, dict = {}, autoNormal = true
+      } = params;
+      if(transforms.length < 2 || points.length < 2){ return null; }
+
+      const geom = createHalfPlane(geometry3DClass, {
+        details:[transforms.length-1, points.length-1], line,
+        upperHalf, lowerHalf, xSideHalf, ySideHalf
+      });
+
+      // xでtransformを決めてyで点列を操る。複数あってもいいんだろうが、他のメッシュの作り方と違ってしまい、
+      // 混乱の原因になるので、1つに絞った方がいい。たとえばこれは形だけ見ればtorusの構成方法の一般化に当たる。
+      geom.modify((v) => {
+        const {x, y} = v.p;
+        const transformIndex = Math.round(((x+1)/2) * (transforms.length-1));
+        const pointIndex = Math.round(((y+1)/2) * (points.length-1));
+        v.p = transforms[transformIndex].applyP(points[pointIndex].copy());
+      });
+
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+
+      // 自動法線計算を切れるようにする
+      // とはいえいくらでも再計算は可能なのでまあ、好きに。
+      if(autoNormal){
+        geom.faceNormals({merge:true});
+      }
+
+      return geom;
+    }
+
+    // roundCuboid.
+    // 丸っこい直方体を作ろう。
+    // detailsはx,y,z,radiusの順に指定。sizeは大きさです。
+    // 通常のcuboidと違ってスケール変換で別の形を作れないので、全て指定する必要があります。
+    // 角は正式には三角形でやるんだけど横着してる。いずれ変更するかもね。
+    function createRoundCuboid(geometry3DClass, params = {}){
+      const {size = [1,1,1], radius = 0.2, details = [10,10,10,10], line = 'none', transform = ``, dict = {}} = params;
+      const [CBX, CBY, CBZ] = createDetails(size, [[0,4096], [0,4096], [0,4096]]);
+      const [DTX, DTY, DTZ, DTA] = createDetails(details, [[3,4096], [3,4096], [3,4096], [3,4096]]);
+      const CBR = radius;
+
+      // ベース点列は下から上、奥->手前->奥、円弧->直線->円弧
+      const points = [];
+      for(let i=0; i<DTA; i++){
+        const t = -Math.PI*0.5*(DTA-i)/DTA;
+        points.push(Vecta.create(0, -CBY/2+CBR*Math.sin(t), CBR*Math.cos(t)));
+      }
+      for(let i=0; i<DTY;i++){
+        const prg = i/DTY;
+        points.push(Vecta.create(0, -CBY/2 + CBY*prg, CBR));
+      }
+      for(let i=0; i<=DTA; i++){
+        const t = Math.PI*0.5*i/DTA;
+        points.push(Vecta.create(0, CBY/2+CBR*Math.sin(t), CBR*Math.cos(t)));
+      }
+      const createEdgeFace = (from, to, rotation = 0, detail = 10) => {
+        const tfs = [];
+        for(let x=0; x<=detail; x++){
+          const prg = x/detail;
+          tfs.push(MT4.getTranslation(from.lerp(to, prg, true)).localRotation(0,1,0,rotation));
+        }
+        // この段階での法線計算はやめとこう
+        const tfGeom = geometry3DClass.transformSurface({
+          line, points:points, transforms:tfs, autoNormal:false
+        });
+        return tfGeom;
+      }
+      const createCornerFace = (from, to, corner, detail = 10) => {
+        const tfs = [];
+        for(let x=0; x<=detail; x++){
+          const prg = x/detail;
+          tfs.push(MT4.getTranslation(corner).localRotation(0, 1, 0, from*(1-prg)+to*prg));
+        }
+        // この段階での法線計算はやめとこう
+        const tfGeom = geometry3DClass.transformSurface({
+          line, points:points, transforms:tfs, upperHalf:true, lowerHalf:true, autoNormal:false
+        });
+        return tfGeom;
+      }
+      const geom = createEdgeFace(Vecta.create(-CBX/2, 0, CBZ/2), Vecta.create(CBX/2, 0, CBZ/2), 0, DTX);
+      geom.composite(createEdgeFace(Vecta.create(CBX/2, 0, CBZ/2), Vecta.create(CBX/2, 0, -CBZ/2), Math.PI/2, DTZ));
+      geom.composite(createEdgeFace(Vecta.create(CBX/2, 0, -CBZ/2), Vecta.create(-CBX/2, 0, -CBZ/2), Math.PI, DTX));
+      geom.composite(createEdgeFace(Vecta.create(-CBX/2, 0, -CBZ/2), Vecta.create(-CBX/2, 0, CBZ/2), Math.PI*3/2, DTZ));
+      geom.composite(createCornerFace(0, Math.PI/2, Vecta.create(CBX/2, 0, CBZ/2), DTA));
+      geom.composite(createCornerFace(Math.PI/2, Math.PI, Vecta.create(CBX/2, 0, -CBZ/2), DTA));
+      geom.composite(createCornerFace(-Math.PI, -Math.PI/2, Vecta.create(-CBX/2, 0, -CBZ/2), DTA));
+      geom.composite(createCornerFace(-Math.PI/2, 0, Vecta.create(-CBX/2, 0, CBZ/2), DTA));
+      geom.composite(geometry3DClass.plane({line, details:[DTX, DTZ]}).translation(0,CBY/2+CBR,0).rotation(1,0,0,-Math.PI/2).scale(CBX/2, CBZ/2));
+      geom.composite(geometry3DClass.plane({line, details:[DTX, DTZ]}).translation(0,-CBY/2-CBR,0).rotation(1,0,0,Math.PI/2).scale(CBX/2, CBZ/2));
+
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+
+    // triangleFan.
+    // circleからの派生で書くことにした。uvはまあ、知らん。内容的にはcircleもしくはhemiSphereのmodify. 以上じゃ。
+    // p = points[round(uv.x*(points.length-1))];
+    // c + (p-c)*uv.yで出る。
+    // circleとhemiSphereにdefaultUVを追加（もともとのUV）
+    // これだけだとつまんないのでradiusExponentで1-uvyを累乗できるようにしました
+    function createTriangleFan(geometry3DClass, params = {}){
+      const {
+        details = [4], points = [], center = Vecta.create(), radiusExponent = 1,
+        line = 'none', transform = ``, dict = {}, invert=false} = params;
+      if(points.length < 2){ return null; }
+      const dx = points.length-1;
+      const [dy] = createDetails(details, [[2, 4096]]);
+      const geom = createCircle(geometry3DClass, {details:[dx, dy], line, invert});
+
+      // defaultUVを使う
+      // radiusExponentは1より小さいと中心付近で滑らかになる。1より大きいとその逆。
+      geom.modify((v) => {
+        const [uvx, uvy] = v.getValue('defaultUV');
+        const index = Math.round(uvx*dx);
+        const point = points[index];
+        v.p = center.mult(Math.pow(1-uvy, radiusExponent), true).addScalar(point, uvy);
+      });
+
+      if(transform.length > 0){
+        geom.transform(transform, dict).applyTransform();
+      }
+      geom.faceNormals({merge:true});
+
+      return geom;
+    }
+
+    geometryTools.Attribute = Attribute;
+    geometryTools.Vertex = Vertex;
+    geometryTools.Geometry = Geometry;
+    geometryTools.Geometry3D = Geometry3D;
+    geometryTools.GeometryBuilder = GeometryBuilder;
+
+    return geometryTools;
+  })();
+
   // ------------------------------------------------------------------------------------------------------------------------------------------ //
   // foxApplication.
   // CameraControllerなどはここに属する。上記3つと違って切り売りができない。
@@ -10811,6 +13459,7 @@ available waveTables:
     const applications = {};
 
     const {parseDesignDescription} = foxParse;
+    const {TypeErrorCatcher} = foxErrors;
     const {glEnum, glTypedArray, ProgramWrapper, WBOWrapper, VBOWrapper, UBOWrapper, IBOWrapper, VAOWrapper} = webglUtils;
     const {
       Easing, Damper, Tree, saveCanvas, getTextAlign, getTextBoundingRect, mapAmount, Gun,
@@ -10846,6 +13495,10 @@ available waveTables:
         this.setParam(params);
 
         this.cam = cam;
+        // ここでチェック入れるか
+        if(!(cam instanceof QCameraPerse) && !(cam instanceof QCameraOrtho)){
+          console.error('camera undefined. constructor has been modified, sorry.');
+        }
         this.dmp = new Damper(
           "rotationX", "rotationY", "scale", "translationX", "translationY"
         );
@@ -10874,6 +13527,10 @@ available waveTables:
           }
           //this.cam.moveNDC(-tx, ty);
         });
+      }
+      getCamera(){
+        // カメラを返す。
+        return this.cam;
       }
       axisRotation(rx, ry){
         // topAxisの周りにrxだけglobal回転
@@ -11692,8 +14349,10 @@ available waveTables:
     }
 
     // SVG翻訳機構作っておくか
+    // Aも追加しよう。ざっくりいうと、arcToと似てて、middleとlastとradiusで5つ指定する。
+    // いずれ3Dもできるように書き直すよ。名前もparseSVGとかする。改名する。
     function parseData(options = {}){
-      const {data="M 0 0", bezierDetail2 = 8, bezierDetail3 = 5, parseScale = 1, lineSegmentLength = 1} = options;
+      const {data="M 0 0", bezierDetail2 = 8, bezierDetail3 = 5, arcDetail = 8,  parseScale = 1, lineSegmentLength = 1} = options;
       const cmdData = data.split(" ");
       const result = [];
       let subData = [];
@@ -11747,6 +14406,48 @@ available waveTables:
               ));
             }
             i+=6; break;
+          case "A":
+            // arcToのような円弧
+            const initialPoint = subData[subData.length-1];
+            const a2 = Number(cmdData[i+1])*parseScale;
+            const b2 = Number(cmdData[i+2])*parseScale;
+            const c2 = Number(cmdData[i+3])*parseScale;
+            const d2 = Number(cmdData[i+4])*parseScale;
+            const expectRadius = Number(cmdData[i+5])*parseScale;
+            const middlePoint = Vecta.create(a2, b2);
+            const endPoint = Vecta.create(c2, d2);
+            const radius = Math.min(expectRadius, initialPoint.dist(middlePoint), middlePoint.dist(endPoint));
+            const dir01 = middlePoint.sub(initialPoint, true).normalize();
+            const dir12 = endPoint.sub(middlePoint, true).normalize();
+            const angle = dir01.angleTo(dir12);
+            const middle0 = middlePoint.addScalar(dir01, -radius, true);
+            const middle1 = middlePoint.addScalar(dir12, radius, true);
+            // p2 -> middle0 -> middle1 -> r2の順に訪問する。
+            const u = dir01.mult((
+              Math.abs(angle) < Number.EPSILON ? 2*radius/arcDetail : 2*radius*Math.sin(angle*0.5/arcDetail)/Math.tan(angle*0.5)
+            ), true);
+            u.rotate(angle*0.5/arcDetail);
+            // ここからだが、MCSと違ってp2 -> middle0は直線で、detailが要るんで、Lとみなす。
+            const preLength = initialPoint.dist(middle0);
+            for(let lengthSum=0; lengthSum<preLength; lengthSum += lineSegmentLength){
+              subData.push(initialPoint.lerp(middle0, lengthSum/preLength, true));
+            }
+            subData.push(middle0);
+            // 円弧
+            const curPoint = middle0.copy();
+            for(let k=1; k<arcDetail; k++){
+              curPoint.add(u);
+              subData.push(curPoint.copy());
+              u.rotate(angle/arcDetail);
+            }
+            subData.push(middle1);
+            // 直線
+            const postLength = middle1.dist(endPoint);
+            for(let lengthSum=0; lengthSum<postLength; lengthSum += lineSegmentLength){
+              subData.push(middle1.lerp(endPoint, lengthSum/postLength, true));
+            }
+            subData.push(endPoint);
+            i+=5; break;
           case "Z":
             // 最初の点を追加するんだけど、subData[0]を直接ぶち込むと
             // 頭とおしりが同じベクトルになってしまうので、
@@ -11762,6 +14463,142 @@ available waveTables:
             //result.push(subData.slice());
             break;
         }
+      }
+      // Mが出てこない場合はパス終了
+      result.push(subData.slice());
+      return result;
+    }
+
+    // 実験機能。特にバグが無いならparseDataに取って替えられます。
+    // 3次元にも対応できるSVG翻訳機です。
+    // dataは別でいいだろ。必須なんだから別にすべきだろ。
+    function parseSVG(data = `M 0 0`, options = {}){
+      const {dimension = 2, bezierDetail2 = 8, bezierDetail3 = 5, arcDetail = 8,  parseScale = 1, lineSegmentLength = 1} = options;
+      // こうしないと...厳密にはタブとかも で置き換えないとまずいか。ん～...
+      const cmdData = data.replaceAll(`\t`, ' ').replaceAll('\n', ' ').split(" ").map(s => s.trim()).filter(s => s.length > 0);
+      const result = [];
+      const subData = [];
+
+      // dimensionによって要求される数の個数が違う。なお省略不可。
+      // 個人的には,を使って省略できるようになってもいいとは思ってるけどね。
+      // M: 2/3
+      // L: 2/3
+      // Q: 4/6
+      // C: 6/9
+      // A: 5/7
+      // Z: 0/0
+      // スマートな方法で書き直そうかと思ったけれど、冷静に考えたら、
+      // 最後がalphabetで終わるかそうでないかの場合分けが絶望的に面倒だなこれ...やめよ。
+      const paramCount = {'M':[2,3], 'L':[2,3], 'Q':[4,6], 'C':[6,9], 'A':[5,7], 'Z':[0,0]};
+      const commands = [];
+      for(let i=0; i<cmdData.length; i++){
+        const command = cmdData[i].match(/[A-Z]{1}/);
+        if(command !== null){
+          const count = paramCount[command][dimension-2]; // 0か1.
+          const params = cmdData.slice(i+1, i+1+count).map(n => Number(n)).map((x) => parseScale * x);
+          if(params.some((n) => isNaN(n))){ console.error(`parseSVG: None Error!!`); }
+          commands.push({cmd:command[0], params});
+        }
+        // 別にiを増やす必要は無い。勝手にスルーされる。
+      }
+
+      const lastPoint = Vecta.create();
+
+      for(let i=0; i<commands.length; i++){
+        const {cmd, params} = commands[i];
+        switch(cmd){
+          case 'M':
+            if (subData.length>0) result.push(subData.slice());
+            subData.length = 0;
+            subData.push(Vecta.create(params));
+            break;
+          case 'L':
+            const nextPointL = Vecta.create(params);
+            const lineLengthL = lastPoint.dist(nextPointL);
+            // 細かいことだけどスタートをlineSegmentLengthにしないと点が重複してしまうんだよな
+            // これ以降のLメソッドもすべて修正してある
+            for(let lengthSum = lineSegmentLength; lengthSum<lineLengthL; lengthSum += lineSegmentLength){
+              subData.push(lastPoint.lerp(nextPointL, lengthSum/lineLengthL, true));
+            }
+            subData.push(nextPointL);
+            break;
+          case 'Q':
+            const ctrQ = Vecta.create(params.slice(0, dimension));
+            const nextPointQ = Vecta.create(params.slice(dimension, 2*dimension));
+            for(let k=1; k<=bezierDetail2; k++){
+              const t = k/bezierDetail2;
+              const vectorQ = lastPoint.mult((1-t)*(1-t), true).addScalar(ctrQ, 2*t*(1-t)).addScalar(nextPointQ, t*t);
+              subData.push(vectorQ);
+            }
+            break;
+          case 'C':
+            const ctrC0 = Vecta.create(params.slice(0, dimension));
+            const ctrC1 = Vecta.create(params.slice(dimension, 2*dimension));
+            const nextPointC = Vecta.create(params.slice(2*dimension, 3*dimension));
+            for(let k=1; k<=bezierDetail3; k++){
+              const t = k/bezierDetail3;
+              const vectorC = lastPoint.mult((1-t)*(1-t)*(1-t), true).addScalar(ctrC0, 3*t*(1-t)*(1-t)).addScalar(ctrC1, 3*t*t*(1-t)).addScalar(nextPointC, t*t*t);
+              subData.push(vectorC);
+            }
+            break;
+          case 'A':
+            // arcToのような円弧
+            const ctrA = Vecta.create(params.slice(0, dimension));
+            const nextPointA = Vecta.create(params.slice(dimension, 2*dimension));
+            const radius = Math.min(params[2*dimension], lastPoint.dist(ctrA), ctrA.dist(nextPointA));
+            const dir01 = ctrA.sub(lastPoint, true).normalize();
+            const dir12 = nextPointA.sub(ctrA, true).normalize();
+
+            // ここは絶対値だ。なぜ絶対値かと言えば、回転を軸ベクトルでやるようになったからだ。
+            // だから符号付きだと相殺してバグってしまうのだ。angleBetweenだ。
+            const angle = dir01.angleBetween(dir12);
+            const middleA0 = ctrA.addScalar(dir01, -radius, true);
+            const middleA1 = ctrA.addScalar(dir12, radius, true);
+            // p2 -> middle0 -> middle1 -> r2の順に訪問する。
+            const u = dir01.mult((
+              Math.abs(angle) < Number.EPSILON ? 2*radius/arcDetail : 2*radius*Math.sin(angle*0.5/arcDetail)/Math.tan(angle*0.5)
+            ), true);
+            // 3次元でも使えるようにするには軸ベクトルの計算が必要になる
+            // 回転方向はdir01 cross dir12で決める。0の場合は便宜上0,0,1とする。
+            const rotationAxis = dir01.cross(dir12, true);
+            //rotationAxis.show(true);
+            if(rotationAxis.magSq() < 1e-12){ rotationAxis.set(0,0,1); }
+            u.rotate(rotationAxis, angle*0.5/arcDetail);
+            // ここからだが、MCSと違ってp2 -> middle0は直線で、detailが要るんで、Lとみなす。
+            const preLength = lastPoint.dist(middleA0);
+            for(let lengthSum = lineSegmentLength; lengthSum<preLength; lengthSum += lineSegmentLength){
+              subData.push(lastPoint.lerp(middleA0, lengthSum/preLength, true));
+            }
+            subData.push(middleA0);
+            // 円弧
+            const curPoint = middleA0.copy();
+            for(let k=1; k<arcDetail; k++){
+              curPoint.add(u);
+              subData.push(curPoint.copy());
+              u.rotate(rotationAxis, angle/arcDetail);
+            }
+            subData.push(middleA1);
+            // 直線
+            const postLength = middleA1.dist(nextPointA);
+            for(let lengthSum = lineSegmentLength; lengthSum<postLength; lengthSum += lineSegmentLength){
+              subData.push(middleA1.lerp(nextPointA, lengthSum/postLength, true));
+            }
+            subData.push(nextPointA);
+            break;
+          case 'Z':
+            // 最初の点を追加するんだけど、subData[0]を直接ぶち込むと
+            // 頭とおしりが同じベクトルになってしまうので、
+            // copy()を取らないといけないんですね
+            // Lでつなぎます。
+            const nextPointZ = subData[0].copy();
+            const lineLengthZ = lastPoint.dist(nextPointZ);
+            for(let lengthSum = lineSegmentLength; lengthSum<lineLengthZ; lengthSum += lineSegmentLength){
+              subData.push(lastPoint.lerp(nextPointZ, lengthSum/lineLengthZ, true));
+            }
+            subData.push(nextPointZ);
+            break;
+        }
+        lastPoint.set(subData[subData.length-1]);
       }
       // Mが出てこない場合はパス終了
       result.push(subData.slice());
@@ -11793,8 +14630,7 @@ available waveTables:
 
     // font.getPath()で得られるパスデータのcommandプロパティをテキストに
     // 翻訳する。本来は不要かもしれないがこれによりこれとは別の汎用関数が
-    // 利用可能になるのでこういった手順を踏んでいる。最初にやったのはsayoさん
-    // です。もっというとp5もこれ確かやってるはず
+    // 利用可能になるのでこういった手順を踏んでいる。
     // バグ対応！
     // 全部閉路なのでZは要らないですね...
     // というかまあこれでいいでしょう。なお、前後の半角はトリミングされるようです。
@@ -11870,7 +14706,6 @@ available waveTables:
     }
 
     // fontはopentypeのparseでarrayBufferをparseした結果としてのfont objectであります。
-    // なおp5の場合はfontにfont.fontを入れればOKでやんす。
     // ちなみにITALICとかはfont-familyの話です。こっちは関係ない！
     function getTextContours(params = {}){
       const {
@@ -11971,6 +14806,95 @@ available waveTables:
 
       // で、両方falseのケース
       return allContours;
+    }
+
+    // createFSS.
+    // フルネセレのシステム。入力点列は少なくとも1階微分可能程度の滑らかさがあることが要求される。それなら綺麗に出力される。
+    // 滑らかに変化する座標系の列をクォータニオン配列もしくはトランスフォーム行列の配列（output:'mt4'）で出力する。
+    // 注意：closedの場合、頭とおしりは重複して用意しないこと。
+    // pointsはVecta配列
+    // output: qの場合はquarternion配列が返る。mt4の場合はmt4配列が返る。
+    // yUpにします。つまり曲線方向はy軸正方向。真上に行く。x,y,z -> z,x,yとなる。
+    // 解説
+    // closedの場合に何をしてるかというと、まず点列に頭とおしりを重複で用意しないことを要請したうえで、
+    // 最後までやったあとで頭の点に一旦戻って0-1のFSSを「そこまでの流れに基づいて」計算したものを余分に1個追加してるんですね。
+    // そのうえでそれと正規の0番を比較してずれを検出、それに基づいて全体のFSSをちょっとずつ回すんですね。
+    // それによって結果的に頭とおしりが滑らかにつながり、くびれができなくなる。余分な点は最後に破棄されます。
+    // なおnon-closedの場合は末尾だけ計算を避け、処理の後で末尾に関しては1個前をコピーして付け加えていますね。
+    // 結果的に、入力点列と「同じ長さ」のQ/MT4列が生成されるというわけです。
+    // ※もしContourクラスでclosedの場合、破棄する必要は無く、普通に最後まで計算し、同じように修正して吐き出す、でいいと思います。
+    function createFSS(points, options = {}){
+      const {closed = false, showDetail = false, output = 'q'} = options;
+
+      const y0 = points[1].sub(points[0], true).normalize();
+      const z0 = Vecta.getOrtho(y0);
+      const x0 = y0.cross(z0, true);
+
+      const result = [Quarternion.getFromAxes(x0, y0, z0)]; // ここ修正したらおかしいでしょ
+      const currentTangent = y0.copy();
+
+      // closedの場合に最初の点と重複させる（意図的に）
+      for(let i=1; i <= points.length; i++){
+        // non-closedの場合は直前で切る
+        if(!closed && i === points.length-1) break;
+        // closedの場合は最終的に始点を参照する
+        const nextTangent = points[(i+1)%points.length].sub(points[i%points.length], true).normalize();
+        const axis = currentTangent.cross(nextTangent, true);
+        if(axis.magSq() < Number.EPSILON){
+          result.push(result[result.length-1].copy());
+          currentTangent.set(nextTangent);
+          continue;
+        }else{
+          axis.normalize();
+          // axisのまわりに回転させる角度の計算
+          const differenceAngle = currentTangent.angleBetween(nextTangent, axis);
+          // globalRotateを使う。q0は直前でしたね。バカ...
+          const q0 = result[result.length-1];
+          const q1 = q0.globalRotate(axis, differenceAngle, true);
+
+          result.push(q1);
+          currentTangent.set(nextTangent);
+        }
+      }
+
+      if(!closed){
+        // 同じものを重複して置く
+        result.push(result[result.length-1].copy());
+      }
+
+      if(closed){
+        const diff = result[0].conj(true).multQ(result[result.length-1]);
+        // x,y成分が0（ほぼ0）ですね。OKです。角度...
+        if(showDetail){ console.log(`difference of begin~end: ${diff.show()}`); }
+
+        // ああそうか
+        // まず角度の算出にはtheta/2なので2倍すると
+        // そんでもってマイナスで正解だと
+        // OKです
+        // TAUに近い場合におかしくなるのを防ぐために、wが負の時は-1を掛ける
+        if(diff.w < 0){ diff.mult(-1); }
+        const diffAngle = Math.atan2(diff.y, diff.w)*2;
+        if(showDetail){ console.log(`angle difference: ${diffAngle}`); }
+        // そういうわけでこれを...600で割って...
+        // i番を-i*diffAngle/600だけzの周りに回す。ローカルで。
+        for(let i=0; i<=points.length; i++){
+          result[i].localRotate(0,1,0,-i*diffAngle/points.length);
+        }
+        // 末尾は要らないので弾く
+        result.pop();
+      }
+
+      // じゃあmt4用意するか。
+      if(output === 'q'){ return result; }
+      if(output === 'mt4'){
+        const resultMatrices = [];
+        for(let i=0; i<points.length; i++){
+          resultMatrices.push(MT4.getTranslation(points[i]).localRotationQ(result[i]));
+        }
+        return resultMatrices;
+      }
+      // デフォルト。outputが変な定義の場合もq扱いとする。
+      return result;
     }
 
     // Measurable Contours.
@@ -12623,7 +15547,7 @@ available waveTables:
               break;
             case "A":
               // 本家はややこしいのでarcToと同じとする。
-              // つまりx,y,x1,y1,r. 最後の点とx1,y1でx,yに近い方の距離とrでminを取ってproperとし、円弧でつなげる。
+              // つまりx,y,x1,y1,r. 最初の点とx1,y1でx,yに近い方の距離とrでminを取ってproperとし、円弧でつなげる。
               lastCommand = "A";
               const a0 = lastPoint;
               const a1 = Vecta.create(data.slice(0,2)).mult(parseScale);
@@ -13929,452 +16853,6 @@ available waveTables:
     // 単位行列
     Gltf.IDENTITY = new MT4();
 
-    // shader snipets. 順次追加予定。
-    const codeSnipets = {
-      // rotationMatrix. axisの周りにtだけ回転する。使い方はシェーダー内で右から掛けるだけ。
-'rotationMatrix':`
-mat3 rotationMatrix(in vec3 axis, in float t){
-  return mat3(
-    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y,
-    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x,
-    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z
-  );
-}
-mat3 rotationMatrix(in float x, in float y, in float z, in float t){
-  return rotationMatrix(vec3(x, y, z), t);
-}
-mat3 rotationMatrix(in vec4 v){ return rotationMatrix(v.xyz, v.w); }
-`,
-'hsv2rgb':`
-vec3 hsv2rgb(in vec3 color){
-  vec3 rgb = clamp(abs(mod(color.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-  rgb = rgb * rgb * (3.0 - 2.0 * rgb);
-  return color.z * mix(vec3(1.0), rgb, color.y);
-}
-vec3 hsv2rgb(in float r, in float g, in float b){ return hsv2rgb(vec3(r, g, b)); }
-`,
-'overlay':`
-vec3 overlay(in vec3 src, in vec3 dst){
-  vec3 result;
-    if(dst.r < 0.5){ result.r = 2.0*src.r*dst.r; }else{ result.r = 2.0*(src.r+dst.r-src.r*dst.r)-1.0; }
-    if(dst.g < 0.5){ result.g = 2.0*src.g*dst.g; }else{ result.g = 2.0*(src.g+dst.g-src.g*dst.g)-1.0; }
-    if(dst.b < 0.5){ result.b = 2.0*src.b*dst.b; }else{ result.b = 2.0*(src.b+dst.b-src.b*dst.b)-1.0; }
-  return result;
-}
-vec3 overlay(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
-  return overlay(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
-}
-`,
-'softLight':`
-vec3 softLight(in vec3 src, in vec3 dst){
-  vec3 result;
-  if(src.r < 0.5){ result.r = 2.0*src.r*dst.r + dst.r*dst.r*(1.0-2.0*src.r); }
-  else{ result.r = 2.0*dst.r*(1.0-src.r) + sqrt(dst.r)*(2.0*src.r-1.0); }
-  if(src.g < 0.5){ result.g = 2.0*src.g*dst.g + dst.g*dst.g*(1.0-2.0*src.g); }
-  else{ result.g = 2.0*dst.g*(1.0-src.g) + sqrt(dst.g)*(2.0*src.g-1.0); }
-  if(src.b < 0.5){ result.b = 2.0*src.b*dst.b + dst.b*dst.b*(1.0-2.0*src.b); }
-  else{ result.b = 2.0*dst.b*(1.0-src.b) + sqrt(dst.b)*(2.0*src.b-1.0); }
-  return result;
-}
-vec3 softLight(in float srcRed, in float srcGreen, in float srcBlue, in float dstRed, in float dstGreen, in float dstBlue){
-  return softLight(vec3(srcRed, srcGreen, srcBlue), vec3(dstRed, dstGreen, dstBlue));
-}
-`,
-'transform':`
-// 簡易版を用意しておく。すべてローカル、オーバーロードなし。
-void scale(inout mat4 m, in vec3 s){
-  mat4 scaleMatrix = mat4(s.x, 0.0, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, 0.0, s.z, 0.0, 0.0, 0.0, 0.0, 1.0);
-  m = scaleMatrix * m;
-}
-void translation(inout mat4 m, in vec3 t){
-  mat4 translationMatrix = mat4(1.0, 0.0, 0.0, t.x, 0.0, 1.0, 0.0, t.y, 0.0, 0.0, 1.0, t.z, 0.0, 0.0, 0.0, 1.0);
-  m = translationMatrix * m;
-}
-void rotation(inout mat4 m, in vec3 axis, in float t){
-  mat4 rotationMatrix = mat4(
-    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
-    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
-    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
-    0.0, 0.0, 0.0, 1.0
-  );
-  m = rotationMatrix * m;
-}
-void rotationQ(inout mat4 m, in vec4 q){
-  mat4 rotationQMatrix = mat4(
-    2.0*q.w*q.w-1.0+2.0*q.x*q.x, 2.0*(q.x*q.y-q.z*q.w), 2.0*(q.x*q.z+q.y*q.w), 0.0,
-    2.0*(q.x*q.y+q.z*q.w), 2.0*q.w*q.w-1.0+2.0*q.y*q.y, 2.0*(q.y*q.z-q.x*q.w), 0.0,
-    2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
-    0.0, 0.0, 0.0, 1.0
-  );
-  m = rotationQMatrix * m;
-}
-void applyTransformP(inout vec3 p, in mat4 tf){
-  p = (vec4(p, 1.0) * tf).xyz;
-}
-void applyTransformN(inout vec3 n, in mat4 tf){
-  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
-}
-void applyTransform(inout vec3 p, inout vec3 n, in mat4 tf){
-  p = (vec4(p, 1.0) * tf).xyz;
-  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
-}
-`,
-'scale':`
-mat4 getScale(in vec3 s){
-  return mat4(s.x, 0.0, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, 0.0, s.z, 0.0, 0.0, 0.0, 0.0, 1.0);
-}
-mat4 getScale(in float sx, in float sy, in float sz){
-  return getScale(vec3(sx, sy, sz));
-}
-mat4 getScale(in float s){
-  return getScale(vec3(s));
-}
-void localScale(inout mat4 m, in vec3 s){
-  m = getScale(s) * m;
-}
-void localScale(inout mat4 m, in float sx, in float sy, in float sz){
-  m = getScale(vec3(sx, sy, sz)) * m;
-}
-void localScale(inout mat4 m, in float s){
-  m = getScale(vec3(s)) * m;
-}
-void globalScale(inout mat4 m, in vec3 s){
-  m *= getScale(s);
-}
-void globalScale(inout mat4 m, in float sx, in float sy, in float sz){
-  m *= getScale(vec3(sx, sy, sz));
-}
-void globalScale(inout mat4 m, in float s){
-  m *= getScale(vec3(s));
-}
-void setScale(inout mat4 m, in vec3 s){
-  m = getScale(s);
-}
-void setScale(inout mat4 m, in float sx, in float sy, in float sz){
-  m = getScale(vec3(sx, sy, sz));
-}
-void setScale(inout mat4 m, in float s){
-  m = getScale(vec3(s));
-}
-void applyScaleP(inout vec3 p, in vec3 s){
-  p = (vec4(p, 1.0) * getScale(s)).xyz;
-}
-void applyScaleP(inout vec3 p, in float sx, in float sy, in float sz){
-  p = (vec4(p, 1.0) * getScale(vec3(sx, sy, sz))).xyz;
-}
-void applyScaleP(inout vec3 p, in float s){
-  p = (vec4(p, 1.0) * getScale(vec3(s))).xyz;
-}
-void applyScaleN(inout vec3 n, in vec3 s){
-  n = (vec4(n, 0.0) * inverse(transpose(getScale(s)))).xyz;
-}
-void applyScaleN(inout vec3 n, in float sx, in float sy, in float sz){
-  n = (vec4(n, 0.0) * inverse(transpose(getScale(vec3(sx, sy, sz))))).xyz;
-}
-void applyScaleN(inout vec3 n, in float s){
-  n = (vec4(n, 0.0) * inverse(transpose(getScale(vec3(s))))).xyz;
-}
-void applyScale(inout vec3 p, inout vec3 n, in vec3 s){
-  mat4 tf = getScale(s);
-  p = (vec4(p, 1.0) * tf).xyz;
-  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
-}
-void applyScale(inout vec3 p, inout vec3 n, in float sx, in float sy, in float sz){
-  mat4 tf = getScale(vec3(sx, sy, sz));
-  p = (vec4(p, 1.0) * tf).xyz;
-  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
-}
-void applyScale(inout vec3 p, inout vec3 n, in float s){
-  mat4 tf = getScale(vec3(s));
-  p = (vec4(p, 1.0) * tf).xyz;
-  n = (vec4(n, 0.0) * inverse(transpose(tf))).xyz;
-}
-`,
-'translation':`
-mat4 getTranslation(in vec3 t){
-  return mat4(1.0, 0.0, 0.0, t.x, 0.0, 1.0, 0.0, t.y, 0.0, 0.0, 1.0, t.z, 0.0, 0.0, 0.0, 1.0);
-}
-mat4 getTranslation(in float tx, in float ty, in float tz){
-  return getTranslation(vec3(tx, ty, tz));
-}
-void localTranslation(inout mat4 m, in vec3 t){
-  m = getTranslation(t) * m;
-}
-void localTranslation(inout mat4 m, in float tx, in float ty, in float tz){
-  m = getTranslation(vec3(tx, ty, tz)) * m;
-}
-void globalTranslation(inout mat4 m, in vec3 t){
-  m *= getTranslation(t);
-}
-void globalTranslation(inout mat4 m, in float tx, in float ty, in float tz){
-  m *= getTranslation(vec3(tx, ty, tz));
-}
-void setTranslation(inout mat4 m, in vec3 t){
-  m = getTranslation(t);
-}
-void setTranslation(inout mat4 m, in float tx, in float ty, in float tz){
-  m = getTranslation(vec3(tx, ty, tz));
-}
-void applyTranslationP(inout vec3 p, in vec3 t){
-  p = (vec4(p, 1.0) * getTranslation(t)).xyz;
-}
-void applyTranslationP(inout vec3 p, in float tx, in float ty, in float tz){
-  p = (vec4(p, 1.0) * getTranslation(vec3(tx, ty, tz))).xyz;
-}
-void applyTranslationN(inout vec3 n, in vec3 t){
-  // 何も起きない
-}
-void applyTranslationN(inout vec3 n, in float tx, in float ty, in float tz){
-  // 何も起きない
-}
-void applyTranslation(inout vec3 p, inout vec3 n, in vec3 t){
-  mat4 tf = getTranslation(t);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nは何にもしない
-}
-void applyTranslation(inout vec3 p, inout vec3 n, in float tx, in float ty, in float tz){
-  mat4 tf = getTranslation(vec3(tx, ty, tz));
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nは何にもしない
-}
-`,
-'rotation':`
-mat4 getRotation(in vec3 axis, in float t){
-  return mat4(
-    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
-    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
-    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
-    0.0, 0.0, 0.0, 1.0
-  );
-}
-mat4 getRotation(in vec4 axisAndT){
-  return getRotation(axisAndT.xyz, axisAndT.w);
-}
-mat4 getRotation(in float rx, in float ry, in float rz, in float t){
-  return getRotation(vec3(rx, ry, rz), t);
-}
-mat4 getRotation(in float t){
-  return getRotation(vec3(0.0, 0.0, 1.0), t);
-}
-void localRotation(inout mat4 m, in vec3 axis, in float t){
-  m = getRotation(axis, t) * m;
-}
-void localRotation(inout mat4 m, in vec4 axisAndT){
-  m = getRotation(axisAndT.xyz, axisAndT.w) * m;
-}
-void localRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
-  m = getRotation(vec3(rx, ry, rz), t) * m;
-}
-void localRotation(inout mat4 m, in float t){
-  m = getRotation(vec3(0.0, 0.0, 1.0), t) * m;
-}
-void globalRotation(inout mat4 m, in vec3 axis, in float t){
-  m *= getRotation(axis, t);
-}
-void globalRotation(inout mat4 m, in vec4 axisAndT){
-  m *= getRotation(axisAndT.xyz, axisAndT.w);
-}
-void globalRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
-  m *= getRotation(vec3(rx, ry, rz), t);
-}
-void globalRotation(inout mat4 m, in float t){
-  m *= getRotation(vec3(0.0, 0.0, 1.0), t);
-}
-void setRotation(inout mat4 m, in vec3 axis, in float t){
-  m = getRotation(axis, t);
-}
-void setRotation(inout mat4 m, in vec4 axisAndT){
-  m = getRotation(axisAndT.xyz, axisAndT.w);
-}
-void setRotation(inout mat4 m, in float rx, in float ry, in float rz, in float t){
-  m = getRotation(vec3(rx, ry, rz), t);
-}
-void setRotation(inout mat4 m, in float t){
-  m = getRotation(vec3(0.0, 0.0, 1.0), t);
-}
-void applyRotationP(inout vec3 p, in vec3 axis, in float t){
-  p = (vec4(p, 1.0) * getRotation(axis, t)).xyz;
-}
-void applyRotationP(inout vec3 p, in vec4 axisAndT){
-  p = (vec4(p, 1.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
-}
-void applyRotationP(inout vec3 p, in float rx, in float ry, in float rz, in float t){
-  p = (vec4(p, 1.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
-}
-void applyRotationP(inout vec3 p, in float t){
-  p = (vec4(p, 1.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
-}
-void applyRotationN(inout vec3 n, in vec3 axis, in float t){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotation(axis, t)).xyz;
-}
-void applyRotationN(inout vec3 n, in vec4 axisAndT){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotation(axisAndT.xyz, axisAndT.w)).xyz;
-}
-void applyRotationN(inout vec3 n, in float rx, in float ry, in float rz, in float t){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotation(vec3(rx, ry, rz), t)).xyz;
-}
-void applyRotationN(inout vec3 n, in float t){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotation(vec3(0.0, 0.0, 1.0), t)).xyz;
-}
-void applyRotation(inout vec3 p, inout vec3 n, in vec3 axis, in float t){
-  mat4 tf = getRotation(axis, t);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-void applyRotation(inout vec3 p, inout vec3 n, in vec4 axisAndT){
-  mat4 tf = getRotation(axisAndT.xyz, axisAndT.w);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-void applyRotation(inout vec3 p, inout vec3 n, in float rx, in float ry, in float rz, in float t){
-  mat4 tf = getRotation(vec3(rx, ry, rz), t);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-void applyRotation(inout vec3 p, inout vec3 n, in float t){
-  mat4 tf = getRotation(vec3(0.0, 0.0, 1.0), t);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-`,
-'rotationQ':`
-mat4 getRotationQ(in vec4 q){
-  return mat4(
-    2.0*q.w*q.w-1.0+2.0*q.x*q.x, 2.0*(q.x*q.y-q.z*q.w), 2.0*(q.x*q.z+q.y*q.w), 0.0,
-    2.0*(q.x*q.y+q.z*q.w), 2.0*q.w*q.w-1.0+2.0*q.y*q.y, 2.0*(q.y*q.z-q.x*q.w), 0.0,
-    2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
-    0.0, 0.0, 0.0, 1.0
-  );
-}
-mat4 getRotationQ(in float x, in float y, in float z, in float w){
-  return getRotationQ(vec4(x, y, z, w));
-}
-void localRotationQ(inout mat4 m, in vec4 q){
-  m = getRotationQ(q) * m;
-}
-void localRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
-  m = getRotationQ(vec4(x, y, z, w)) * m;
-}
-void globalRotationQ(inout mat4 m, in vec4 q){
-  m *= getRotationQ(q);
-}
-void globalRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
-  m *= getRotationQ(vec4(x, y, z, w));
-}
-void setRotationQ(inout mat4 m, in vec4 q){
-  m = getRotationQ(q);
-}
-void setRotationQ(inout mat4 m, in float x, in float y, in float z, in float w){
-  m = getRotationQ(vec4(x, y, z, w));
-}
-void applyRotationQP(inout vec3 p, in vec4 q){
-  p = (vec4(p, 1.0) * getRotationQ(q)).xyz;
-}
-void applyRotationQP(inout vec3 p, in float x, in float y, in float z, in float w){
-  p = (vec4(p, 1.0) * getRotationQ(vec4(x, y, z, w))).xyz;
-}
-void applyRotationQN(inout vec3 n, in vec4 q){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotationQ(q)).xyz;
-}
-void applyRotationQN(inout vec3 n, in float x, in float y, in float z, in float w){
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * getRotationQ(vec4(x, y, z, w))).xyz;
-}
-void applyRotationQ(inout vec3 p, inout vec3 n, in vec4 q){
-  mat4 tf = getRotationQ(q);
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-void applyRotationQ(inout vec3 p, inout vec3 n, in float x, in float y, in float z, in float w){
-  mat4 tf = getRotationQ(vec4(x, y, z, w));
-  p = (vec4(p, 1.0) * tf).xyz;
-  // nはイントラ不要
-  n = (vec4(n, 0.0) * tf).xyz;
-}
-`,
-'quarternion':`
-vec4 multQ(in vec4 q1, in vec4 q2){
-  // 外でのq2, q1の順に掛け算する。そうしないと回転としての取り扱いで不整合が出るので。
-  float w = q2.w * q1.w - q2.x * q1.x - q2.y * q1.y - q2.z * q1.z;
-  float x = q2.w * q1.x + q2.x * q1.w + q2.y * q1.z - q2.z * q1.y;
-  float y = q2.w * q1.y + q2.y * q1.w + q2.z * q1.x - q2.x * q1.z;
-  float z = q2.w * q1.z + q2.z * q1.w + q2.x * q1.y - q2.y * q1.x;
-  return vec4(x, y, z, w);
-}
-vec4 conjQ(in vec4 q){
-  return vec4(-q.x, -q.y, -q.z, q.w);
-}
-vec4 getQuarternionFromAA(in vec3 axis, in float angle){
-  return vec4(sin(angle*0.5)*normalize(axis), cos(angle*0.5));
-}
-vec4 getQuarternionFromAA(in vec4 v){
-  return getQuarternionFromAA(v.xyz, v.w);
-}
-vec4 getQuarternionFromAA(in float x, in float y, in float z, in float angle){
-  return getQuarternionFromAA(vec3(x, y, z), angle);
-}
-vec4 powQ(in vec4 q, in float a, in float threshold){
-  float m = dot(q, q);
-  if(m < threshold){
-    return vec4(0.0);
-  }
-  if(q.w < 0.0){
-    q *= -1.0;
-  }
-  float n = sqrt(m);
-  float c = q.w/n;
-  float s = sqrt(m - q.w*q.w)/n;
-  float t = atan(s, c); // 0～PI/2
-  float multiplier = pow(n, a);
-  if(abs(t) < threshold){
-    q.w = (q.w/n)*multiplier;
-    q.x = (q.x/n)*multiplier;
-    q.y = (q.y/n)*multiplier;
-    q.z = (q.z/n)*multiplier;
-    return q;
-  }
-  vec3 axis = (q.xyz/n)/s;
-  float phi = a*t;
-  return multiplier * vec4(sin(phi)*axis, cos(phi));
-}
-vec3 applyV(in vec4 q, in vec3 v){
-  // そとではq*v*(conj(q))なので逆に並べればいい
-  vec4 vq = vec4(v, 0.0);
-  vec4 q0 = multQ(conjQ(q), vq);
-  vec4 q1 = multQ(q0, q);
-  return q1.xyz;
-}
-vec4 powQ(in vec4 q, in float a){
-  return powQ(q, a, 1e-10);
-}
-vec4 slerpQ(in vec4 q1, in vec4 q2, in float r, in float threshold){
-  float m = dot(q1, q1);
-  if(m < threshold){
-    return vec4(0.0);
-  }
-  // multQが逆になっているので掛ける順序を逆にする
-  vec4 q = multQ(conjQ(q1), q2) * (1.0/m);
-  return multQ(q1, powQ(q, r, threshold));
-}
-vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
-  return slerpQ(q1, q2, r, 1e-10);
-}
-`
-    };
-
-    // ここにあったパース関数は一時的に破棄されています。
-    // なんか普通に動いてるっぽいのでこのままでよしとします。ええ...
-
     // ShaderPrototype, RenderSystem.
     // ShaderとProgramで名前を分けよう。
     // declaration: 定数などの宣言、UBOとかも。
@@ -14643,61 +17121,21 @@ void main(){
           showUniforms = false, showAttributes = false
         } = params;
 
-        // ここで「#snipet hoge;」を変換する。vsもfsも両方。convertですね。
-        // まあmodifyか。snipet以外にもなんかやりたかったら追加しましょう。
-        const modifiedVertexShaderSource = ShaderPrototype.modifyShaderSource(this.vs);
-        const modifiedFragmentShaderSource = ShaderPrototype.modifyShaderSource(this.fs);
-
-        // modifyしたあとで出力する
-        if(showVertexShader){ console.log(modifiedVertexShaderSource); }
-        if(showFragmentShader){ console.log(modifiedFragmentShaderSource); }
+        // ここにあったmodifyShaderSourceのコードはProgramWrapperに委譲されました
+        // エラー処理やソース開示もProgramWrapperのcompile関数内で実行されます
 
         const program = ProgramWrapper.create(gl, {
-          vs:modifiedVertexShaderSource, fs:modifiedFragmentShaderSource,
+          vs:this.vs, fs:this.fs,
           name, layout, outVaryings, separate, uboLayout
         });
-        program.createProgram({showUniforms, showAttributes});
+        program.createProgram({
+          showVertexShader, showFragmentShader,
+          showUniforms, showAttributes
+        });
         return program;
       }
       static parse(code = ""){
         return parseDesignDescription(code, this.SHADER_DESIGN);
-      }
-      static modifyShaderSource(source = ""){
-        // 他にもあるかもしれないのでその辺
-        // 「#snipet ~~~;」を探す
-        // 「~~~」をsnipetsで置き換える。おわり。
-        let src = source.replaceAll(/#snipet .+;/g, (target) => {
-      		const splitted = target.split(" "); // 「 」の後ろを取る
-      		if(splitted.length < 2){ console.error("文字数不足"); return ""; }
-      		const name = splitted[1].replace(";", ""); // ;を切る
-      		const snipet = codeSnipets[name];
-      		if(snipet === undefined){ console.error("snipet未定義"); return ""; }
-      		return snipet;
-      	});
-        // ここのタイミングでどうでもいい空行を消す
-        let blancFlag = true;
-        const blancs = src.split(/\r?\n/);
-        // 後ろから空行を見て行ってすべて消す
-        for(let i=blancs.length-1; i>=0; i--){
-          const line = blancs[i];
-          if(line.trim().length === 0){ blancs.pop(); }else{ break; }
-        }
-        // ルール：1. 冒頭の空行はカット。2. 空行が2行以上続くなら1行にする。
-        // インデントは当面は考えなくていいです
-        let result = "";
-        for(let i=0; i<blancs.length; i++){
-          const line = blancs[i];
-          if(line.trim().length === 0){
-            if(blancFlag){ continue; }
-            result += line.trim().concat('\n');
-            blancFlag = true;
-          }else{
-            result += line.concat('\n');
-            blancFlag = false;
-          }
-        }
-        return result;
-        //return modifiedShaderSource;
       }
     }
 
@@ -15066,9 +17504,18 @@ void main(){
       build(buildParams = {}, name = ''){
         // もしlayout以外何にも要らないのであれば...それを文字列として第一引数に置けます。
         // 第二引数は基本無視ですが、buildParamsが文字列の場合のみ、プログラム名を指定できます。
+        // いや、おそらく一番使うのはprogramですから、objectであればprogramとみなすことにしましょう。
+        // 残りはおそらくほぼ使われないだろう。
         if(typeof(buildParams) === 'string'){
           const properParams = {layout:buildParams};
-          if(name !== ''){ properParams.program = {name:name}; }
+          if(typeof(name) === 'string' && name !== ''){
+            // nameを指定して名前だけ付ける
+            properParams.program = {name:name};
+          }else if(typeof(name) === 'object'){
+            // objectにするとそれはprogramとみなされる。他の2つは不要という場合。
+            // layout以外が必要な場合でおそらく一番多いユースケース...情報取得、UBO,TFF,まあいろいろ。
+            properParams.program = name;
+          }
           this.build(properParams);
           return this;
         }
@@ -15119,6 +17566,9 @@ void main(){
         this.shaderFactory = (options) => { return new ShaderPrototype(options); }
         this.addShader();
       }
+      static create(){
+        return new this(...arguments);
+      }
     }
 
     class Render2D extends RenderSystem{
@@ -15137,6 +17587,9 @@ void main(){
           gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
         }
       }
+      static create(){
+        return new this(...arguments);
+      }
     }
 
     class RenderPoints extends RenderSystem{
@@ -15150,6 +17603,9 @@ void main(){
         const {offset = 0, count = 1} = options;
         const gl = this.gl;
         gl.drawArrays(gl.POINTS, offset, count);
+      }
+      static create(){
+        return new this(...arguments);
       }
     }
 
@@ -15177,7 +17633,7 @@ void main(){
           offset = 0, count = 1} = options;
         const gl = this.gl;
         // glEnum使いましょう。デフォルトはPOINTSで。
-        const drawCallEnum = glEnum(drawCall, 'points');
+        const drawCallEnum = glEnum(drawCall);
 
         for(let i=0; i<4; i++){
           if(i >= tffLayout.length){ break; }
@@ -15195,6 +17651,9 @@ void main(){
           tffLayout[i].unbindBufferBaseTFF(i);
         }
       }
+      static create(){
+        return new this(...arguments);
+      }
     }
 
     // NoLightShader
@@ -15206,8 +17665,10 @@ void main(){
     class NoLightShader extends ShaderPrototype{
       constructor(options = {}){
         super(options);
-        const {useNormal = false} = options;
+        const {useNormal = false, defaultAttribute = {}} = options;
+        const {position = true} = defaultAttribute;
         this.useNormal = useNormal;
+        this.useDefaultPositionAttribute = position;
 
         this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
         this.initDescriptors();
@@ -15224,7 +17685,7 @@ ${decl.vs.precision}
 
 ${v.declaration}
 
-layout (location = 0) in vec3 aPosition;
+${(this.useDefaultPositionAttribute ? 'layout (location = 0) in vec3 aPosition;' : '')}
 ${(this.useNormal ? 'layout (location = 1) in vec3 aNormal;' : '')}
 ${decl.vs.attribute}
 
@@ -15243,7 +17704,7 @@ ${decl.vs.uniform}
 ${v.global}
 
 void main(){
-  vec3 position = aPosition;
+  vec3 position = ${(this.useDefaultPositionAttribute ? 'aPosition;' : 'vec3(0.0);')}
   ${(this.useNormal ? 'vec3 normal = aNormal;' : '')}
 
   // position,normalを改変するためのプリプロセス
@@ -15251,7 +17712,8 @@ void main(){
 
   // local -> model変換 -> global -> view変換 -> view
   vLocalPosition = position;
-  vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vec3 globalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vGlobalPosition = globalPosition;
   vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
   vViewPosition = viewModelPosition.xyz;
   // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
@@ -15311,11 +17773,14 @@ void main(){
     class StandardLightingShader extends ShaderPrototype{
       constructor(options = {}){
         super(options);
-        const {lightCounts = {}} = options;
+        const {lightCounts = {}, defaultAttribute = {}} = options;
         const {directional = 4, point = 4, spot = 4} = lightCounts;
+        const {position = true, normal = true} = defaultAttribute;
         this.directionalLightCount = directional;
         this.pointLightCount = point;
         this.spotLightCount = spot;
+        this.useDefaultPositionAttribute = position;
+        this.useDefaultNormalAttribute = normal;
 
         this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
         this.initDescriptors();
@@ -15331,8 +17796,9 @@ ${decl.vs.precision}
 
 ${v.declaration}
 
-layout (location = 0) in vec3 aPosition;
-layout (location = 1) in vec3 aNormal;
+${(this.useDefaultPositionAttribute ? 'layout (location = 0) in vec3 aPosition;' : '')}
+${(this.useDefaultNormalAttribute ? 'layout (location = 1) in vec3 aNormal;' : '')}
+
 ${decl.vs.attribute}
 
 // positionの生データ,model変換後のposition,modelView変換後のposition
@@ -15357,15 +17823,16 @@ ${decl.vs.uniform}
 ${v.global}
 
 void main(){
-  vec3 position = aPosition;
-  vec3 normal = aNormal;
+  vec3 position = ${(this.useDefaultPositionAttribute ? 'aPosition;' : 'vec3(0.0);')}
+  vec3 normal = ${(this.useDefaultNormalAttribute ? 'aNormal;' : 'vec3(0.0, 0.0, 1.0);')}
 
   // position,normalを改変するためのプリプロセス
   ${v.main.replaceAll(/\n/g, "\n  ")}
 
   // local -> model変換 -> global -> view変換 -> view
   vLocalPosition = position;
-  vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vec3 globalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vGlobalPosition = globalPosition;
   vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
   vViewPosition = viewModelPosition.xyz;
   // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
@@ -15584,11 +18051,14 @@ void main(){
     class PBRLightingShader extends ShaderPrototype{
       constructor(options = {}){
         super(options);
-        const {lightCounts = {}} = options;
+        const {lightCounts = {}, defaultAttribute = {}} = options;
         const {directional = 4, point = 4, spot = 4} = lightCounts;
+        const {position = true, normal = true} = defaultAttribute;
         this.directionalLightCount = directional;
         this.pointLightCount = point;
         this.spotLightCount = spot;
+        this.useDefaultPositionAttribute = position;
+        this.useDefaultNormalAttribute = normal;
 
         this.initialDescriptors.vs.output = `gl_Position = normalDeviceCoordinate;`;
         this.initDescriptors();
@@ -15603,8 +18073,8 @@ ${decl.vs.precision}
 
 ${v.declaration}
 
-layout (location = 0) in vec3 aPosition;
-layout (location = 1) in vec3 aNormal;
+${(this.useDefaultPositionAttribute ? 'layout (location = 0) in vec3 aPosition;' : '')}
+${(this.useDefaultNormalAttribute ? 'layout (location = 1) in vec3 aNormal;' : '')}
 ${decl.vs.attribute}
 
 // positionの生データ,model変換後のposition,modelView変換後のposition
@@ -15622,15 +18092,16 @@ ${decl.vs.uniform}
 ${v.global}
 
 void main(){
-  vec3 position = aPosition;
-  vec3 normal = aNormal;
+  vec3 position = ${(this.useDefaultPositionAttribute ? 'aPosition;' : 'vec3(0.0);')}
+  vec3 normal = ${(this.useDefaultNormalAttribute ? 'aNormal;' : 'vec3(0.0, 0.0, 1.0);')}
 
   // position,normalを改変するためのプリプロセス
   ${v.main.replaceAll(/\n/g, "\n  ")}
 
   // local -> model変換 -> global -> view変換 -> view
   vLocalPosition = position;
-  vGlobalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vec3 globalPosition = (vec4(position, 1.0) * uModelMatrix).xyz;
+  vGlobalPosition = globalPosition;
   vec4 viewModelPosition = vec4(position, 1.0) * uModelViewMatrix;
   vViewPosition = viewModelPosition.xyz;
   // NDCはいずれ...射影テクスチャか。あれでなんかする...なんかすると思う。
@@ -15997,98 +18468,124 @@ void main(){
       }
     }
 
+    // カメラヘルパー
+    class CameraHelper{
+      constructor(gl, cam){
+        // glを管理する必要は無いんだよな。これはVAOが管理するものだから。Helperが持っていても使う機会がない。
+        this.cam = null;
+        this.vao = null;
+        this.positionVectors = [];
+        for(let i=0; i<9; i++){ this.positionVectors.push(Vecta.create()); }
+        this.positions = new Float32Array(27);
+        this.init(gl, cam);
+      }
+      init(gl, cam){
+        this.cam = cam;
+        this.updatePositions();
+        const indices = [
+          0,1,0,2,0,3,0,4, 1,5,2,6,3,7,4,8, 1,2,2,4,4,3,3,1, 5,6,6,8,8,7,7,5
+        ];
+        this.vao = VAOWrapper.create(gl, {
+          count:9,
+          layout:`
+            @buffer
+              <vbo> p positions;
+              <ibo> l indices;
+            @layout
+              <pointer> 0 p;
+              <ibo> l;
+          `,
+          dict:{indices, positions:this.positions}
+        });
+      }
+      getClip(){
+        if(this.cam instanceof QCameraPerse){
+          const {fov, aspect, near, far} = this.cam;
+          const nearH = near*Math.tan(fov/2);
+          const nearW = nearH*aspect;
+          const farH = far*Math.tan(fov/2);
+          const farW = farH*aspect;
+          return {nearW, nearH, farW, farH};
+        }
+        if(this.cam instanceof QCameraOrtho){
+          const {width, height} = this.cam;
+          // width,heightは差し渡しの長さなので0.5倍する
+          return {nearW:width*0.5, nearH:height*0.5, farW:width*0.5, farH:height*0.5};
+        }
+        return {nearW:1, nearH:1, farW:1, farH:1};
+      }
+      updatePositions(){
+        const {eye, up, side, front, near, far} = this.cam;
+        for(let i=0; i<9; i++){
+          this.positionVectors[i].set(eye);
+        }
+        // frontは手前向きなので-を付ける
+        for(let i=1; i<=4; i++){ this.positionVectors[i].addScalar(front, -near); }
+        for(let i=5; i<=8; i++){ this.positionVectors[i].addScalar(front, -far); }
+        const {nearW, nearH, farW, farH} = this.getClip();
+        const coeff = [[-1,-1],[1,-1],[-1,1],[1,1]];
+        for(let i=0; i<4; i++){
+          this.positionVectors[i+1].addScalar(side, nearW*coeff[i][0]).addScalar(up, nearH*coeff[i][1]);
+          this.positionVectors[i+5].addScalar(side, farW*coeff[i][0]).addScalar(up, farH*coeff[i][1]);
+        }
+        for(let i=0; i<9; i++){
+          this.positions[3*i] = this.positionVectors[i].x;
+          this.positions[3*i+1] = this.positionVectors[i].y;
+          this.positions[3*i+2] = this.positionVectors[i].z;
+        }
+      }
+      update(){
+        this.updatePositions();
+        // この際にvaoはクリアされる。とはいえ基本VAOはバインドして用が済んだらクリアするんで、
+        // このタイミングでVAOが何かしらbindされていることはおそらく無いだろう。問題ない。
+        this.vao.updateVBO('p', this.positions);
+      }
+      display(){
+        this.vao.bind();
+        this.vao.drawElements('lines');
+        this.vao.unbind();
+      }
+      static create(gl, cam){
+        return new this(gl, cam);
+      }
+    }
+
     // カメラ部分を分離して、組み込む形にする。
     // キャンバスもカメラでしか使わないのでこっちでやる
     // Render3Dのupdateは廃止し、viewMatrixの準備はsetMatricesでやる。そうしないと複数のRender3Dを使い分ける際に不便。
-    // こっちでupdateする。autoResetもこっちで一元管理する。
+    // こっちでupdateする。
     // さらにactiveを用意してactiveでない場合はautoReset内のリセットイベントが発生しないようにする
     // カメラの切り替え用。
 
     // canvasは必須ではないがccを楽に用意するなら必須
     // リサイズやリセットはccを外部的に用意すればいかようにもできる
-    // easySetting:デフォルトはnoneで、perse, ortho, axis, freeを指定する。
-    // /で区切る。
-    // autoReset. 20フレームでダブルクリックで戻る。イージングはeaseInOutQuadでいいです。
 
-    // 未指定の場合のcamとccの仕様。
-    // ccが不要な場合もあるでしょう。そこでデフォルト（両方未指定）ではcamのみ用意する。
-    // cc:'axis'などとある場合のみ用意する。つまり使う場合はccのみ指定するということ。
-    // camのみ指定する場合、そのままではccは用意されない。文字列指定かダイレクト指定で用意できる。
-
-    // 分かりやすくまとめる
-    // 1. camとccが未指定：
-    // easySettingが無ければデフォのperseだけ用意して終わり。あるならそれに従う。
-    // 2. camだけ指定：
-    // 文字列で指定する場合はperseかorthoなら用意されるがそれ以外の場合はnullとなり、以降は上と同じ。
-    // 通常指定の場合、easySettingは機能せず、ccのないシステムとなる。
-    // 3. ccだけ指定：
-    // 文字列で指定する場合はaxisかfreeならデフォルトのperseカメラにそれがセットされる。
-    // cc「だけ」ということはカメラが無いので、ccも用意できず、文字列でしか指定できない。
-    // 4. camもccも指定
-    // 共に通常の指定方法ならそれが使われるだけ。文字列で指定すると然るべくデフォルトが使われる。
-    // たとえばcamだけきちんと用意してccは軸とか適当でいいよ...いつものy上でいいよ...の場合、'free'とか'axis'で済む。
-    // z上とかがいい場合はきちんと用意しましょう！！
-    // 文字列の指定の仕方によってはnullになるんで、その場合は上記のどれかになる。
     // autoReset廃止。reset:'none'/'manual'/'auto'.
+    // 指定方法ざっくり。ccを使う場合：ccのみ。ccを使わない場合：リサイズしたいならcamとcvs(とrm), しないならcamだけ。
+    // helperはglが無いと作れないので、helperを使う場合はきちんとglを渡す。なお保持はされず、作る際に使われるだけ。
     class CameraSystem{
       constructor(params = {}){
         // cvsは必須ではない。ただアスペクト比が考慮されないところだけが問題。
         // それが困る場合はきちんとカメラを整備する。
         const {
           cvs = null,
-          cam = null, cc = null, easySetting = 'default',
-          reset = 'none', resizeModule = null
+          cam = null, cc = null, //easySetting = 'default',
+          reset = 'none', resizeModule = null,
+          gl = null, helper = false
         } = params;
-        this.cvs = cvs;
 
-        // camに文字列を許す。ただしデフォルトの場合だけね。
-        if(typeof(cam) === 'string'){
-          // 変な文字列の場合はnull.
-          this.cam = (cam === 'perse' ? new QCameraPerse() : (cam === 'ortho' ? new QCameraOrtho : null));
-        }else{
-          this.cam = cam;
-        }
-        // camだけきちんと用意されていてccが文字列の場合でもうまく機能するようにしよう。
-        if(this.cam !== null && typeof(cc) === 'string'){
-          // 変な文字列の場合はnull.
-          if(cc === 'none' || cc === 'axis' || cc === 'free'){
-            this.cc = new CameraController(this.cvs, {
-              cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:cc
-            });
-          }else{
-            this.cc = null;
-          }
-        }else{
+        // ccがnullでない場合はcamとcvsはccから決める。つまりccを使う場合camとcvsは未指定OK.
+        if(cc !== null){
           this.cc = cc;
+          this.cvs = cc.getCanvas();
+          this.cam = cc.getCamera();
+        }else{
+          this.cc = null;
+          this.cam = cam;
+          // もしcvsがnullの場合、リサイズは期待できない。
+          this.cvs = cvs;
         }
-        const easySettingKey = CameraSystem.createEasySettingKey(easySetting);
-
-        if(this.cam === null){
-          if(this.cc === null){
-            // 両方nullの場合にのみ、easySettingを使う。noneの場合は用意されない。指定しない場合も同様。
-            // たとえばperseとだけ書くとperseのカメラだけ用意してccは無し。perse/freeでccがfreeで用意される。
-            // eye:[0, 1, 3], center:[0, 0, 0], top:[0, 1, 0],
-            // fov:Math.PI/3, aspect:WIW/WIH, near:0.01, far:400
-            this.cam = (easySettingKey.cam === 'perse' ? new QCameraPerse() : new QCameraOrtho());
-            if(easySettingKey.cc !== 'none'){
-              this.cc = new CameraController(this.cvs, {
-                cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:easySettingKey.cc
-              });
-            }
-          }else{
-            // cam「だけ」nullの場合はeasySettingKeyは無視されて、ccの文字列で判定される。axis/freeの場合に然るべく。
-            // この場合実質的にccは文字列でしか用意できない。なのでそれ以外の場合はnullとなり、機能しない。
-            this.cam = new QCameraPerse();
-            if(this.cc === 'axis' || this.cc === 'free'){
-              const rotationMode = this.cc;
-              this.cc = new CameraController(this.cvs, {
-                cam:this.cam, topAxis:new Vecta(0,1,0), rotationMode:rotationMode
-              });
-            }else{
-              this.cc = null;
-            }
-          }
-        }
+        // easySettingは廃止
 
         this.active = true;
 
@@ -16129,11 +18626,19 @@ void main(){
         }
 
         // リサイズモジュールが設定されている場合はリサイズの際にこれが実行される。
+        // this.cvsがnullの場合リサイズは不可能なので、その場合もここは用意されないものとする。(1.3.4～)
         this.resizeModule = resizeModule;
-        if(this.resizeModule !== null){
+        if(this.resizeModule !== null && this.cvs !== null){
           window.addEventListener('resize', (e) => {
             this.resize(window.innerWidth, window.innerHeight);
           });
+        }
+
+        // helper:trueの場合、cameraからhelperが作られ、updateで更新される。
+        // 作る際にglが用いられるが、管理されることはない。余計なプロパティがあるとバグの原因になる。
+        this.helper = null;
+        if(helper){
+          this.helper = CameraHelper.create(gl, this.cam);
         }
       }
       pause(){
@@ -16194,7 +18699,7 @@ void main(){
         this.active = false;
         return this;
       }
-      getCam(){
+      getCamera(){
         return this.cam;
       }
       getCC(){
@@ -16212,35 +18717,49 @@ void main(){
         }
         // ccを使わない場合は何もしない。
         if(this.cc !== null){ this.cc.update(); }
+        // helperを使わない場合は何もしない。
+        if(this.helper !== null){ this.helper.update(); }
         return;
       }
-      static createEasySettingKey(key = 'default'){
-        if(key === 'default'){ return {cam:'perse', cc:'none'}; }
-        const keys = key.split('/');
-        const result = {cam:'perse', cc:'none'};
-        for(const eachKey of keys){
-          if(eachKey === 'perse' || eachKey === 'ortho'){
-            result.cam = eachKey;
-          }
-          if(eachKey === 'none' || eachKey === 'axis' || eachKey === 'free'){
-            result.cc = eachKey;
-          }
-        }
-        return result;
+      getHelper(){
+        return this.helper;
+      }
+      static create(){
+        return new this(...arguments);
+      }
+      static createCamera(params = {}){
+        const {type = 'perse'} = params;
+        if(type === 'perse'){ return QCameraPerse.create(params); }
+        if(type === 'ortho'){ return QCameraOrtho.create(parmas); }
+        console.error('invalid camera type.');
+        return null;
+      }
+      static createController(cvs, params = {}){
+        return CameraController.create(cvs, params);
       }
     }
 
     // カメラとオビコンはCameraSystemという形で別途用意して組み込む
     // そうしないと複数のRender3Dを使い分ける際に不便なので
+    // camを確定引数にしよう。色々面倒だし。
     class Render3D extends RenderSystem{
-      constructor(gl, params = {}){
+      constructor(gl, cam = null, params = {}){
         super(gl);
-        const {
-          cameraSystem = null
-        } = params;
-        // cameraSystemを保持する必要性を今のところ感じないので破棄しよう。
-        const properCameraSystem = (cameraSystem === null ? new CameraSystem() : cameraSystem);
-        this.cam = properCameraSystem.getCam();
+        // CameraSystemかCameraControllerの場合はそこからカメラを取る。通常は普通にカメラをはめる。
+        this.cam = null;
+        if(cam instanceof CameraSystem){
+          this.cam = cam.getCamera();
+        }else if(cam instanceof CameraController){
+          this.cam = cam.getCamera();
+        }else if(cam instanceof QCameraPerse || cam instanceof QCameraOrtho){
+          this.cam = cam;
+        }
+        // nullの場合はデフォルト
+        // なおCameraSystemManagerを使う場合、敢えてデフォルトにして以降は随時使うカメラで置き換え、という場合もある。
+        // その場合は引数はglしか要らないわけ。
+        if(this.cam === null){
+          this.cam = QCameraPerse.create();
+        }
 
         // 事前に計算する必要ないと思う。どうせuniformセット時しか使わんし。
         // ライトのあれも使うのはカメラであって行列ではないし。だったらわざわざ事前に行列を設定する必要ないね。
@@ -16255,7 +18774,7 @@ void main(){
         // たとえば複数の画面でカメラを切り替えるようなユースケースを想定している。
         // このタイミングでview行列を計算する必要が生じたなら仕様変更もありうる。今は不要。
         if(cam instanceof CameraSystem){
-          this.cam = cam.getCam();
+          this.cam = cam.getCamera();
         }else{
           this.cam = cam;
         }
@@ -16286,13 +18805,172 @@ void main(){
 
         return this;
       }
+      static create(){
+        return new this(...arguments);
+      }
+      static createTools(layout = ``, dict = {}){
+        const result = parseDesignDescription(layout, Render3D.TOOL_DESIGN, {dict});
+        // カメラとコントローラーとライトを全部作る
+        const tools = {camera:{}, standard:{}, pbr:{}};
+
+        const {perse = null, ortho = null, controller = null} = result.camera;
+        if(perse !== null){
+          for(const data of perse.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.perse: invalid name specification.');
+            tools.camera[data.name] = new QCameraPerse(data);
+          }
+        }
+        if(ortho !== null){
+          for(const data of ortho.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.ortho: invalid name specification.');
+            tools.camera[data.name] = new QCameraOrtho(data);
+          }
+        }
+        // この時点でtoolsに登録されているカメラの情報を流用する形。それが無いと失敗する。
+        if(controller !== null){
+          for(const data of controller.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.controller: invalid name specification.');
+            tools.camera[data.name] = new CameraController(data.canvas, {
+              cam:tools.camera[data.cameraName], rotationMode:data.rotationMode, topAxis:data.topAxis
+            });
+          }
+        }
+
+        // レイアウトを別々にしないと色々まずいだろう。分けよう。
+        const {directional:sd = null, point:sp = null, spot:ss = null, layout:sLayout = null} = result.standard;
+        if(sd !== null){
+          for(const l of sd.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.directional: invalid name specification.');
+            tools.standard[l.name] = new StandardDirectionalLight(l);
+          }
+        }
+        if(sp !== null){
+          for(const l of sp.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.point: invalid name specification.');
+            tools.standard[l.name] = new StandardPointLight(l);
+          }
+        }
+        if(ss !== null){
+          for(const l of ss.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.spot: invalid name specification.');
+            tools.standard[l.name] = new StandardSpotLight(l);
+          }
+        }
+        if(sLayout !== null){
+          tools.standard.layout = [];
+          for(const ll of sLayout.content){
+            tools.standard.layout.push({
+              light:tools.standard[ll.name], location:ll.location
+            });
+          }
+        }
+
+        const {directional:pd = null, point:pp = null, spot:ps = null, layout:pLayout = null} = result.pbr;
+        if(pd !== null){
+          for(const l of sd.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.directional: invalid name specification.');
+            tools.pbr[l.name] = new PBRDirectionalLight(l);
+          }
+        }
+        if(pp !== null){
+          for(const l of sp.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.point: invalid name specification.');
+            tools.pbr[l.name] = new PBRPointLight(l);
+          }
+        }
+        if(ps !== null){
+          for(const l of ss.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.spot: invalid name specification.');
+            tools.pbr[l.name] = new PBRSpotLight(l);
+          }
+        }
+        if(pLayout !== null){
+          tools.pbr.layout = [];
+          for(const ll of pLayout.content){
+            tools.pbr.layout.push({
+              light:tools.pbr[ll.name], location:ll.location
+            });
+          }
+        }
+
+        return tools;
+      }
     }
 
+    Render3D.TOOL_DESIGN = {
+      layout:{
+        camera:{
+          perse:{
+            type:'enum',
+            keys:['name', 'eye', 'center', 'top', 'fov', 'aspect', 'near', 'far'],
+            values:['perseCamera', [0,0,4], [0,0,0], [0,1,0], Math.PI/3, 1, 0.01, 100]
+          },
+          ortho:{
+            type:'enum',
+            keys:['name', 'eye', 'center', 'top', 'width', 'height', 'near', 'far'],
+            values:['orthoCamera', [0,0,4], [0,0,0], [0,1,0], 8, 8, 0.01, 100]
+          },
+          controller:{
+            type:'enum',
+            keys:['name', 'canvas', 'cameraName', 'rotationMode', 'topAxis'],
+            values:['controller', null, 'perseCamera', 'axis', [0,1,0]]
+          }
+        },
+        standard:{
+          directional:{
+            type:'enum',
+            keys:['name', 'direction', 'diffuseColor', 'specularColor', 'specularPower'],
+            values:['sdl', [0,0,1], [0.5,0.5,0.5], [1,1,1], 20]
+          },
+          point:{
+            type:'enum',
+            keys:['name', 'position', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay'],
+            values:['spl', [0,0,3], [0.5,0.5,0.5], [1,1,1], 20, 3, 1]
+          },
+          spot:{
+            type:'enum',
+            keys:['name', 'position', 'direction', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay', 'coneCos'],
+            values:['ssl', [0,0,6], [0,0,1], [0.5,0.5,0.5], [1,1,1], 20, 6, 1, 0.95]
+          },
+          layout:{
+            type:'enum',
+            keys:['name', 'location'],
+            values:['light', 0]
+          }
+        },
+        pbr:{
+          directional:{
+            type:'enum',
+            keys:['name', 'direction', 'color'],
+            values:['pdl', [0,0,1], [0.5,0.5,0.5]]
+          },
+          point:{
+            type:'enum',
+            keys:['name', 'position', 'color', 'distance', 'decay'],
+            values:['ppl', [0,0,3], [0.5,0.5,0.5], 20, 1]
+          },
+          spot:{
+            type:'enum',
+            keys:['name', 'position', 'direction', 'color', 'distance', 'decay', 'coneCos', 'penumbraCos'],
+            values:['psl', [0,0,3], [0,0,1], [0.5,0.5,0.5], 10, 1, 0.5, 1]
+          },
+          layout:{
+            type:'enum',
+            keys:['name', 'location'],
+            values:['light', 0]
+          }
+        }
+      }
+    };
+
     class NoLightRender3D extends Render3D{
-      constructor(gl, params = {}){
-        super(gl, params);
+      constructor(gl, cam = null, params = {}){
+        super(gl, cam, params);
         this.shaderFactory = (options) => { return new NoLightShader(options); }
         this.addShader();
+      }
+      static create(){
+        return new this(...arguments);
       }
     }
 
@@ -16374,10 +19052,13 @@ void main(){
     }
 
     // ------------------------light----------------------- //
+    // setterから「set_」をどかそう。
     class PunctualLight{
       constructor(){
         this.active = true;
         this.viewMode = false; // trueにするとビュー補正をやめる。やめるので、ビュー視点での設定になる。directionとposition両方。
+        this.props = {}; // ライトごとに異なるが大体似通ってるのでそれぞれにsetterを用意する。
+        // なお、使わない内容でもsetterを呼び出せるが、バリデーションにより、何もセットされない。getterの場合はもちろんundefinedが返る。
       }
       activate(){
         this.active = true;
@@ -16395,16 +19076,18 @@ void main(){
         // true/falseで切り替え
         this.viewMode = isViewMode;
       }
-      setParam(params = {}){
-        // constructorで自クラスにアクセスできる。もちろんパラメータも抽出できる。
-        for(const key of this.constructor.Parameters){
-          if(params[key] === undefined) continue;
-          this[`set_${key}`] = params[key];
+      setProperties(props = {}){
+        // constructorで自クラスにアクセスできる。もちろんプロパティも抽出できる。
+        for(const key of this.constructor.Properties){
+          if(props[key] === undefined) continue;
+          this[key] = props[key];
         }
         return this;
       }
-      setLight(pg, params = {}){
-        const {cam = null, name = 'uLight'} = params;
+      setLight(pg, props = {}){
+        const {cam = null, name = 'uLight'} = props;
+        // 分かりにくいがこの関数内のthis.directionやthis.positionはgetterで出している。
+        // メインループでも出しまくっている。
         const prevDirection = (this.direction instanceof Vecta ? this.direction.copy() : null);
         const prevPosition = (this.position instanceof Vecta ? this.position.copy() : null);
 
@@ -16413,106 +19096,120 @@ void main(){
           if(prevDirection !== null){ view.applyN(this.direction); }
           if(prevPosition !== null){ view.applyP(this.position); }
         }
-        pg.setUniform(name, this);
+        // thisをthis.propsに変更
+        pg.setUniform(name, this.props);
         if(prevDirection !== null){ this.direction.set(prevDirection); }
         if(prevPosition !== null){ this.position.set(prevPosition); }
       }
-      set set_direction(value){ this.direction = Vecta.create(value); }
-      set set_position(value){ this.position = Vecta.create(value); }
-      set set_distance(value){ this.distance = value; }
-      set set_decay(value){ this.decay = value; }
-      set set_coneCos(value){ this.coneCos = value; }
-      set set_penumbraCos(value){ this.penumbraCos = value; }
-      set set_color(value){ this.color = coulour3(value); }
-      set set_diffuseColor(value){ this.diffuseColor = coulour3(value); }
-      set set_specularColor(value){ this.specularColor = coulour3(value); }
-      set set_specularPower(value){ this.specularPower = value; }
+      // setter.
+      set direction(value){ this.props.direction.set(value); }
+      set position(value){ this.props.position.set(value); }
+      set distance(value){ this.props.distance = value; }
+      set decay(value){ this.props.decay = value; }
+      set coneCos(value){ this.props.coneCos = value; }
+      set penumbraCos(value){ this.props.penumbraCos = value; }
+      set color(value){ this.props.color = coulour3(value); }
+      set diffuseColor(value){ this.props.diffuseColor = coulour3(value); }
+      set specularColor(value){ this.props.specularColor = coulour3(value); }
+      set specularPower(value){ this.props.specularPower = value; }
+      // getter.
+      get direction(){ return this.props.direction; }
+      get position(){ return this.props.position; }
+      get distance(){ return this.props.distance; }
+      get decay(){ return this.props.decay; }
+      get coneCos(){ return this.props.coneCos; }
+      get penumbraCos(){ return this.props.penumbraCos; }
+      get color(){ return this.props.color; }
+      get diffuseColor(){ return this.props.diffuseColor; }
+      get specularColor(){ return this.props.specularColor; }
+      get specularPower(){ return this.props.specularPower; }
     }
 
     class StandardDirectionalLight extends PunctualLight{
       constructor(params = {}){
         super();
-        this.direction = Vecta.create(0,0,1);
-        this.diffuseColor = [0.5,0.5,0.5];
-        this.specularColor = [1,1,1];
-        this.specularPower = 20;
-        this.setParam(params);
+        this.props.direction = Vecta.create(0,0,1);
+        this.props.diffuseColor = [0.5,0.5,0.5];
+        this.props.specularColor = [1,1,1];
+        this.props.specularPower = 20;
+        this.setProperties(params);
       }
     }
-    StandardDirectionalLight.Parameters = ['direction', 'diffuseColor', 'specularColor', 'specularPower'];
+    StandardDirectionalLight.Properties = ['direction', 'diffuseColor', 'specularColor', 'specularPower'];
 
     class StandardPointLight extends PunctualLight{
-      constructor(params = {}){
+      constructor(props = {}){
         super();
-        this.position = Vecta.create(0,0,3);
-        this.distance = 3;
-        this.decay = 1;
-        this.diffuseColor = [0.5, 0.5, 0.5];
-        this.specularColor = [1,1,1];
-        this.specularPower = 20;
-        this.setParam(params);
+        this.props.position = Vecta.create(0,0,3);
+        this.props.distance = 3;
+        this.props.decay = 1;
+        this.props.diffuseColor = [0.5, 0.5, 0.5];
+        this.props.specularColor = [1,1,1];
+        this.props.specularPower = 20;
+        this.setProperties(props);
       }
     }
-    StandardPointLight.Parameters = ['position', 'distance', 'decay', 'diffuseColor', 'specularColor', 'specularPower'];
+    StandardPointLight.Properties = ['position', 'distance', 'decay', 'diffuseColor', 'specularColor', 'specularPower'];
 
     class StandardSpotLight extends PunctualLight{
-      constructor(params = {}){
+      constructor(props = {}){
         super();
-        this.direction = Vecta.create(0,0,1);
-        this.position = Vecta.create(0,0,6);
-        this.distance = 6;
-        this.decay = 1;
-        this.coneCos = 0.95;
-        this.diffuseColor = [0.5, 0.5, 0.5];
-        this.specularColor = [1,1,1];
-        this.specularPower = 20;
-        this.setParam(params);
+        this.props.direction = Vecta.create(0,0,1);
+        this.props.position = Vecta.create(0,0,6);
+        this.props.distance = 6;
+        this.props.decay = 1;
+        this.props.coneCos = 0.95;
+        this.props.diffuseColor = [0.5, 0.5, 0.5];
+        this.props.specularColor = [1,1,1];
+        this.props.specularPower = 20;
+        this.setProperties(props);
       }
     }
-    StandardSpotLight.Parameters = ['direction', 'position', 'distance', 'decay', 'coneCos', 'diffuseColor', 'specularColor', 'specularPower'];
+    StandardSpotLight.Properties = ['direction', 'position', 'distance', 'decay', 'coneCos', 'diffuseColor', 'specularColor', 'specularPower'];
 
     class PBRDirectionalLight extends PunctualLight{
-      constructor(params = {}){
+      constructor(props = {}){
         super();
-        this.direction = Vecta.create(0,0,1);
-        this.color = [0.5, 0.5, 0.5];
-        this.setParam(params);
+        this.props.direction = Vecta.create(0,0,1);
+        this.props.color = [0.5, 0.5, 0.5];
+        this.setProperties(props);
       }
     }
-    PBRDirectionalLight.Parameters = ['direction', 'color'];
+    PBRDirectionalLight.Properties = ['direction', 'color'];
 
     class PBRPointLight extends PunctualLight{
-      constructor(params = {}){
+      constructor(props = {}){
         super();
-        this.position = Vecta.create(0,0,3);
-        this.distance = 20;
-        this.decay = 1;
-        this.color = [0.5,0.5,0.5];
-        this.setParam(params);
+        this.props.position = Vecta.create(0,0,3);
+        this.props.distance = 20;
+        this.props.decay = 1;
+        this.props.color = [0.5,0.5,0.5];
+        this.setProperties(props);
       }
     }
-    PBRPointLight.Parameters = ['position', 'distance', 'decay', 'color'];
+    PBRPointLight.Properties = ['position', 'distance', 'decay', 'color'];
 
     class PBRSpotLight extends PunctualLight{
-      constructor(params = {}){
+      constructor(props = {}){
         super();
-        this.direction = Vecta.create(0,0,1);
-        this.position = Vecta.create(0,0,3);
-        this.distance = 10;
-        this.decay = 1;
-        this.coneCos = 0.5;
-        this.penumbraCos = 1;
-        this.color = [0.5, 0.5, 0.5];
-        this.setParam(params);
+        this.props.direction = Vecta.create(0,0,1);
+        this.props.position = Vecta.create(0,0,3);
+        this.props.distance = 10;
+        this.props.decay = 1;
+        this.props.coneCos = 0.5;
+        this.props.penumbraCos = 1;
+        this.props.color = [0.5, 0.5, 0.5];
+        this.setProperties(props);
       }
     }
-    PBRSpotLight.Parameters = ['direction', 'position', 'distance', 'decay', 'coneCos', 'penumbraCos', 'color']
+    PBRSpotLight.Properties = ['direction', 'position', 'distance', 'decay', 'coneCos', 'penumbraCos', 'color'];
+    // 処理の切り分けは済んでるので、これ以降の変更はありません。
 
     // lighting Renderers.
 
     class LightRender3D extends Render3D{
-      constructor(gl, params = {}){
-        super(gl, params);
+      constructor(gl, cam = null, params = {}){
+        super(gl, cam, params);
         this.lights = {
           directional: Array(16).fill(null),
           point: Array(16).fill(null),
@@ -16536,6 +19233,26 @@ void main(){
       }
       setSpot(l, slotIndex = 0){
         this.lights.spot[slotIndex] = l;
+        return this;
+      }
+      setLight(l, slotIndex = 0){
+        // lのところにArrayがある場合はlightとlocationを元にまとめて指定する
+        if(Array.isArray(l)){
+          for(const data of l){
+            this.setLight(data.light, data.location);
+          }
+          return this;
+        }
+        // 通常の場合
+        if(l instanceof StandardDirectionalLight || l instanceof PBRDirectionalLight){
+          this.lights.directional[slotIndex] = l;
+        }
+        if(l instanceof StandardPointLight || l instanceof PBRPointLight){
+          this.lights.point[slotIndex] = l;
+        }
+        if(l instanceof StandardSpotLight || l instanceof PBRSpotLight){
+          this.lights.spot[slotIndex] = l;
+        }
         return this;
       }
       lightOn(){
@@ -16603,8 +19320,8 @@ void main(){
 
     // StandardLight
     class StandardLightRender3D extends LightRender3D{
-      constructor(gl, params = {}){
-        super(gl, params);
+      constructor(gl, cam = null, params = {}){
+        super(gl, cam, params);
         this.shaderFactory = (options) => { return new StandardLightingShader(options); };
         this.addShader();
       }
@@ -16625,12 +19342,15 @@ void main(){
 
         return this;
       }
+      static create(){
+        return new this(...arguments);
+      }
     }
 
     // PBRLight
     class PBRLightRender3D extends LightRender3D{
-      constructor(gl, params = {}){
-        super(gl, params);
+      constructor(gl, cam = null, params = {}){
+        super(gl, cam, params);
         this.shaderFactory = (options) => { return new PBRLightingShader(options); };
         this.addShader();
         this.pbrParams = {metallic:0.5, roughness:0.5};
@@ -16663,6 +19383,9 @@ void main(){
 
         return this;
       }
+      static create(){
+        return new this(...arguments);
+      }
     }
 
     // 3D関連
@@ -16693,15 +19416,17 @@ void main(){
     applications.alignmentContours = alignmentContours;
     applications.MCS = MCS;
     applications.MCSArray = MCSArray;
+    applications.createFSS = createFSS; // 追加。座標系取得用の関数。
 
     // Text関連
     applications.parseData = parseData;
+    applications.parseSVG = parseSVG;
     applications.parseCmdToText = parseCmdToText;
     applications.getSVGContours = getSVGContours;
     applications.getTextContours = getTextContours;
 
     // Shader.
-    applications.codeSnipets = codeSnipets;
+    //applications.codeSnipets = codeSnipets; // 社外秘
     applications.ShaderPrototype = ShaderPrototype;
     applications.PlaneShader = PlaneShader;
     applications.PointShader = PointShader;
@@ -16718,6 +19443,7 @@ void main(){
     applications.NoLightShader = NoLightShader;
     applications.ResizeModule = ResizeModule;
     applications.CameraSystem = CameraSystem;
+    applications.CameraHelper = CameraHelper;
     applications.Render3D = Render3D;
     applications.CameraSystemManager = CameraSystemManager;
     applications.NoLightRender3D = NoLightRender3D;
@@ -16725,13 +19451,18 @@ void main(){
     applications.StandardLightRender3D = StandardLightRender3D;
     applications.PBRLightRender3D = PBRLightRender3D;
 
-    // lights. 略記法も追加(SDL, SPL, SSL, PDL, PPL, PSL)
+    // lights.
+    applications.PunctualLight = PunctualLight;
     applications.StandardDirectionalLight = StandardDirectionalLight;
     applications.StandardPointLight = StandardPointLight;
     applications.StandardSpotLight = StandardSpotLight;
     applications.PBRDirectionalLight = PBRDirectionalLight;
     applications.PBRPointLight = PBRPointLight;
     applications.PBRSpotLight = PBRSpotLight;
+
+    // エイリアス。PunctualLightの略記法としてLight.
+    // SDL, SPL, SSL, PDL, PPL, PSL
+    applications.Light = PunctualLight;
     applications.SDL = StandardDirectionalLight;
     applications.SPL = StandardPointLight;
     applications.SSL = StandardSpotLight;
@@ -16759,6 +19490,7 @@ void main(){
   exports.foxTess = foxTess;
   exports.fox3Dtools = fox3Dtools;
   exports.webglUtils = webglUtils;
+  exports.foxGeometryTools = foxGeometryTools;
   exports.foxApplications = foxApplications;
 
   Object.defineProperty(exports, "__esModule", { value: true });
