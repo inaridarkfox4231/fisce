@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.4.0
+ * @version 1.4.1
  */
 
 (function (global, factory) {
@@ -11679,6 +11679,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
             return '';
           case 'variant':
             return null;
+          case 'boolean':
+            return false;
         }
         console.error(`getInitialAttributeValue/${type}: invalid type.`);
         return null;
@@ -11690,6 +11692,9 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
             // Number化して代入
             attribute.value = Number(v);
             return;
+          case 'boolean':
+            // Boolean化して代入
+            attribute.value = Boolean(v);
           case 'array':
             // vは配列とする。vの長さに合わせる。
             for(let i=0; i<v.length; i++){
@@ -11718,6 +11723,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
             attribute.value = v.toString();
             return;
           case 'variant':
+            // 直接代入
             attribute.value = v;
             return;
         }
@@ -11729,6 +11735,9 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         switch(type){
           case 'number':
             return [value];
+          case 'boolean':
+            // 0/1で返す
+            return [(value ? 1 : 0)];
           case 'vector':
           case 'quarternion':
           case 'matrix3':
@@ -11760,10 +11769,12 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         }
       }
       setIndex(i){
+        // indexをセットする関数。
         this.index = i;
         return this;
       }
       addAttribute(name, type){
+        // すでに存在する場合は上書きされて元の値は破棄される
         this.attrs[name] = Attribute.create(type);
         return this;
       }
@@ -11819,13 +11830,14 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         return this.getValue('vc');
       }
       set a(values){
-        // 汎用設定関数。使う機会はあんまないかもだけどね。
+        // 汎用設定関数。たとえばv.a={p:[0,0,0],n:[0,0,1],...}でおわり。
         for(const [name, attribute] of Object.entries(values)){
           this.setValue(name, attribute);
         }
       }
       get a(){
-        // まあ一応用意するか。内容的にはsetの逆に当たる。だいたいで。
+        // 内容的にはsetの逆に当たる。たとえば{p:[0,0,0],n:[0,0,1],...}が返る。
+        // なおset aとget aを組み合わせるとアトリビュートのコピー処理が一瞬で終わる。
         const attributes = {};
         for(const name of Object.keys(this.attrs)){ attributes[name] = this.getValue(name); }
         return attributes;
@@ -11869,13 +11881,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // this.typesでアトリビュートの名前を取ろう
         const attributeNames = Object.keys(this.types);
 
-        // modifyでいいじゃん
-        g.modify((v) => {
-          for(const name of attributeNames){
-            v.setValue(name, this.vertices[v.index].getValue(name));
-          }
-        });
-        // はいおわり
+        // modifyでいいじゃん。一行で終わる。
+        g.modify((v) => { v.a = this.vertices[v.index].a; });
 
         for(const [iboName, ibo] of Object.entries(this.ibos)){
           g.ibos[iboName] = [];
@@ -11889,6 +11896,36 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         }
 
         return g;
+      }
+      subCopy(attribute = null, value = true){
+        // attributeがvalueのものだけ抜き出してGeometryを作り、それを返す関数。
+        if(attribute === null){ return this.copy(); }
+        if(typeof(attribute) !== 'string'){
+          console.error('subCopy: invalid attribute.'); return null;
+        }
+        if(!this.a.includes(attribute)){
+          console.error(`subCopy: this geometry has no attribute ${attribute}.`); return null;
+        }
+
+        // ここから先はこのattributeをgeomが持っていると仮定する。
+        const subVertices = this.v.filter((v) => v.getValue(attribute) === value);
+        const geom = new this.constructor({count:subVertices.length, types:this.types});
+
+        // geomのverticesにsubVerticesの内容をぶち込んでいくが、indexも同時にコピーする。
+        // IBOについても、自身のIBOでsubVerticesに出てくるものだけで構成されているものをfilterで取り揃える。
+        // 最後にresetIndicesで帳尻合わせをする
+        geom.modify((v) => {
+          const targetVertex = subVertices[v.index];
+          v.setIndex(targetVertex.index);
+          // コピーが一瞬なんだが...こわ...
+          v.a = targetVertex.a;
+        });
+        for(const [iboName, ibo] of Object.entries(this.ibos)){
+          const subIBO = ibo.filter(fragment => fragment.every((index) => this.v[index].getValue(attribute) === value));
+          geom.addIBO(iboName, subIBO);
+        }
+        geom.resetIndices();
+        return geom;
       }
       addAttribute(name, type){
         for(const v of this.vertices){ v.addAttribute(name, type); }
@@ -11973,20 +12010,33 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         this.removeIBO(oldName);
         return this;
       }
+      get v(){
+        // 単純にthis.verticesを返すだけ。ありそうでなかったので追加しておく。
+        return this.vertices;
+      }
+      get a(){
+        // this.typesにObject.keysをかました結果が返る。たとえば['p','n','uv','grid']とかそういうの。
+        // 場合によっては便利かも？
+        return Object.keys(this.types);
+      }
       set f(data = []){
         // fとl限定でセッターを用意する
         // 3区切りで放り込む形
+        // dataが配列の配列のような形であっても機能するよう、限界フラットを取る。
+        const flattened = data.flat(Infinity);
         this.ibos.f = [];
-        for(let i=0; i<data.length/3; i++){
-          this.ibos.f.push([data[3*i], data[3*i+1], data[3*i+2]]);
+        for(let i=0; i<flattened.length/3; i++){
+          this.ibos.f.push(flattened.slice(3*i, 3*(i+1)));
         }
       }
       set l(data = []){
         // fとl限定でセッターを用意する
         // 2区切りで放り込む形
+        // こちらもaddIBOと同じく配列の配列でもOKにしよう
+        const flattened = data.flat(Infinity);
         this.ibos.l = [];
-        for(let i=0; i<data.length/2; i++){
-          this.ibos.l.push([data[2*i], data[2*i+1]]);
+        for(let i=0; i<flattened.length/2; i++){
+          this.ibos.l.push(flattened.slice(2*i, 2*(i+1)));
         }
       }
       get f(){
@@ -12184,8 +12234,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
               for(let k=0; k<sizes[name]-value.length; k++){ value.push(0); }
             }
             const type = types[name];
-            // number,string,variantはsizeによらず0番のみ使用
-            if(type === 'number' || type === 'string' || type === 'variant'){
+            // number,boolean,string,variantはsizeによらず0番のみ使用
+            if(type === 'number' || type === 'boolean' || type === 'string' || type === 'variant'){
               geom.setValue(i, name, value[0]);
             }else{
               geom.setValue(i, name, value);
@@ -13348,7 +13398,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     function createRoundCuboid(geometry3DClass, params = {}){
       const {size = [1,1,1], radius = 0.2, details = [10,10,10,10], line = 'none', transform = ``, dict = {}} = params;
       const [CBX, CBY, CBZ] = createDetails(size, [[0,4096], [0,4096], [0,4096]]);
-      const [DTX, DTY, DTZ, DTA] = createDetails(details, [[3,4096], [3,4096], [3,4096], [3,4096]]);
+      // ここは1,1,1,1でいいか。
+      const [DTX, DTY, DTZ, DTA] = createDetails(details, [[1,4096], [1,4096], [1,4096], [1,4096]]);
       const CBR = radius;
 
       // ベース点列は下から上、奥->手前->奥、円弧->直線->円弧
@@ -13466,8 +13517,10 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       loadImage, loadArrayBuffer, loadJSON
     } = foxUtils;
     const {Interaction, Inspector} = foxIA;
-    const {Vecta, MT3, MT4, QCameraPerse, QCameraOrtho} = fox3Dtools;
+    const {Vecta, MT3, MT4, Quarternion, QCameraPerse, QCameraOrtho} = fox3Dtools;
     const {coulour3} = foxColor;
+
+    const {Geometry, Geometry3D, GeometryBuilder} = foxGeometryTools;
 
     // isActiveを追加。カメラが動いてるときだけ更新するなどの用途がある。
     // configも追加。操作性をいじるための機能。actionCoeffを変更できる。デフォルトは1. thresholdも0.01とかでいいかもだしな。
@@ -16283,55 +16336,6 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // もうこの時点で行列にしてしまった方が合理的。
         return {data:result, frames};
       }
-      /*
-      createVAO_old(gl, options = {}){
-        // location設定がデフォルトになってるので破棄します。
-        // 理由は、結局これだと複数のvaoをバッファを元に作りたいときに不便。
-        // 具体的には複数頂点色、複数UV、スキンメッシュなど。
-
-        // VAOWrapperを作ろう
-        // meshesの翻訳データに基づいて新しく作る
-        // locationですが、指定したものだけ用意する形にする。指定してなければ何にも起きない
-        // こっちで新たにlocationのセマンティクスに基づいたオブジェクトを用意してそれに従って作る
-        // これであれ、何気にCOLOR_1とかTEXCOORD_1とかも使えるようになるわね。
-        // faceは使う場合は文字列で名前を指定する。nullにすると使われない。そういう場合もある。
-        const {meshId = 0, primitiveId = 0, location = {}, face = 'f'} = options;
-
-        // POSITIONとかいろいろ入ってる。indexBuffer関連はINDICESを使おう。
-        const attributeNames = Object.keys(location);
-
-        const primitive = this.meshes[meshId].primitives[primitiveId];
-        const {attributes, indices} = primitive;
-        let count = 0;
-        const vbo = {};
-        const ibo = {};
-        const layout = [];
-
-        for(const name of attributeNames){
-          if(attributes[name] === undefined) continue;
-          const attr = attributes[name];
-          vbo[name] = {data:attr.data};
-          layout[location[name]] = {
-            buffer:name, size:attr.size, type:attr.type, normalized:attr.normalized,
-            isInteger:(!attr.normalized && (attr.type === 5125 || attr.type === 5213 || attr.type === 5121))
-          };
-          // あんま綺麗ではないが、おそらく全部一緒なので、これでいいっすね。まあ違ってたら大問題だわ。普通に考えて。
-          count = attr.count;
-        }
-        if(face !== null && typeof(face) === 'string'){
-          if(face === ''){
-            // 空文字の場合は'f'扱い
-            ibo.f = {data:indices.data};
-          }else{
-            ibo[face] = {data:indices.data};
-          }
-        }
-
-        // あとは作るだけ
-        const vao = VAOWrapper.create(gl, {count, vbo, ibo, layout});
-        return vao;
-      }
-      */
       createVAO(gl, options = {}){
         // VAOWrapperを作ろう
         // meshesの翻訳データに基づいて作る
@@ -16576,13 +16580,13 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
 
               vao.pointer(attr.location, {
                 buffer:vboName, size:attr.size, type:attr.type, normalized:attr.normalized
-              }, false);
-              vao.enable(attr.location, false);
+              }, null);
+              vao.enable(attr.location, null);
               if(double){
                 vao.pointer(attr.location + attributeNum, {
                   buffer:`${vboName}__shifted__`, size:attr.size, type:attr.type, normalized:attr.normalized
-                }, false);
-                vao.enable(attr.location + attributeNum, false);
+                }, null);
+                vao.enable(attr.location + attributeNum, null);
               }
             }
             vao.unbind();
@@ -17556,7 +17560,162 @@ void main(){
         this.currentProgram.setUniform(...arguments);
         return this;
       }
+      static createTools(layout = ``, dict = {}){
+        // RenderSystemの関数に格上げ。いずれtextureとか作れるようにする。
+        const result = parseDesignDescription(layout, RenderSystem.TOOL_DESIGN, {dict});
+        // カメラとコントローラーとライトを全部作る
+        const tools = {camera:{}, standard:{}, pbr:{}};
+
+        const {perse = null, ortho = null, controller = null} = result.camera;
+        if(perse !== null){
+          for(const data of perse.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.perse: invalid name specification.');
+            tools.camera[data.name] = new QCameraPerse(data);
+          }
+        }
+        if(ortho !== null){
+          for(const data of ortho.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.ortho: invalid name specification.');
+            tools.camera[data.name] = new QCameraOrtho(data);
+          }
+        }
+        // この時点でtoolsに登録されているカメラの情報を流用する形。それが無いと失敗する。
+        if(controller !== null){
+          for(const data of controller.content){
+            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.controller: invalid name specification.');
+            tools.camera[data.name] = new CameraController(data.canvas, {
+              cam:tools.camera[data.cameraName], rotationMode:data.rotationMode, topAxis:data.topAxis
+            });
+          }
+        }
+
+        // レイアウトを別々にしないと色々まずいだろう。分けよう。
+        const {directional:sd = null, point:sp = null, spot:ss = null, layout:sLayout = null} = result.standard;
+        if(sd !== null){
+          for(const l of sd.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.directional: invalid name specification.');
+            tools.standard[l.name] = new StandardDirectionalLight(l);
+          }
+        }
+        if(sp !== null){
+          for(const l of sp.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.point: invalid name specification.');
+            tools.standard[l.name] = new StandardPointLight(l);
+          }
+        }
+        if(ss !== null){
+          for(const l of ss.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.spot: invalid name specification.');
+            tools.standard[l.name] = new StandardSpotLight(l);
+          }
+        }
+        if(sLayout !== null){
+          tools.standard.layout = [];
+          for(const ll of sLayout.content){
+            tools.standard.layout.push({
+              light:tools.standard[ll.name], location:ll.location
+            });
+          }
+        }
+
+        const {directional:pd = null, point:pp = null, spot:ps = null, layout:pLayout = null} = result.pbr;
+        if(pd !== null){
+          for(const l of pd.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.directional: invalid name specification.');
+            tools.pbr[l.name] = new PBRDirectionalLight(l);
+          }
+        }
+        if(pp !== null){
+          for(const l of pp.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.point: invalid name specification.');
+            tools.pbr[l.name] = new PBRPointLight(l);
+          }
+        }
+        if(ps !== null){
+          for(const l of ps.content){
+            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.spot: invalid name specification.');
+            tools.pbr[l.name] = new PBRSpotLight(l);
+          }
+        }
+        if(pLayout !== null){
+          tools.pbr.layout = [];
+          for(const ll of pLayout.content){
+            tools.pbr.layout.push({
+              light:tools.pbr[ll.name], location:ll.location
+            });
+          }
+        }
+
+        return tools;
+      }
     }
+
+    // RenderSystemの関数に格上げ
+    RenderSystem.TOOL_DESIGN = {
+      layout:{
+        camera:{
+          perse:{
+            type:'enum',
+            keys:['name', 'eye', 'center', 'top', 'fov', 'aspect', 'near', 'far'],
+            values:['perseCamera', [0,0,4], [0,0,0], [0,1,0], Math.PI/3, 1, 0.01, 100]
+          },
+          ortho:{
+            type:'enum',
+            keys:['name', 'eye', 'center', 'top', 'width', 'height', 'near', 'far'],
+            values:['orthoCamera', [0,0,4], [0,0,0], [0,1,0], 8, 8, 0.01, 100]
+          },
+          controller:{
+            type:'enum',
+            keys:['name', 'canvas', 'cameraName', 'rotationMode', 'topAxis'],
+            values:['controller', null, 'perseCamera', 'axis', [0,1,0]]
+          }
+        },
+        standard:{
+          directional:{
+            type:'enum',
+            keys:['name', 'direction', 'diffuseColor', 'specularColor', 'specularPower'],
+            values:['sdl', [0,0,1], [0.5,0.5,0.5], [1,1,1], 20]
+          },
+          point:{
+            type:'enum',
+            keys:['name', 'position', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay'],
+            values:['spl', [0,0,3], [0.5,0.5,0.5], [1,1,1], 20, 3, 1]
+          },
+          spot:{
+            type:'enum',
+            keys:['name', 'position', 'direction', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay', 'coneCos'],
+            values:['ssl', [0,0,6], [0,0,1], [0.5,0.5,0.5], [1,1,1], 20, 6, 1, 0.95]
+          },
+          layout:{
+            type:'enum',
+            keys:['name', 'location'],
+            values:['light', 0]
+          }
+        },
+        pbr:{
+          directional:{
+            type:'enum',
+            keys:['name', 'direction', 'color'],
+            values:['pdl', [0,0,1], [0.5,0.5,0.5]]
+          },
+          point:{
+            type:'enum',
+            keys:['name', 'position', 'color', 'distance', 'decay'],
+            values:['ppl', [0,0,3], [0.5,0.5,0.5], 20, 1]
+          },
+          spot:{
+            type:'enum',
+            keys:['name', 'position', 'direction', 'color', 'distance', 'decay', 'coneCos', 'penumbraCos'],
+            values:['psl', [0,0,3], [0,0,1], [0.5,0.5,0.5], 10, 1, 0.5, 1]
+          },
+          layout:{
+            type:'enum',
+            keys:['name', 'location'],
+            values:['light', 0]
+          }
+        }
+      }
+    };
 
     // 何にもしないFree. vsのoutputは自前で用意する。どうにでもできる。
     // たとえば2Dで簡単なattribute描画したい場合などに使う
@@ -18808,160 +18967,7 @@ void main(){
       static create(){
         return new this(...arguments);
       }
-      static createTools(layout = ``, dict = {}){
-        const result = parseDesignDescription(layout, Render3D.TOOL_DESIGN, {dict});
-        // カメラとコントローラーとライトを全部作る
-        const tools = {camera:{}, standard:{}, pbr:{}};
-
-        const {perse = null, ortho = null, controller = null} = result.camera;
-        if(perse !== null){
-          for(const data of perse.content){
-            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.perse: invalid name specification.');
-            tools.camera[data.name] = new QCameraPerse(data);
-          }
-        }
-        if(ortho !== null){
-          for(const data of ortho.content){
-            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.ortho: invalid name specification.');
-            tools.camera[data.name] = new QCameraOrtho(data);
-          }
-        }
-        // この時点でtoolsに登録されているカメラの情報を流用する形。それが無いと失敗する。
-        if(controller !== null){
-          for(const data of controller.content){
-            TypeErrorCatcher.throw(data.name, 'string', 'createTools camera.controller: invalid name specification.');
-            tools.camera[data.name] = new CameraController(data.canvas, {
-              cam:tools.camera[data.cameraName], rotationMode:data.rotationMode, topAxis:data.topAxis
-            });
-          }
-        }
-
-        // レイアウトを別々にしないと色々まずいだろう。分けよう。
-        const {directional:sd = null, point:sp = null, spot:ss = null, layout:sLayout = null} = result.standard;
-        if(sd !== null){
-          for(const l of sd.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.directional: invalid name specification.');
-            tools.standard[l.name] = new StandardDirectionalLight(l);
-          }
-        }
-        if(sp !== null){
-          for(const l of sp.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.point: invalid name specification.');
-            tools.standard[l.name] = new StandardPointLight(l);
-          }
-        }
-        if(ss !== null){
-          for(const l of ss.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools standard.spot: invalid name specification.');
-            tools.standard[l.name] = new StandardSpotLight(l);
-          }
-        }
-        if(sLayout !== null){
-          tools.standard.layout = [];
-          for(const ll of sLayout.content){
-            tools.standard.layout.push({
-              light:tools.standard[ll.name], location:ll.location
-            });
-          }
-        }
-
-        const {directional:pd = null, point:pp = null, spot:ps = null, layout:pLayout = null} = result.pbr;
-        if(pd !== null){
-          for(const l of sd.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.directional: invalid name specification.');
-            tools.pbr[l.name] = new PBRDirectionalLight(l);
-          }
-        }
-        if(pp !== null){
-          for(const l of sp.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.point: invalid name specification.');
-            tools.pbr[l.name] = new PBRPointLight(l);
-          }
-        }
-        if(ps !== null){
-          for(const l of ss.content){
-            TypeErrorCatcher.throw(l.name, 'string', 'createTools pbr.spot: invalid name specification.');
-            tools.pbr[l.name] = new PBRSpotLight(l);
-          }
-        }
-        if(pLayout !== null){
-          tools.pbr.layout = [];
-          for(const ll of pLayout.content){
-            tools.pbr.layout.push({
-              light:tools.pbr[ll.name], location:ll.location
-            });
-          }
-        }
-
-        return tools;
-      }
     }
-
-    Render3D.TOOL_DESIGN = {
-      layout:{
-        camera:{
-          perse:{
-            type:'enum',
-            keys:['name', 'eye', 'center', 'top', 'fov', 'aspect', 'near', 'far'],
-            values:['perseCamera', [0,0,4], [0,0,0], [0,1,0], Math.PI/3, 1, 0.01, 100]
-          },
-          ortho:{
-            type:'enum',
-            keys:['name', 'eye', 'center', 'top', 'width', 'height', 'near', 'far'],
-            values:['orthoCamera', [0,0,4], [0,0,0], [0,1,0], 8, 8, 0.01, 100]
-          },
-          controller:{
-            type:'enum',
-            keys:['name', 'canvas', 'cameraName', 'rotationMode', 'topAxis'],
-            values:['controller', null, 'perseCamera', 'axis', [0,1,0]]
-          }
-        },
-        standard:{
-          directional:{
-            type:'enum',
-            keys:['name', 'direction', 'diffuseColor', 'specularColor', 'specularPower'],
-            values:['sdl', [0,0,1], [0.5,0.5,0.5], [1,1,1], 20]
-          },
-          point:{
-            type:'enum',
-            keys:['name', 'position', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay'],
-            values:['spl', [0,0,3], [0.5,0.5,0.5], [1,1,1], 20, 3, 1]
-          },
-          spot:{
-            type:'enum',
-            keys:['name', 'position', 'direction', 'diffuseColor', 'specularColor', 'specularPower', 'distance', 'decay', 'coneCos'],
-            values:['ssl', [0,0,6], [0,0,1], [0.5,0.5,0.5], [1,1,1], 20, 6, 1, 0.95]
-          },
-          layout:{
-            type:'enum',
-            keys:['name', 'location'],
-            values:['light', 0]
-          }
-        },
-        pbr:{
-          directional:{
-            type:'enum',
-            keys:['name', 'direction', 'color'],
-            values:['pdl', [0,0,1], [0.5,0.5,0.5]]
-          },
-          point:{
-            type:'enum',
-            keys:['name', 'position', 'color', 'distance', 'decay'],
-            values:['ppl', [0,0,3], [0.5,0.5,0.5], 20, 1]
-          },
-          spot:{
-            type:'enum',
-            keys:['name', 'position', 'direction', 'color', 'distance', 'decay', 'coneCos', 'penumbraCos'],
-            values:['psl', [0,0,3], [0,0,1], [0.5,0.5,0.5], 10, 1, 0.5, 1]
-          },
-          layout:{
-            type:'enum',
-            keys:['name', 'location'],
-            values:['light', 0]
-          }
-        }
-      }
-    };
 
     class NoLightRender3D extends Render3D{
       constructor(gl, cam = null, params = {}){
