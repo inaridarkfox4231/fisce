@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.4.1
+ * @version 1.4.2
  */
 
 (function (global, factory) {
@@ -94,10 +94,7 @@
       type:'text'はテキスト記述。自動左詰めされる。「# ～～～」はコメント形式「// ～～～」になる。
       dict機能
       dict:{a:[0,1,2],b:'usagi'}とかあると列挙定義のaやbがこれになる。なおaやbそのままで提示したい場合は'a'とか'b'と書けば文字列扱いになる。
-      path機能
-      dict:{group0:{a:[3,4],b:'wani'}}とかなっている場合に「path:group0」とかするとaやbは「group0.a」とか「group0.b」という扱いになる。
-      つまりこれが無い場合aやbはそのまま文字列扱いになる。そういう使い分けもできる。path宣言はカテゴリーごとに適用される。
-      基本的にカテゴリー宣言の直後に書く。
+
       記述方法の例
       @category0
       <tag0>
@@ -106,23 +103,18 @@
       今日はとてもいい天気 # うそこけ！
       @category1
       <tag2> float vVal; // 列挙のタグは同じ行の記述が可能
-      フラグ機能
-      タグに_続きで文字列を書くとフラグを付与できる。たとえば初期化するかどうかを_Iみたいに指定できる。
-      関数を指定するのが一般的だがオブジェクト列挙も可能とする（関数の場合は戻り値は自由）
-      フラグ無し('')の場合はその場合にはdefaultという固有プロパティ名で内容を指定できる
-      出力は{name:フラグ名, value:値}で返される。
-      例：(name) => {if(name < 100){ return 'small'; } else { return 'big'; }}
-      例：{default:0, A:1, B:2, C:3}
+
       使い方
-      const result = parseDesignDescription(code, design = {layout:{}, flagDefinition:{}}, options = {dict:{}})
+      const result = parseDesignDescription(code, design = {layout:{}}, options = {dict:{}})
     */
 
     // layout[currentCategory][currentTag]にtype(enum/text),keys,valuesが入ってる。
     // enumの場合はkeysとvaluesが入っているがtextの場合は入ってないです。
-
+    // macroを追加。内容は逐次replaceAllで置き換えるだけ。
+    // macroは何でもありなので、変な記述をするとバグる。注意。dictと違い先に適用する。
     function parseDesignDescription(code = "", design = {}, options = {}){
-      const {layout = {}, flagDefinition = {}} = design;
-      const {dict = {}} = options;
+      const {layout = {}} = design;
+      const {dict = {}, macro = {}} = options;
 
       const result = {};
 
@@ -136,14 +128,21 @@
       // 一行ずつ見ていく
       let currentCategory = "";
       let currentTag = "";
-      const currentPath = [];
 
       // 最初の整形
       const array = firstFormattize(code);
+      // マクロ
+      const applyMacro = (s) => {
+        let result = s;
+        for(const [key, value] of Object.entries(macro)){
+          result = result.replaceAll(key, value);
+        }
+        return result;
+      }
 
       // resultの計算ここから
       for(let i=0; i<array.length; i++){
-        const s = array[i];
+        const s = applyMacro(array[i]);
 
         // 「@~~~」だけの行。trimして「@~~~」のみになる場合だけ認識
         const categoryCheck = s.trim().match(/(?<=^@).*(?=$)/);
@@ -154,47 +153,24 @@
             break;
           }
           currentCategory = categoryName;
-          // カテゴリーが変わったらpathを初期化する
-          currentPath.length = 0;
           // さらにタグかぶりを防ぐためタグも初期化する
           currentTag = "";
           continue;
-        }
-
-        // パスは「,」区切りで指定する。セミコロンは不要。カテゴリーごとに認識される。
-        // これを使う場合、宣言してからカテゴリーが変わるまでの間に現れたすべてのタグに適用されるので、
-        // 全てのタグに適用する場合はカテゴリー宣言の直後（タグ外）で指定する。
-        // 2回以上同じカテゴリー内で宣言した場合、単純に追加される。
-        const pathCheck = s.trim().match(/(?<=^path:).*(?=$)/);
-        if(pathCheck !== null){
-          const pathDescription = pathCheck[0];
-          // 「;」が入ってる場合はNG
-          if(pathDescription.match(/;/) === null){
-            const pathNames = pathDescription.split(',');
-            // 念のためtrimする
-            for(const pathName of pathNames){
-              if(pathName.trim().length === 0) continue;
-              currentPath.push(pathName.trim());
-            }
-            continue;
-          }
         }
 
         // 「<~~~>」の行。tagにはフラグを_で付与できる。_の後ろの1つだけ。なお<>のうしろに定義を置ける。
         // あとこの時点でなんらかのカテゴリーに入っていることが想定されている。
         const tagCheck = s.trim().match(/(?<=^\<).*(?=\>)/);
         if(tagCheck !== null){
-          const splitted = tagCheck[0].split("_");
-          const tagName = splitted[0];
+          const tagName = tagCheck[0];
           if(!tagNames[currentCategory].includes(tagName)){
-            console.error("invalid tag name.");
+            console.error("parseDesignDescription: invalid tag name.");
             break;
           }
           currentTag = tagName;
-          const flagName = (splitted.length > 1 ? splitted[1] : "");
           if(result[currentCategory][currentTag] === undefined){
-            // その時のパスが適用される
-            result[currentCategory][currentTag] = {flag:parseFlag(flagName, flagDefinition), content:[], path:[...currentPath]};
+            // contentだけ。
+            result[currentCategory][currentTag] = {content:[]};
           }
           // 同じ行になんか書いてあったらそれも入れる感じ
           const sameLineDescription = s.trim().replace(/(?<=^\<).*(?=\>)/, "").replace("<>", "");
@@ -216,7 +192,7 @@
       for(const [category, categoryValue] of Object.entries(result)){
         parsed[category] = {};
         for(const [tag, tagValue] of Object.entries(categoryValue)){
-          // flag, content, path, layoutMetaData, dict.
+          // content, layoutMetaData, dict.
           parsed[category][tag] = parseTagDescription(tagValue, layout[category][tag], dict);
         }
       }
@@ -224,48 +200,33 @@
       return parsed;
     }
 
-    // フラグのパース。
-    // definitionが関数の場合はnameを解釈してなんか返す。何でもあり。
-    // definitionがobjectの場合は列挙してある値をvalueとして付与して返す。無ければnull.
-    // なおその場合空文字に対しては'default'が設定されていればそれを参照する。それでも名前は''とする。
-    // 存在しない場合はnullとする。
-    function parseFlag(name = "", definition = {}){
-      // definitionは関数でもいいとしましょう。その場合は単純に関数を適用するだけです。
-      if(typeof(definition) === 'function'){
-        return definition(name);
-      }
+    // フラグ廃止
 
-      // 以下、列挙の場合。
-      const result = {name:name};
-      // 定義が無い場合は、名前そのまんま
-      // definitionが'object'ではない場合もこれにする。
-      if(typeof(definition) !== 'object' || Object.keys(definition).length === 0){
-        result.value = null;
-        return result;
-      }
-
-      // ""の場合はdefaultを参照する。あればそれをvalueにおく。無ければnullで。
-      const properName = (name === "" ? 'default' : name);
-      result.value = (definition[properName] !== undefined ? definition[name] : null);
-
-      return result;
-    }
-
+    // enum, textの他に, linkを追加
     function parseTagDescription(tagData, layoutMetaData, dict = {}){
-      const {flag, content, path} = tagData;
+      const {content} = tagData;
       const {type} = layoutMetaData;
-      const result = {flag};
+      const result = {};
       if(type === 'enum'){
         const properContent = [];
         // 「;」で区切る。あとでtrimして扱う。空行は無視される。
         for(const line of content){
           properContent.push(...line.split(";"));
         }
-        result.content = parseEnumTagDescription(properContent, layoutMetaData, dict, path);
+        result.content = parseEnumTagDescription(properContent, layoutMetaData, dict);
         return result;
       }
       if(type === 'text'){
+        // 主にshader記述用
         result.content = parseTextTagDescription(content);
+        return result;
+      }
+      if(type === 'link'){
+        // 1行ずつlinkで解釈する
+        result.content = [];
+        for(const line of content){
+          result.content.push(...parseLinkDescription(line));
+        }
         return result;
       }
     }
@@ -280,7 +241,7 @@
     // 提案なんだけど、配列内で「,」って使用可能じゃん。セパレータなのに。
     // 「 」も使用可能にしてくれませんかね？その、可読性が...パースでなくしちゃえばいいと思うんだけど。
     // separateWithCommaで消しちゃえばいいと思う。
-    function parseEnumTagDescription(content, metaData, dict, path){
+    function parseEnumTagDescription(content, metaData, dict){
       const result = [];
       const {keys = [], values = []} = metaData;
       for(const line of content){
@@ -297,11 +258,11 @@
           const description = descriptions[i].trim();
           if(description.match(/:/) !== null){
             const defs = description.split(":").map(s => s.trim()).filter(s => s.length > 0);
-            props[defs[0]] = parseVariable(defs[1], dict, path);
+            props[defs[0]] = parseVariable(defs[1], dict);
           }else{
             const splitted = description.split(" ").map(s => s.trim()).filter(s => s.length > 0);
             for(let k=0; k<Math.min(keys.length, splitted.length); k++){
-              props[keys[k]] = parseVariable(splitted[k], dict, path);
+              props[keys[k]] = parseVariable(splitted[k], dict);
             }
           }
         }
@@ -343,7 +304,7 @@
     // @使うインチキをやめた正規品
     // 調べる順
     // 文字列->特殊ケース->数->配列
-    function parseVariable(s, dict = {}, path = []){
+    function parseVariable(s, dict = {}){
       // 文字列の場合
       const isSingleQuote = s.match(/(?<=^\').*(?=\'$)/);
       if(isSingleQuote !== null){ return isSingleQuote[0]; }
@@ -369,7 +330,7 @@
       const isParenthesis = s.match(/(?<=^\[).*(?=\]$)/);
       // 配列でないなら処理は終わり
       if(isParenthesis === null){
-        return applyDict(s, dict, path);
+        return applyDict(s, dict);
       }else{
         const t = isParenthesis[0];
 
@@ -417,15 +378,15 @@
         // 配列もどきの場合（例：'[[0,1,2]'）
         // parenthesisCountが0でない -> そのまま文字列出力
         // parenthesisIsValidがfalse -> そのまま文字列出力
-        if(parenthesisCount !== 0){ return applyDict(s, dict, path); }
-        if(!parenthesisIsValid){ return applyDict(s, dict, path); }
+        if(parenthesisCount !== 0){ return applyDict(s, dict); }
+        if(!parenthesisIsValid){ return applyDict(s, dict); }
 
         // 各々の成分に再帰処理
-        return properSplitted.map((x) => parseVariable(x, dict, path));
+        return properSplitted.map((x) => parseVariable(x, dict));
       }
 
       // それ以外。
-      return applyDict(s, dict, path);
+      return applyDict(s, dict);
     }
 
     /*
@@ -440,7 +401,7 @@
     */
 
     // まあdictが先だろ。普通pathなんか使わんし。あると便利だけど。
-    function applyDict(s, dict = {}, path = []){
+    function applyDict(s, dict = {}){
       // dictを見る
       const dictCheck = s.split('.').reduce((cur, next) => {
         if(cur === null || cur[next] === undefined){ return null; }
@@ -449,16 +410,7 @@
       if(dictCheck !== null){
         return dictCheck;
       }
-      // pathを見る
-      for(let i=0; i<path.length; i++){
-        const pathCheck = s.split('.').reduce((cur, next) => {
-          if(cur === null || cur[next] === undefined){ return null; }
-          return cur[next];
-        }, dict[path[i]]);
-        if(pathCheck !== null){
-          return pathCheck;
-        }
-      }
+      // path？なにそれ。おいしいの？おいら潜るの好き。
       // 通常文字列
       return s;
     }
@@ -540,11 +492,45 @@
       return executeFunction;
     }
 
+    // リンク表記パース
+    // 1-2-3, 4-5, 6-[7,8,9]-10
+    // ->
+    // [1,2],[2,3],[4,5],[6,7],[6,8].[6,9],[7,10],[8,10],[9,10]
+    // なお循環や重複のチェックは特にしない。自己責任で。
+    // セミコロンは「,」扱い。
+    function parseLinkDescription(linkLayout = ``){
+      const layout = linkLayout
+        .replaceAll('\t', ' ')
+        .replaceAll('　',' ')
+        .replaceAll(';', ',')
+        .replaceAll('\n', ',');
+      const parsed = separateWithComma(layout).map(s => s.trim()).filter(s => s.length > 0);
+      const result = [];
+      for(const eachDescription of parsed){
+        const sequence = eachDescription.split('-').map(s => s.trim()).filter(s => s.length > 0).map(s => parseVariable(s));
+        if(sequence.length < 2){ continue; }
+        if(!sequence.every(x => (typeof(x) === 'number' || Array.isArray(x)))){ console.error("invalud link description"); continue; }
+        for(let k=0; k<sequence.length-1; k++){
+          const l = sequence[k];
+          const r = sequence[k+1];
+          const ll = (typeof(l) === 'number' ? [l] : l);
+          const rr = (typeof(r) === 'number' ? [r] : r);
+          for(const i of ll){
+            for(const j of rr){
+              result.push([i, j]);
+            }
+          }
+        }
+      }
+      return result;
+    }
+
     parser.firstFormattize = firstFormattize;
     parser.parseDesignDescription = parseDesignDescription;
     parser.separateWithComma = separateWithComma;
     parser.parseVariable = parseVariable;
     parser.createProcess = createProcess;
+    parser.parseLinkDescription = parseLinkDescription;
 
     return parser;
   })();
@@ -1917,7 +1903,120 @@
   // ローディング関連もここに集めよう。他のあれこれが必要なく独立しているものは全部ここ。
   const foxUtils = (function(){
     const {NaNErrorCatcher} = foxErrors;
+    const {firstFormattize} = foxParse;
     const utils = {};
+
+    // GridSpace.
+    // Map機能を援用したグリッドスペースジェネレータ
+    // 簡単なものです
+    class GridSpace{
+      constructor(){
+        this.map = new Map();
+        this.defaultValue = 0;
+      }
+      setDefaultValue(v){
+        this.defaultValue = v;
+        return this;
+      }
+      set(){
+        const args = [...arguments];
+        const parsed = GridSpace.parseSetArguments(args);
+        const {data, v} = parsed;
+        for(const [x,y,z] of data){
+    		const properX = (x === undefined ? 0 : Math.round(x));
+    		const properY = (y === undefined ? 0 : Math.round(y));
+    		const properZ = (z === undefined ? 0 : Math.round(z));
+          this.map.set(`${properX},${properY},${properZ}`, v);
+        }
+        return this;
+      }
+      get(x,y,z){
+        if(Array.isArray(x)){
+          return this.get(...x);
+        }
+        const v = this.map.get(`${x},${y},${z}`);
+        if(v === undefined){ return this.defaultValue; }
+        return v;
+      }
+      has(x,y,z){
+    	if(Array.isArray(x)){
+          return this.has(...x);
+        }
+    	  return this.map.has(`${x},${y},${z}`);
+    	}
+      remove(){
+        const args = [...arguments];
+        args.push(0);
+        const data = GridSpace.parseSetArguments(args).data;
+        for(const [x,y,z] of data){
+          this.map.delete(`${x},${y},${z}`);
+        }
+        return this;
+      }
+      show(){
+        for(const [key, value] of this.map.entries()){
+          console.log(`${key}: ${value}`);
+        }
+        return this;
+      }
+      static parseLetterCode(n){
+        // nは0,1,2,...,A,B,C,...,a,b,c,...,!,?及び.のコード。
+        if(n === 46){ return -1; }
+        if(n >= 48 && n <= 57){ return n-48; }
+        if(n >= 65 && n <= 90){ return n-65+10; }
+        if(n >= 97 && n <= 122){ return n-97+36; }
+        if(n === 33){ return 62; }
+        if(n === 63){ return 63; }
+        return -1;
+      }
+      static parseSetArguments(data){
+        if(typeof(data[0]) === 'number'){
+          if(!data.every(x => typeof(x) === 'number')){
+            console.error(`parseArguments: not number.`);
+            return {data:[[0,0,0]],v:0};
+          }
+          switch(data.length){
+            case 0: return {data:[[0,0,0]],v:0};
+            case 1: return {data:[[data[0],0,0]],v:0};
+            case 2: return {data:[[data[0],0,0]],v:data[1]};
+            case 3: return {data:[[data[0],data[1],0]],v:data[2]};
+            default:
+              return {data:[[data[0],data[1],data[2]]],v:data[3]};
+          }
+        }else if(Array.isArray(data[0])){
+          if(typeof(data[0][0]) === 'number' && typeof(data[1]) === 'number'){
+            return {data:[data[0]], v:data[1]};
+          }else if(Array.isArray(data[0][0]) && typeof(data[1]) === 'number'){
+            return {data:data[0], v:data[1]};
+          }
+        }
+        return {data:[[0,0,0]],v:0};
+      }
+      static build(layout, offsetX = 0, offsetY = 0, offsetZ = 0){
+        // .でブランクを表す。
+        if(!Array.isArray(layout)){
+          return this.build([layout], offsetX, offsetY, offsetZ);
+        }
+        if(typeof(layout[0]) !== 'string'){ return null; }
+        const result = new this();
+        for(let z=0; z<layout.length; z++){
+          const coordZ = offsetZ + z;
+          const formatted = firstFormattize(layout[z]).map(u => u.split('|')).flat(Infinity);
+          for(let y=0; y<formatted.length; y++){
+            const coordY = offsetY + (formatted.length - y - 1);
+            const s = formatted[y].trim().replaceAll(' ', '').replaceAll('　','');
+            for(let x=0; x<s.length; x++){
+              const coordX = offsetX + x;
+              const v = GridSpace.parseLetterCode(s.charCodeAt(x));
+              if(v >= 0){
+                result.set(coordX, coordY, coordZ, v);
+              }
+            }
+          }
+        }
+        return result;
+      }
+    }
 
     // Damper.
     // 減衰を表現するためのツール
@@ -4617,12 +4716,12 @@
     }
 
     // textデータの保存
-    async function saveText(data, name = 'textFile'){
+    async function saveText(data, name = 'textFile', postFix = 'txt'){
       // 一時的にaタグを作る
       const link = document.createElement("a");
       // encodeする
       link.href = "data:text/plain," + encodeURIComponent(data);
-      link.download = `${name}.txt`;
+      link.download = `${name}.${postFix}`;
       link.click();
       link.remove();
     }
@@ -5116,6 +5215,9 @@
       return "low";
     }
 
+    // よくわからないおもちゃ
+    utils.GridSpace = GridSpace;
+
     // Damper. 減衰器。
     utils.Damper = Damper;
 
@@ -5164,7 +5266,7 @@
     utils.loadVideo = loadVideo;
     utils.loadArrayBuffer = loadArrayBuffer;
     utils.loadFontFile = loadFontFile;
-    // 以下3つは使用されていないのであれば廃止する可能性がある
+    // 以下3つはconfigにぶち込むと楽々リソースをロードできるので便利
     utils.loadImageData = loadImageData;
     utils.loadTextData = loadTextData;
     utils.loadJsonData = loadJsonData;
@@ -7919,13 +8021,25 @@ available waveTables:
         }
         return this;
       }
-      mult(k, immutable = true){
+      mult(k, immutable = false){
         // 単純なスカラー倍。まあ使わないかもだが。
         if(immutable){
           return this.copy().mult(k, false);
         }
         for(let i=0; i<16; i++){
           this.m[i] *= k;
+        }
+        return this;
+      }
+      lerp(n, ratio=0, immutable = false){
+        // 対象の行列nに対して線形補間を実行する。
+        // 不要だと思われていたが、フルネセレ列の隣接行列の補間とかで割と活躍できるっぽいので実装。
+        if(immutable){
+          return this.copy().lerp(n, ratio, false);
+        }
+        const target = (Array.isArray(n) ? n : n.m);
+        for(let i=0; i<16; i++){
+          this.m[i] = (1-ratio)*this.m[i] + ratio*target[i];
         }
         return this;
       }
@@ -8148,6 +8262,51 @@ available waveTables:
       rotationQ(){
         // localRotationQのエイリアス
         this.localRotationQ(...arguments);
+        return this;
+      }
+      localHinge(translation = [], rotation = []){
+        // translationでの指定をもとに点を決め、rotationをその点を基準にして実行する。
+        // つまり軸がその点を通る。rotationの一般化。
+        // localなので基準はローカル軸。
+        const origin = Vecta.create();
+        if(Array.isArray(translation)){ origin.set(translation); }
+        else if(translation instanceof Vecta){ origin.set(translation); }
+        else if(typeof translation === 'number'){ origin.set(translation, translation, translation); }
+        const originInv = origin.mult(-1, true);
+        // ローカルは1 -> -1の順。
+        this.localTranslation(origin);
+        if(Array.isArray(rotation)){
+          this.localRotation(...rotation);
+        }else if(rotation instanceof Quarternion){
+          this.localRotationQ(rotation); // しれっとQ
+        }else{
+          this.localRotation(rotation);
+        }
+        this.localTranslation(originInv);
+        return this;
+      }
+      globalHinge(translation = [], rotation = []){
+        // globalなので基準はグローバル軸。
+        const origin = Vecta.create();
+        if(Array.isArray(translation)){ origin.set(translation); }
+        else if(translation instanceof Vecta){ origin.set(translation); }
+        else if(typeof translation === 'number'){ origin.set(translation, translation, translation); }
+        const originInv = origin.mult(-1, true);
+        // グローバルは-1 -> 1の順
+        this.globalTranslation(originInv);
+        if(Array.isArray(rotation)){
+          this.globalRotation(...rotation);
+        }else if(rotation instanceof Quarternion){
+          this.globalRotationQ(rotation); // しれっとQ
+        }else{
+          this.globalRotation(rotation);
+        }
+        this.globalTranslation(origin);
+        return this;
+      }
+      hinge(){
+        // localHingeのエイリアス
+        this.localHinge(...arguments);
         return this;
       }
       setPerseProjection(fov, aspect, near, far){
@@ -9011,380 +9170,386 @@ available waveTables:
 
     // gl定数
     const gls = {
-      depth_buffer_bit: 256,
-      stencil_buffer_bit: 1024,
-      color_buffer_bit: 16384,
-      points: 0,
-      lines: 1,
-      line_loop: 2,
-      line_strip: 3,
-      triangles: 4,
-      triangle_strip: 5,
-      triangle_fan: 6,
-      zero: 0,
-      one: 1,
-      src_color: 768,
-      one_minus_src_color: 769,
-      src_alpha: 770,
-      one_minus_src_alpha: 771,
-      dst_alpha: 772,
-      one_minus_dst_alpha: 773,
-      dst_color: 774,
-      one_minus_dst_color: 775,
-      src_alpha_saturate: 776,
-      constant_color: 32769,
-      one_minus_constant_color: 32770,
-      constant_alpha: 32771,
-      one_minus_constant_alpha: 32772,
-      func_add: 32774,
-      func_subtract: 32778,
-      func_reverse_subtract: 32779,
-      static_draw: 35044,
-      stream_draw: 35040,
-      dynamic_draw: 35048,
-      array_buffer: 34962,
-      element_array_buffer: 34963,
-      buffer_size: 34660,
-      buffer_usage: 34661,
-      current_vertex_attrib: 34342,
-      vertex_attrib_array_enabled: 34338,
-      vertex_attrib_array_size: 34339,
-      vertex_attrib_array_stride: 34340,
-      vertex_attrib_array_type: 34341,
-      vertex_attrib_array_normalized: 34922,
-      vertex_attrib_array_pointer: 34373,
-      vertex_attrib_array_buffer_binding: 34975,
-      cull_face: 2884,
-      front: 1028,
-      back: 1029,
-      front_and_back: 1032,
-      blend: 3042,
-      depth_test: 2929,
-      dither: 3024,
-      polygon_offset_fill: 32823,
-      sample_alpha_to_coverage: 32926,
-      sample_coverage: 32928,
-      scissor_test: 3089,
-      stencil_test: 2960,
-      byte: 5120,
-      unsigned_byte: 5121,
-      short: 5122,
-      unsigned_short: 5123,
-      int: 5124,
-      unsigned_int: 5125,
-      float: 5126,
-      depth_component: 6402,
-      alpha: 6406,
-      rgb: 6407,
-      rgba: 6408,
-      luminance: 6409,
-      luminance_alpha: 6410,
-      unsigned_short_4_4_4_4: 32819,
-      unsigned_short_5_5_5_1: 32820,
-      unsigned_short_5_6_5: 33635,
-      fragment_shader: 35632,
-      vertex_shader: 35633,
-      compile_status: 35713,
-      delete_status: 35712,
-      link_status: 35714,
-      validate_status: 35715,
-      attached_shaders: 35717,
-      active_attributes: 35721,
-      active_uniforms: 35718,
-      max_vertex_attribs: 34921,
-      max_vertex_uniform_vectors: 36347,
-      max_varying_vectors: 36348,
-      max_combined_texture_image_units: 35661,
-      max_vertex_texture_image_units: 35660,
-      max_texture_image_units: 34930,
-      max_fragment_uniform_vectors: 36349,
-      shader_type: 35663,
-      shading_language_version: 35724,
-      current_program: 35725,
-      never: 512,
-      less: 513,
-      equal: 514,
-      lequal: 515,
-      greater: 516,
-      notequal: 517,
-      gequal: 518,
-      always: 519,
-      keep: 7680,
-      replace: 7681,
-      incr: 7682,
-      decr: 7683,
-      invert: 5386,
-      incr_wrap: 34055,
-      decr_wrap: 34056,
-      nearest: 9728,
-      linear: 9729,
-      nearest_mipmap_nearest: 9984,
-      linear_mipmap_nearest: 9985,
-      nearest_mipmap_linear: 9986,
-      linear_mipmap_linear: 9987,
-      texture_mag_filter: 10240,
-      texture_min_filter: 10241,
-      texture_wrap_s: 10242,
-      texture_wrap_t: 10243,
-      texture_2d: 3553,
-      texture: 5890,
-      texture_cube_map: 34067,
-      texture_binding_cube_map: 34068,
-      texture_cube_map_positive_x: 34069,
-      texture_cube_map_negative_x: 34070,
-      texture_cube_map_positive_y: 34071,
-      texture_cube_map_negative_y: 34072,
-      texture_cube_map_positive_z: 34073,
-      texture_cube_map_negative_z: 34074,
-      max_cube_map_texture_size: 34076,
-      texture0: 33984,
-      texture1: 33985,
-      texture2: 33986,
-      texture3: 33987,
-      texture4: 33988,
-      texture5: 33989,
-      texture6: 33990,
-      texture7: 33991,
-      texture8: 33992,
-      texture9: 33993,
-      texture10: 33994,
-      texture11: 33995,
-      texture12: 33996,
-      texture13: 33997,
-      texture14: 33998,
-      texture15: 33999,
-      texture16: 34000,
-      texture17: 34001,
-      texture18: 34002,
-      texture19: 34003,
-      texture20: 34004,
-      texture21: 34005,
-      texture22: 34006,
-      texture23: 34007,
-      texture24: 34008,
-      texture25: 34009,
-      texture26: 34010,
-      texture27: 34011,
-      texture28: 34012,
-      texture29: 34013,
-      texture30: 34014,
-      texture31: 34015,
-      active_texture: 34016,
-      repeat: 10497,
-      clamp_to_edge: 33071,
-      mirrored_repeat: 33648,
-      float_vec2: 35664,
-      float_vec3: 35665,
-      float_vec4: 35666,
-      int_vec2: 35667,
-      int_vec3: 35668,
-      int_vec4: 35669,
-      bool: 35670,
-      bool_vec2: 35671,
-      bool_vec3: 35672,
-      bool_vec4: 35673,
-      float_mat2: 35674,
-      float_mat3: 35675,
-      float_mat4: 35676,
-      sampler_2d: 35678,
-      sampler_cube: 35680,
-      red: 6403,
-      rgb8: 32849,
-      rgba8: 32856,
-      rgb10_a2: 32857,
-      texture_3d: 32879,
-      texture_wrap_r: 32882,
-      texture_min_lod: 33082,
-      texture_max_lod: 33083,
-      texture_base_level: 33084,
-      texture_max_level: 33085,
-      texture_compare_mode: 34892,
-      texture_compare_func: 34893,
-      srgb: 35904,
-      srgb8: 35905,
-      srgb8_alpha8: 35907,
-      compare_ref_to_texture: 34894,
-      rgba32f: 34836,
-      rgb32f: 34837,
-      rgba16f: 34842,
-      rgb16f: 34843,
-      texture_2d_array: 35866,
-      texture_binding_2d_array: 35869,
-      r11f_g11f_b10f: 35898,
-      rgb9_e5: 35901,
-      rgba32ui: 36208,
-      rgb32ui: 36209,
-      rgba16ui: 36214,
-      rgb16ui: 36215,
-      rgba8ui: 36220,
-      rgb8ui: 36221,
-      rgba32i: 36226,
-      rgb32i: 36227,
-      rgba16i: 36232,
-      rgb16i: 36233,
-      rgba8i: 36238,
-      rgb8i: 36239,
-      red_integer: 36244,
-      rgb_integer: 36248,
-      rgba_integer: 36249,
-      r8: 33321,
-      rg8: 33323,
-      r16f: 33325,
-      r32f: 33326,
-      rg16f: 33327,
-      rg32f: 33328,
-      r8i: 33329,
-      r8ui: 33330,
-      r16i: 33331,
-      r16ui: 33332,
-      r32i: 33333,
-      r32ui: 33334,
-      rg8i: 33335,
-      rg8ui: 33336,
-      rg16i: 33337,
-      rg16ui: 33338,
-      rg32i: 33339,
-      rg32ui: 33340,
-      r8_snorm: 36756,
-      rg8_snorm: 36757,
-      rgb8_snorm: 36758,
-      rgba8_snorm: 36759,
-      rgb10_a2ui: 36975,
-      texture_immutable_format: 37167,
-      texture_immutable_levels: 33503,
-      float_mat2x3: 35685,
-      float_mat2x4: 35686,
-      float_mat3x2: 35687,
-      float_mat3x4: 35688,
-      float_mat4x2: 35689,
-      float_mat4x3: 35690,
-      unsigned_int_vec2: 36294,
-      unsigned_int_vec3: 36295,
-      unsigned_int_vec4: 36296,
-      unsigned_normalized: 35863,
-      signed_normalized: 36764,
-      depth_component24: 33190,
-      stream_read: 35041,
-      stream_copy: 35042,
-      static_read: 35045,
-      static_copy: 35046,
-      dynamic_read: 35049,
-      dynamic_copy: 35050,
-      depth_component32f: 36012,
-      depth32f_stencil8: 36013,
-      invalid_index: 4294967295,
-      timeout_ignored: -1,
-      max_client_wait_timeout_webgl: 37447,
-      sampler_3d: 35679,
-      sampler_2d_shadow: 35682,
-      sampler_2d_array: 36289,
-      sampler_2d_array_shadow: 36292,
-      sampler_cube_shadow: 36293,
-      int_sampler_2d: 36298,
-      int_sampler_3d: 36299,
-      int_sampler_cube: 36300,
-      int_sampler_2d_array: 36303,
-      unsigned_int_sampler_2d: 36306,
-      unsigned_int_sampler_3d: 36307,
-      unsigned_int_sampler_cube: 36308,
-      unsigned_int_sampler_2d_array: 36311,
-      max_samples: 36183,
-      sampler_binding: 35097,
-      framebuffer: 36160,
-      renderbuffer: 36161,
-      rgba4: 32854,
-      rgb5_a1: 32855,
-      rgb565: 36194,
-      depth_component16: 33189,
-      stencil_index8: 36168,
-      depth_stencil: 34041,
-      renderbuffer_width: 36162,
-      renderbuffer_height: 36163,
-      renderbuffer_internal_format: 36164,
-      renderbuffer_red_size: 36176,
-      renderbuffer_green_size: 36177,
-      renderbuffer_blue_size: 36178,
-      renderbuffer_alpha_size: 36179,
-      renderbuffer_depth_size: 36180,
-      renderbuffer_stencil_size: 36181,
-      framebuffer_attachment_object_type: 36048,
-      framebuffer_attachment_object_name: 36049,
-      framebuffer_attachment_texture_level: 36050,
-      framebuffer_attachment_texture_cube_map_face: 36051,
-      color_attachment0: 36064,
-      depth_attachment: 36096,
-      stencil_attachment: 36128,
-      depth_stencil_attachment: 33306,
-      none: 0,
-      framebuffer_complete: 36053,
-      framebuffer_incomplete_attachment: 36054,
-      framebuffer_incomplete_missing_attachment: 36055,
-      framebuffer_incomplete_dimensions: 36057,
-      framebuffer_unsupported: 36061,
-      framebuffer_binding: 36006,
-      renderbuffer_binding: 36007,
-      max_renderbuffer_size: 34024,
-      invalid_framebuffer_operation: 1286,
-      framebuffer_attachment_color_encoding: 33296,
-      framebuffer_attachment_component_type: 33297,
-      framebuffer_attachment_red_size: 33298,
-      framebuffer_attachment_green_size: 33299,
-      framebuffer_attachment_blue_size: 33300,
-      framebuffer_attachment_alpha_size: 33301,
-      framebuffer_attachment_depth_size: 33302,
-      framebuffer_attachment_stencil_size: 33303,
-      framebuffer_default: 33304,
-      depth24_stencil8: 35056,
-      draw_framebuffer_binding: 36006,
-      read_framebuffer: 36008,
-      draw_framebuffer: 36009,
-      read_framebuffer_binding: 36010,
-      renderbuffer_samples: 36011,
-      framebuffer_attachment_texture_layer: 36052,
-      framebuffer_incomplete_multisample: 36182,
-      unsigned_int_2_10_10_10_rev: 33640,
-      unsigned_int_10f_11f_11f_rev: 35899,
-      unsigned_int_5_9_9_9_rev: 35902,
-      float_32_unsigned_int_24_8_rev: 36269,
-      unsigned_int_24_8: 34042,
-      half_float: 5131,
-      rg: 33319,
-      rg_integer: 33320,
-      int_2_10_10_10_rev: 36255,
-      cube_px: 34069,
-      cube_nx: 34070,
-      cube_py: 34071,
-      cube_ny: 34072,
-      cube_pz: 34073,
-      cube_nz: 34074,
-      ubyte: 5121,
-      ushort: 5123,
-      uint: 5125,
-      mat2x3: 35685,
-      mat2x4: 35686,
-      mat3x2: 35687,
-      mat3x4: 35688,
-      mat4x2: 35689,
-      mat4x3: 35690,
-      vec2: 35664,
-      vec3: 35665,
-      vec4: 35666,
-      ivec2: 35667,
-      ivec3: 35668,
-      ivec4: 35669,
-      bvec2: 35671,
-      bvec3: 35672,
-      bvec4: 35673,
-      mat2: 35674,
-      mat3: 35675,
-      mat4: 35676,
-      sampler2D: 35678,
-      sampler3D: 35679,
-      samplerCube: 35680,
-      sampler2DArray: 36289,
-      DBB: 256,
-      SBB: 1024,
-      CBB: 16384
+      "depth_buffer_bit": 256,
+      "stencil_buffer_bit": 1024,
+      "color_buffer_bit": 16384,
+      "points": 0,
+      "lines": 1,
+      "line_loop": 2,
+      "line_strip": 3,
+      "triangles": 4,
+      "triangle_strip": 5,
+      "triangle_fan": 6,
+      "zero": 0,
+      "one": 1,
+      "src_color": 768,
+      "one_minus_src_color": 769,
+      "src_alpha": 770,
+      "one_minus_src_alpha": 771,
+      "dst_alpha": 772,
+      "one_minus_dst_alpha": 773,
+      "dst_color": 774,
+      "one_minus_dst_color": 775,
+      "src_alpha_saturate": 776,
+      "constant_color": 32769,
+      "one_minus_constant_color": 32770,
+      "constant_alpha": 32771,
+      "one_minus_constant_alpha": 32772,
+      "func_add": 32774,
+      "func_subtract": 32778,
+      "func_reverse_subtract": 32779,
+      "static_draw": 35044,
+      "stream_draw": 35040,
+      "dynamic_draw": 35048,
+      "array_buffer": 34962,
+      "element_array_buffer": 34963,
+      "buffer_size": 34660,
+      "buffer_usage": 34661,
+      "current_vertex_attrib": 34342,
+      "vertex_attrib_array_enabled": 34338,
+      "vertex_attrib_array_size": 34339,
+      "vertex_attrib_array_stride": 34340,
+      "vertex_attrib_array_type": 34341,
+      "vertex_attrib_array_normalized": 34922,
+      "vertex_attrib_array_pointer": 34373,
+      "vertex_attrib_array_buffer_binding": 34975,
+      "cull_face": 2884,
+      "front": 1028,
+      "back": 1029,
+      "front_and_back": 1032,
+      "blend": 3042,
+      "depth_test": 2929,
+      "dither": 3024,
+      "polygon_offset_fill": 32823,
+      "sample_alpha_to_coverage": 32926,
+      "sample_coverage": 32928,
+      "scissor_test": 3089,
+      "stencil_test": 2960,
+      "byte": 5120,
+      "unsigned_byte": 5121,
+      "short": 5122,
+      "unsigned_short": 5123,
+      "int": 5124,
+      "unsigned_int": 5125,
+      "float": 5126,
+      "depth_component": 6402,
+      "alpha": 6406,
+      "rgb": 6407,
+      "rgba": 6408,
+      "luminance": 6409,
+      "luminance_alpha": 6410,
+      "unsigned_short_4_4_4_4": 32819,
+      "unsigned_short_5_5_5_1": 32820,
+      "unsigned_short_5_6_5": 33635,
+      "fragment_shader": 35632,
+      "vertex_shader": 35633,
+      "compile_status": 35713,
+      "delete_status": 35712,
+      "link_status": 35714,
+      "validate_status": 35715,
+      "attached_shaders": 35717,
+      "active_attributes": 35721,
+      "active_uniforms": 35718,
+      "max_vertex_attribs": 34921,
+      "max_vertex_uniform_vectors": 36347,
+      "max_varying_vectors": 36348,
+      "max_combined_texture_image_units": 35661,
+      "max_vertex_texture_image_units": 35660,
+      "max_texture_image_units": 34930,
+      "max_fragment_uniform_vectors": 36349,
+      "shader_type": 35663,
+      "shading_language_version": 35724,
+      "current_program": 35725,
+      "never": 512,
+      "less": 513,
+      "equal": 514,
+      "lequal": 515,
+      "greater": 516,
+      "notequal": 517,
+      "gequal": 518,
+      "always": 519,
+      "keep": 7680,
+      "replace": 7681,
+      "incr": 7682,
+      "decr": 7683,
+      "invert": 5386,
+      "incr_wrap": 34055,
+      "decr_wrap": 34056,
+      "nearest": 9728,
+      "linear": 9729,
+      "nearest_mipmap_nearest": 9984,
+      "linear_mipmap_nearest": 9985,
+      "nearest_mipmap_linear": 9986,
+      "linear_mipmap_linear": 9987,
+      "texture_mag_filter": 10240,
+      "texture_min_filter": 10241,
+      "texture_wrap_s": 10242,
+      "texture_wrap_t": 10243,
+      "texture_2d": 3553,
+      "texture": 5890,
+      "texture_cube_map": 34067,
+      "texture_binding_cube_map": 34068,
+      "texture_cube_map_positive_x": 34069,
+      "texture_cube_map_negative_x": 34070,
+      "texture_cube_map_positive_y": 34071,
+      "texture_cube_map_negative_y": 34072,
+      "texture_cube_map_positive_z": 34073,
+      "texture_cube_map_negative_z": 34074,
+      "max_cube_map_texture_size": 34076,
+      "texture0": 33984,
+      "texture1": 33985,
+      "texture2": 33986,
+      "texture3": 33987,
+      "texture4": 33988,
+      "texture5": 33989,
+      "texture6": 33990,
+      "texture7": 33991,
+      "texture8": 33992,
+      "texture9": 33993,
+      "texture10": 33994,
+      "texture11": 33995,
+      "texture12": 33996,
+      "texture13": 33997,
+      "texture14": 33998,
+      "texture15": 33999,
+      "texture16": 34000,
+      "texture17": 34001,
+      "texture18": 34002,
+      "texture19": 34003,
+      "texture20": 34004,
+      "texture21": 34005,
+      "texture22": 34006,
+      "texture23": 34007,
+      "texture24": 34008,
+      "texture25": 34009,
+      "texture26": 34010,
+      "texture27": 34011,
+      "texture28": 34012,
+      "texture29": 34013,
+      "texture30": 34014,
+      "texture31": 34015,
+      "active_texture": 34016,
+      "repeat": 10497,
+      "clamp_to_edge": 33071,
+      "mirrored_repeat": 33648,
+      "float_vec2": 35664,
+      "float_vec3": 35665,
+      "float_vec4": 35666,
+      "int_vec2": 35667,
+      "int_vec3": 35668,
+      "int_vec4": 35669,
+      "bool": 35670,
+      "bool_vec2": 35671,
+      "bool_vec3": 35672,
+      "bool_vec4": 35673,
+      "float_mat2": 35674,
+      "float_mat3": 35675,
+      "float_mat4": 35676,
+      "sampler_2d": 35678,
+      "sampler_cube": 35680,
+      "red": 6403,
+      "rgb8": 32849,
+      "rgba8": 32856,
+      "rgb10_a2": 32857,
+      "texture_3d": 32879,
+      "texture_wrap_r": 32882,
+      "texture_min_lod": 33082,
+      "texture_max_lod": 33083,
+      "texture_base_level": 33084,
+      "texture_max_level": 33085,
+      "texture_compare_mode": 34892,
+      "texture_compare_func": 34893,
+      "srgb": 35904,
+      "srgb8": 35905,
+      "srgb8_alpha8": 35907,
+      "compare_ref_to_texture": 34894,
+      "rgba32f": 34836,
+      "rgb32f": 34837,
+      "rgba16f": 34842,
+      "rgb16f": 34843,
+      "texture_2d_array": 35866,
+      "texture_binding_2d_array": 35869,
+      "r11f_g11f_b10f": 35898,
+      "rgb9_e5": 35901,
+      "rgba32ui": 36208,
+      "rgb32ui": 36209,
+      "rgba16ui": 36214,
+      "rgb16ui": 36215,
+      "rgba8ui": 36220,
+      "rgb8ui": 36221,
+      "rgba32i": 36226,
+      "rgb32i": 36227,
+      "rgba16i": 36232,
+      "rgb16i": 36233,
+      "rgba8i": 36238,
+      "rgb8i": 36239,
+      "red_integer": 36244,
+      "rgb_integer": 36248,
+      "rgba_integer": 36249,
+      "r8": 33321,
+      "rg8": 33323,
+      "r16f": 33325,
+      "r32f": 33326,
+      "rg16f": 33327,
+      "rg32f": 33328,
+      "r8i": 33329,
+      "r8ui": 33330,
+      "r16i": 33331,
+      "r16ui": 33332,
+      "r32i": 33333,
+      "r32ui": 33334,
+      "rg8i": 33335,
+      "rg8ui": 33336,
+      "rg16i": 33337,
+      "rg16ui": 33338,
+      "rg32i": 33339,
+      "rg32ui": 33340,
+      "r8_snorm": 36756,
+      "rg8_snorm": 36757,
+      "rgb8_snorm": 36758,
+      "rgba8_snorm": 36759,
+      "rgb10_a2ui": 36975,
+      "texture_immutable_format": 37167,
+      "texture_immutable_levels": 33503,
+      "float_mat2x3": 35685,
+      "float_mat2x4": 35686,
+      "float_mat3x2": 35687,
+      "float_mat3x4": 35688,
+      "float_mat4x2": 35689,
+      "float_mat4x3": 35690,
+      "unsigned_int_vec2": 36294,
+      "unsigned_int_vec3": 36295,
+      "unsigned_int_vec4": 36296,
+      "unsigned_normalized": 35863,
+      "signed_normalized": 36764,
+      "depth_component24": 33190,
+      "stream_read": 35041,
+      "stream_copy": 35042,
+      "static_read": 35045,
+      "static_copy": 35046,
+      "dynamic_read": 35049,
+      "dynamic_copy": 35050,
+      "depth_component32f": 36012,
+      "depth32f_stencil8": 36013,
+      "invalid_index": 4294967295,
+      "timeout_ignored": -1,
+      "max_client_wait_timeout_webgl": 37447,
+      "sampler_3d": 35679,
+      "sampler_2d_shadow": 35682,
+      "sampler_2d_array": 36289,
+      "sampler_2d_array_shadow": 36292,
+      "sampler_cube_shadow": 36293,
+      "int_sampler_2d": 36298,
+      "int_sampler_3d": 36299,
+      "int_sampler_cube": 36300,
+      "int_sampler_2d_array": 36303,
+      "unsigned_int_sampler_2d": 36306,
+      "unsigned_int_sampler_3d": 36307,
+      "unsigned_int_sampler_cube": 36308,
+      "unsigned_int_sampler_2d_array": 36311,
+      "max_samples": 36183,
+      "sampler_binding": 35097,
+      "framebuffer": 36160,
+      "renderbuffer": 36161,
+      "rgba4": 32854,
+      "rgb5_a1": 32855,
+      "rgb565": 36194,
+      "depth_component16": 33189,
+      "stencil_index8": 36168,
+      "depth_stencil": 34041,
+      "renderbuffer_width": 36162,
+      "renderbuffer_height": 36163,
+      "renderbuffer_internal_format": 36164,
+      "renderbuffer_red_size": 36176,
+      "renderbuffer_green_size": 36177,
+      "renderbuffer_blue_size": 36178,
+      "renderbuffer_alpha_size": 36179,
+      "renderbuffer_depth_size": 36180,
+      "renderbuffer_stencil_size": 36181,
+      "framebuffer_attachment_object_type": 36048,
+      "framebuffer_attachment_object_name": 36049,
+      "framebuffer_attachment_texture_level": 36050,
+      "framebuffer_attachment_texture_cube_map_face": 36051,
+      "color_attachment0": 36064,
+      "depth_attachment": 36096,
+      "stencil_attachment": 36128,
+      "depth_stencil_attachment": 33306,
+      "none": 0,
+      "framebuffer_complete": 36053,
+      "framebuffer_incomplete_attachment": 36054,
+      "framebuffer_incomplete_missing_attachment": 36055,
+      "framebuffer_incomplete_dimensions": 36057,
+      "framebuffer_unsupported": 36061,
+      "framebuffer_binding": 36006,
+      "renderbuffer_binding": 36007,
+      "max_renderbuffer_size": 34024,
+      "invalid_framebuffer_operation": 1286,
+      "framebuffer_attachment_color_encoding": 33296,
+      "framebuffer_attachment_component_type": 33297,
+      "framebuffer_attachment_red_size": 33298,
+      "framebuffer_attachment_green_size": 33299,
+      "framebuffer_attachment_blue_size": 33300,
+      "framebuffer_attachment_alpha_size": 33301,
+      "framebuffer_attachment_depth_size": 33302,
+      "framebuffer_attachment_stencil_size": 33303,
+      "framebuffer_default": 33304,
+      "depth24_stencil8": 35056,
+      "draw_framebuffer_binding": 36006,
+      "read_framebuffer": 36008,
+      "draw_framebuffer": 36009,
+      "read_framebuffer_binding": 36010,
+      "renderbuffer_samples": 36011,
+      "framebuffer_attachment_texture_layer": 36052,
+      "framebuffer_incomplete_multisample": 36182,
+      "unsigned_int_2_10_10_10_rev": 33640,
+      "unsigned_int_10f_11f_11f_rev": 35899,
+      "unsigned_int_5_9_9_9_rev": 35902,
+      "float_32_unsigned_int_24_8_rev": 36269,
+      "unsigned_int_24_8": 34042,
+      "half_float": 5131,
+      "rg": 33319,
+      "rg_integer": 33320,
+      "int_2_10_10_10_rev": 36255,
+      "cube_px": 34069,
+      "cube_nx": 34070,
+      "cube_py": 34071,
+      "cube_ny": 34072,
+      "cube_pz": 34073,
+      "cube_nz": 34074,
+      "ubyte": 5121,
+      "ushort": 5123,
+      "uint": 5125,
+      "mat2x3": 35685,
+      "mat2x4": 35686,
+      "mat3x2": 35687,
+      "mat3x4": 35688,
+      "mat4x2": 35689,
+      "mat4x3": 35690,
+      "vec2": 35664,
+      "vec3": 35665,
+      "vec4": 35666,
+      "ivec2": 35667,
+      "ivec3": 35668,
+      "ivec4": 35669,
+      "bvec2": 35671,
+      "bvec3": 35672,
+      "bvec4": 35673,
+      "mat2": 35674,
+      "mat3": 35675,
+      "mat4": 35676,
+      "sampler2D": 35678,
+      "sampler3D": 35679,
+      "samplerCube": 35680,
+      "sampler2DArray": 36289,
+      "DBB": 256,
+      "SBB": 1024,
+      "CBB": 16384,
+      "clamp": 33071,
+      "mirror": 33648,
+      "2d": 3553,
+      "cube": 34067,
+      "3d": 32879,
+      "2d_array": 35866,
     };
 
     // 運用上は「glEnum」という関数にしよう。そんで、数の場合はそのまま。
@@ -9649,6 +9814,19 @@ mat4 coreRotationQ(in vec4 q){
     2.0*(q.x*q.z-q.y*q.w), 2.0*(q.y*q.z+q.x*q.w), 2.0*q.w*q.w-1.0+2.0*q.z*q.z, 0.0,
     0.0, 0.0, 0.0, 1.0
   );
+}
+`,
+'coreHinge':`
+mat4 coreHinge(in vec3 origin, in vec3 axis, in float t){
+  mat4 beginT = mat4(1.0, 0.0, 0.0, -origin.x, 0.0, 1.0, 0.0, -origin.y, 0.0, 0.0, 1.0, -origin.z, 0.0, 0.0, 0.0, 1.0);
+  mat4 endT = mat4(1.0, 0.0, 0.0, origin.x, 0.0, 1.0, 0.0, origin.y, 0.0, 0.0, 1.0, origin.z, 0.0, 0.0, 0.0, 1.0);
+  mat4 rot = mat4(
+    cos(t) + (1.0-cos(t))*axis.x*axis.x, (1.0-cos(t))*axis.x*axis.y - sin(t)*axis.z, (1.0-cos(t))*axis.z*axis.x +sin(t)*axis.y, 0.0,
+    (1.0-cos(t))*axis.x*axis.y + sin(t)*axis.z, cos(t) + (1.0-cos(t))*axis.y*axis.y, (1.0-cos(t))*axis.y*axis.z - sin(t)*axis.x, 0.0,
+    (1.0-cos(t))*axis.z*axis.x - sin(t)*axis.y, (1.0-cos(t))*axis.y*axis.z + sin(t)*axis.x, cos(t) + (1.0-cos(t))*axis.z*axis.z, 0.0,
+    0.0, 0.0, 0.0, 1.0
+  );
+  return beginT * rot * endT;
 }
 `
     };
@@ -9937,6 +10115,66 @@ void applyRotation(inout vec3 p, inout vec3 n, in float t){
   mat4 tf = coreRotation(vec3(0.0, 0.0, 1.0), t);
   p = (vec4(p, 1.0) * tf).xyz;
   // nはイントラ不要
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+`,
+'getHinge':`
+#lib coreHinge;
+mat4 getHinge(in vec3 origin, in vec3 axis, in float t){
+  return coreHinge(origin, axis, t);
+}
+mat4 getHinge(in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  return coreHinge(vec3(x, y, z), vec3(ax, ay, az), t);
+}
+`,
+'localHinge':`
+#lib coreHinge;
+void localHinge(inout mat4 m, in vec3 origin, in vec3 axis, in float t){
+  m = coreHinge(origin, axis, t) * m;
+}
+void localHinge(inout mat4 m, in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  m = coreHinge(vec3(x, y, z), vec3(ax, ay, az), t) * m;
+}
+`,
+'globalHinge':`
+#lib coreHinge;
+void globalHinge(inout mat4 m, in vec3 origin, in vec3 axis, in float t){
+  m *= coreHinge(origin, axis, t);
+}
+void globalHinge(inout mat4 m, in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  m *= coreHinge(vec3(x, y, z), vec3(ax, ay, az), t);
+}
+`,
+'setHinge':`
+#lib coreHinge;
+void setHinge(inout mat4 m, in vec3 origin, in vec3 axis, in float t){
+  m = coreHinge(origin, axis, t);
+}
+void setHinge(inout mat4 m, in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  m = coreHinge(vec3(x, y, z), vec3(ax, ay, az), t);
+}
+`,
+'applyHingeP':`
+#lib coreHinge;
+void applyHingeP(inout vec3 p, in vec3 origin, in vec3 axis, in float t){
+  p = (vec4(p, 1.0) * coreHinge(origin, axis, t)).xyz;
+}
+void applyHingeP(inout vec3 p, in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  p = (vec4(p, 1.0) * coreHinge(vec3(x, y, z), vec3(ax, ay, az), t)).xyz;
+}
+`,
+'applyHinge':`
+#lib coreHinge;
+void applyHinge(inout vec3 p, inout vec3 n, in vec3 origin, in vec3 axis, in float t){
+  mat4 tf = coreHinge(origin, axis, t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要。スケール絡まないので。
+  n = (vec4(n, 0.0) * tf).xyz;
+}
+void applyHinge(inout vec3 p, inout vec3 n, in float x, in float y, in float z, in float ax, in float ay, in float az, in float t){
+  mat4 tf = coreHinge(vec3(x, y, z), vec3(ax, ay, az), t);
+  p = (vec4(p, 1.0) * tf).xyz;
+  // nはイントラ不要。スケール絡まないので。
   n = (vec4(n, 0.0) * tf).xyz;
 }
 `,
@@ -10569,9 +10807,13 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       static convertToArray(data){
         // dataが配列であることを前提とし、適切に配列化したものを返す。
         if(!Array.isArray(data)){
-          console.error('convertToArray: data is not array.');
+          // 配列でない場合も許そうか。その場合は単独配列の形で再パースしよう。
+          // おそらく行列1個しか使わないとか、そういう場合しか使わないかもだが。
+          // あるいは特定の1箇所だけ行列やベクトル、単数で置き換える場合。1個だけの場合に[]でくくるのが冗長な場合。
+          return WBOWrapper.convertToArray([data]);
           return [];
         }
+        // 長さ0の場合のエラーは特に出さないとする。
         if(data.length === 0){ return []; }
         const sample = data[0];
         // 0番が数の場合が普通である。ほとんどはここで終わりだろう。そのまま返す。
@@ -10643,10 +10885,12 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         if(ArrayBuffer.isView(data)){ return data; }
         // 通常配列の場合はarrayTypeに応じた型付配列が返る
         // なお内容がベクトルや行列の場合などは然るべくコンバートされる仕組み
-        if(Array.isArray(data)){
+        // 配列判定は中でやってるのでここでやる必要ないっすね。エラーを出してくれないので不便。
+        // ついでに、MT4とかの場合のために単独配列にする処理を追加しよう。あんま使わないかもだが。
+        //if(Array.isArray(data)){
           const convertedData = WBOWrapper.convertToArray(data);
           return new properArrayType(convertedData);
-        }
+        //}
         // まあなんか返すか
         return new Uint8Array(1);
       }
@@ -11632,7 +11876,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     const {coulour, coulour3, coulour_255, coulour3_255} = foxColor;
     const {VAOWrapper} = webglUtils;
 
-    const {unionFind} = foxUtils;
+    const {unionFind, saveText} = foxUtils;
     const {clamp} = foxMathTools;
 
     // これだけ。とりあえず...
@@ -12323,6 +12567,16 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         createProcess(process, {dict:dict, executor:this})();
         return this;
       }
+      localTransform(m){
+        // transformMatrixにmを「右から」掛ける。ローカル座標系に基づいた変換。
+        this.transfromMatrix.multM(m);
+        return this;
+      }
+      globalTransform(m){
+        // transformMatrixにmを「左から」掛ける。グローバル座標系に基づいた変換。
+        this.transformMatrix.inverseMultM(m);
+        return this;
+      }
       copy(options = {}){
         // 3Dの場合は普通にコピーしたうえで、transformMatrixをコピーする。
         // apply:trueの場合はできたあとでtransformをapplyする。そのままvao出力したりcompositeで材料に使うことを想定。
@@ -12360,6 +12614,14 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
           if(name === 'p' || name === 'n'){ attr.value.set(tmpVector); }
         }
         return data;
+      }
+      createVAO(gl, buffer = ``, layout = ``){
+        if(arguments.length === 1){
+          // 3Dでなおかつ引数がglのみの場合に限り、p,n,fのデフォルト設定が適用されるようにするか。
+          // まあこっちの方が便利な場合もあるだろう。
+          return super.createVAO(gl, `<vbo> p 3; n 3; \n <ibo> f;`, `<pointer> 0 p; 1 n; \n <ibo> f;`);
+        }
+        return super.createVAO(gl, buffer, layout);
       }
       merge(options = {}){
         const {threshold = 1e-6, compare = null} = options;
@@ -12542,6 +12804,30 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // 当然だが、他のあれこれが影響することはないので、これで処理は終わり。
         return this;
       }
+      async saveObj(name = 'geometry3d', options = {}){
+        // uvがあるかどうかで分ける
+        // 一応p,n,f前提とする。p,n,fとp,n,f,uv以外は対象外とする。
+        const {uv = false} = options;
+        const descriptions = {p:``, n:``, uv:``, f:``};
+        const vertices = this.v;
+        for(let i=0; i<vertices.length; i++){
+          const v = vertices[i];
+          descriptions.p += `v ${v.p.x} ${v.p.y} ${v.p.z}\n`;
+          descriptions.n += `vn ${v.n.x} ${v.n.y} ${v.n.z}\n`;
+          if(uv){ descriptions.uv += `vt ${v.uv[0]} ${v.uv[1]}\n`; }
+        }
+        for(let i=0; i<this.f.length; i++){
+          const face = this.f[i];
+          // 1ベースなので1を足す
+          const a = face[0]+1;
+          const b = face[1]+1;
+          const c = face[2]+1;
+          descriptions.f += (uv ? `f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}\n` : `f ${a}//${a} ${b}//${b} ${c}//${c}\n`);
+        }
+        const preDeclaration = `# vertex count: ${vertices.length}\n# face count: ${this.f.length}\n`;
+        const result = preDeclaration.concat(descriptions.p).concat(descriptions.n).concat(descriptions.uv).concat(descriptions.f);
+        await saveText(result, name, 'obj');
+      }
       static quad(params = {}){
         const quad = createQuad(this, params);
         // なぜquadのみここにfaceNormalsがあるかというと、quadが根っこで、そのうえにplane,halfPlane,各種meshがあるためです。
@@ -12633,8 +12919,9 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // なのでpushしたあとgetして左から掛けて(inverseMultM)あとでpopすることで影響が出ないようにする
         // 行列を掛けたタイミングでcompositeでつなげる
         geom.pushTransform();
-        const tf = geom.getTransform();
-        tf.inverseMultM(this.transformMatrix);
+        //const tf = geom.getTransform();
+        //tf.inverseMultM(this.transformMatrix);
+        geom.globalTransform(this.transformMatrix);
         this.composite(geom);
         geom.popTransform();
         return this;
@@ -12655,7 +12942,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       'setTranslation', 'setRotation', 'setRotationQ', 'setScale',
       'localTranslation', 'localRotation', 'localRotationQ', 'localScale',
       'globalTranslation', 'globalRotation', 'globalRotationQ', 'globalScale',
-      'translation', 'rotation', 'rotationQ', 'scale'
+      'translation', 'rotation', 'rotationQ', 'scale',
+      'localHinge', 'globalHinge', 'hinge'
     ];
     for(const method of derivedMethodsFromMT4){
       Geometry3D.prototype[method] = (function(){
@@ -12965,7 +13253,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     // sphere. 球です。detail制限は共に3でいいっすね。
     function createSphere(geometry3DClass, params = {}){
       const {details = [24,24], line = 'none', transform = ``, dict = {}} = params;
-      const properDetails = createDetails(details, [[3, 4096], [3, 4096]]);
+      const properDetails = createDetails(details, [[3, 4096], [2, 4096]]);
       const geom = createHalfPlane(geometry3DClass, {
         details:properDetails, line,
         upperHalf:true, lowerHalf:true, xSideHalf:true, ySideHalf:true
@@ -13095,13 +13383,20 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     // circleの有無はcap:true/falseで指定する。cylinderの場合のupperCap,lowerCapからcapだけ取った形。
     // 法線は...見た目的には、「側面を用意する」->「一旦計算」->「円を付ける（正確なフラット法線）」->必要ならtransform
     // でいいと思います。やっぱ全部マージだとあんま綺麗じゃないんですよ。これで行こう。
+
+    // 半径の設定が面倒という要望があったので半径を実装する。高さを半径で割っておき、transform前にスケールする。
     function createCone(geometry3DClass, params = {}){
-      const {height = 1, details = [24,1,1], line = 'none', transform = ``, dict = {}, cap = false} = params;
+      const {
+        height:coneHeight = 1, radius:coneRadius = 1,
+        details = [24,1,1], line = 'none', transform = ``, dict = {}, cap = false
+      } = params;
       const [dx, dy0, dy1] = createDetails(details, [[3,4096], [1,4096], [1,4096]]);
       const geom = createHalfPlane(geometry3DClass, {
         details:[dx, dy0], line,
         upperHalf:true, lowerHalf:false, xSideHalf:true, ySideHalf:false
       });
+      // heightをconeHeight/coneRadiusで設定し、あとでconeRadiusでスケールする。
+      const height = coneHeight/coneRadius;
       // 法線はまともにやると死ぬのでmergeでサクッと。だからここでは用意しない。
       geom.modify((v) => {
         const {x, y} = v.p;
@@ -13125,6 +13420,9 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         geom.composite(circle);
       }
 
+      // 作り終わったのでconeRadiusでスケーリングしてapplyTransformで確定させる
+      geom.scale(coneRadius).applyTransform();
+
       // transform.
       if(transform.length > 0){
         geom.transform(transform, dict).applyTransform();
@@ -13136,8 +13434,10 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     // 半球
     // 敢えて底面をふさぐオプションは設けない。円でふさぎたかったら好きに。circleはあるのだし。
     // あくまでキャップ用とします。法線計算は無し。球と違って開いてるため、正確な値にならない（縁で曲がってしまう）
+
+    // こっちもあった方がいい？半径。一応実装するか。
     function createHemiSphere(geometry3DClass, params = {}){
-      const {details = [24,8], line = 'none', transform = ``, dict = {}, invert = false} = params;
+      const {details = [24,8], radius = 1, line = 'none', transform = ``, dict = {}, invert = false} = params;
       const [dx, dy] = createDetails(details, [[3, 4096], [1, 4096]]);
       const geom = createHalfPlane(geometry3DClass, {
         details:[dx, dy], line,
@@ -13161,6 +13461,10 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // nはまあpと一緒なのでそういうふうにしとくか
         v.n = v.p;
       });
+
+      // 作るうえでは半径1の方が作りやすいんで、後からスケーリングする流れにしたい。
+      geom.scale(radius).applyTransform();
+
       // transformがあれば適用する。法線も線形変換が適用される。
       if(transform.length > 0){
         geom.transform(transform, dict).applyTransform();
@@ -13182,8 +13486,15 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     // ただしcap部分は0と1でuniformとする。これは内容的にはいわゆるIBMに当たる。
     // upperCap,lowerCap = 'none'/'butt'/'round'(mdnがbutt,roundでやってたので)...デフォルトはnoneとする。
     // buttの場合にcircleで埋めて、roundの場合に球で埋める形。なおoffsetは下側0,上側1.
+
+    // あんまパラメータ増やしたくないが仕方ないのでradiusを実装します。内容的にはconeと同じことをします。
     function createCylinder(geometry3DClass, params = {}){
-      const {height = 1, details = [24,1,16,16], line = 'none', transform = ``, dict = {}, upperCap = 'none', lowerCap = 'none'} = params;
+      const {
+        height:cylinderHeight = 1, radius:cylinderRadius = 1,
+        details = [24,1,16,16], line = 'none', transform = ``, dict = {}, upperCap = 'none', lowerCap = 'none'
+      } = params;
+      // あらかじめheightをcylinderHeight/cylinderRadiusで定義しておき、最後にcylinderRadiusでスケールする。
+      const height = cylinderHeight/cylinderRadius;
       const [dx, dy0, dy1, dy2] = createDetails(details, [[3,4096],[1,4096],[1,4096],[1,4096]]);
       const geom = createHalfPlane(geometry3DClass, {
         details:[dx, dy0], line,
@@ -13248,6 +13559,9 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         }
         // おつかれさま。
       }
+
+      // じゃあここでcylinderRadius倍すればいいっすね。
+      geom.scale(cylinderRadius).applyTransform();
 
       // transform.
       if(transform.length > 0){
@@ -13509,7 +13823,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
   const foxApplications = (function(){
     const applications = {};
 
-    const {parseDesignDescription} = foxParse;
+    const {parseDesignDescription, parseLinkDescription} = foxParse;
     const {TypeErrorCatcher} = foxErrors;
     const {glEnum, glTypedArray, ProgramWrapper, WBOWrapper, VBOWrapper, UBOWrapper, IBOWrapper, VAOWrapper} = webglUtils;
     const {
@@ -13686,192 +14000,110 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       }
     }
 
-    // コンストラクタ
-    // 2D限定ですね
-    // 3Dでもいいんだろうか？？？3Dでもいいか。
-    // なおapplyBoneでベクトルを出しているがシェーダーでやる場合これは内部で計算する
-    // のでここではやらないですね
-    // setWeightまでですね。attrにぶちこむのは...あとで。
-    class WeightedVertice{
-      constructor(x, y, z=0){
-        this.v = new Vecta(x, y, z);
-        this.weight = [1,0,0,0];
-        this.joint = [0,0,0,0];
-        this.bone = null;
-      }
-      setBone(b){
-        this.bone = b;
-      }
-      setWeights(){
-        // jointとweightを...
-        const data = [];
-        for(let i=0; i<this.bone.tfs.length; i++){
-          // positionは事前に計算しておく
-          const p = this.bone.tfs[i].position;
-          data.push({index:i, d:Math.hypot(p.x - this.v.x, p.y - this.v.y, p.z - this.v.z)});
-        }
-        data.sort((d0, d1) => {
-          if(d0.d < d1.d) return -1;
-          if(d0.d > d1.d) return 1;
-          return 0;
-        });
-        let sum = 0;
-        // 申し訳程度のゼロ割対策
-        for(let i=0; i<4; i++){
-          if(i < data.length){
-            sum += 1/(data[i].d+1e-9);
-            this.joint[i] = data[i].index;
-          }else{
-            this.joint[i] = 0;
-          }
-        }
-        for(let i=0; i<4; i++){
-          if(i < data.length){
-            this.weight[i] = (1/data[i].d+1e-9)/sum;
-          }else{
-            this.weight[i] = 0;
-          }
-        }
-      }
-      getV(){
-        return this.v;
-      }
-      getWeight(){
-        return this.weight;
-      }
-      getJoint(){
-        return this.joint;
-      }
-      applyBone(){
-        // this.boneのbone行列を取り出して線形和を取る
-        const mats = [];
-        for(let i=0; i<4; i++){
-          const b = this.bone.mat(this.joint[i], "bone");
-          mats.push(b);
-        }
-        const result = new Vecta(0,0,0);
-        for(let i=0; i<4; i++){
-          result.addScalar(mats[i].applyP(this.v, true), this.weight[i]);
-        }
-        return result;
-      }
-    }
+    // TransformTreeArrayは廃止。IBMがおかしい。ので。うまくいかない。
+    // TFTreeは有用なので残す。改名してTransformTreeとする。
 
-    // Transform木
-    // jointは構成用のトランスフォームで、ローカルで間をいじることで変形を可能にする
-    // さらに木構造なので組み立てができる
-    // 最終的にscanningでglobalを計算し描画する
-    // mainに登録して描画も実行できる、ただskin-meshの場合は不要か（boneを描画したいなら別だけど）
-    // model行列を追加
     class TransformTree extends Tree{
-      constructor(){
+      constructor(base = MT4.create()){
         super();
-        this.joint = new MT4();
-        this.local = new MT4();
-        this.model = new MT4();
-        this.global = new MT4();
-        this.position = new Vecta(); // weight計算に使う
-        this.inverseBind = new MT4(); // skin-meshで使うbone行列の計算にこれを使う
-        this.bone = new MT4(); // 通常のglobalに右からinverseBindを掛けて算出する
-        this.main = () => {};
+        this.globalMatrix = MT4.create();
+        this.baseMatrix = base.copy()
+        this.localMatrix = base.copy();
       }
-      setMain(func){
-        this.main = func;
-        return this;
+      get global(){
+        return this.globalMatrix;
       }
-      execute(){
-        this.main(this);
-        return this;
+      get local(){
+        return this.localMatrix;
       }
-      static computeInverseBind(nodeTree){
-        // localを考慮しないでglobalを計算し、その結果のglobalからpositionを決定し、
-        // さらに逆行列でinverseBindを決定する
-        const matStuck = [];
-        const curMat = new MT4();
-        // 初回訪問時にスタックに行列をとっておいて
-        // 現在の行列にjointを掛け算
-        // jointの累積が個々のbindMatrixになるんで
-        // そこからpositionを出すと同時に逆行列を取る感じ
-        // 最終訪問時（引き返す時）にスタックから行列を出す
+      get base(){
+        return this.baseMatrix;
+      }
+      set global(m){
+        this.globalMatrix.set(m);
+      }
+      set local(m){
+        this.localMatrix.set(m);
+      }
+      set base(m){
+        this.baseMatrix.set(m);
+      }
+      initializeLocalMatrix(){
+        this.local = this.base;
+      }
+      static computeGlobal(nodeTree, options = {}){
+        // reset optionはglobal計算後にlocalをbaseで上書きする
+        const {reset = false} = options;
+        const matrixStuck = [];
+        const currentMatrix = MT4.create();
         Tree.scan(nodeTree, {
-          firstArrived:(t) => {
-            matStuck.push(curMat.copy());
-            curMat.multM(t.joint);
-            // ここでのcurMatが求めるglobalなので、
-            // これを元にpositionとinverseBindを計算する
-            curMat.applyP(t.position.set(0,0,0));
-            t.inverseBind.set(curMat).invert();
+          firstArrived:(curTree)=>{
+            matrixStuck.push(currentMatrix.copy());
+            currentMatrix.multM(curTree.local);
+            curTree.global = currentMatrix;
           },
-          lastArrived:(t) => {
-            curMat.set(matStuck.pop());
+          lastArrived:(curTree)=>{
+            const m = matrixStuck.pop();
+            currentMatrix.set(m);
+            if(reset){
+              curTree.initializeLocalMatrix();
+            }
           }
         });
       }
-      static computeGlobal(nodeTree){
-        const matStuck = [];
-        const curMat = new MT4();
-        // 初回訪問時にスタックに行列をとっておいて
-        // 現在の行列にjointとlocalを考慮させたうえで
-        // modelを加味してglobalにセットする
-        // さらにinverseBindも掛け算してskin-meshに使えるようにする
-        // 最終訪問時（引き返す時）にスタックから行列を出す
-        Tree.scan(nodeTree, {
-          firstArrived:(t) => {
-            matStuck.push(curMat.copy());
-            curMat.multM(t.joint).multM(t.local);
-            t.global.set(curMat).multM(t.model);
-            t.bone.set(t.global).multM(t.inverseBind);
-          },
-          lastArrived:(t) => {
-            curMat.set(matStuck.pop());
+      static build(count = 1, treeLayout = ``, options = {}){
+        // treeLayoutにはindexとともにトランスフォーム情報が入ってる
+        // countで列の長さが決まるのでそれに従う形。
+        // linkLayoutでseparateWithCommaで...する。
+        // @treeは省略できるようにするか。あってもいいけど。
+        const properTreeLayout = (treeLayout.match(/@tree/) !== null ? treeLayout : `@tree \n`.concat(treeLayout));
+        const trees = Array(count);
+        for(let i=0; i<count; i++){ trees[i] = new this(); }
+        // optionsは今のところdictとmacroの2つだけ。
+        const parsedTreeLayout = parseDesignDescription(properTreeLayout, TransformTree.TREE_DESIGN, options);
+        //  const parsedLinkLayout = parseLinkDescription(linkLayout);
+
+        const {transform = null, link = null} = parsedTreeLayout.tree;
+        if(transform !== null){
+          for(const data of transform.content){
+            const target = trees[data.index].base;
+            switch(data.type){
+              case 't':
+                target.localTranslation(data.x, data.y, data.z); break;
+              case 'r':
+                target.localRotation(data.x, data.y, data.z, data.angle); break;
+              case 's':
+                target.localScale(data.x, data.y, data.z); break;
+            }
           }
-        });
+        }
+        if(link !== null){
+          for(const pair of link.content){
+            trees[pair[0]].addChild(trees[pair[1]]);
+          }
+        }
+        for(const tree of trees){ tree.initializeLocalMatrix(); }
+        return trees;
       }
     }
 
-    // TransformTreeArray.
-    // nで個数を決める。配列の形で空っぽのTransformTreeを用意したうえで、index指定でjointとlocalを指定する
-    // tf木構築に対する答えの一つ。linkでつなげてsetMainで関数渡してexecuteで実行する。
-    // 行列周りをmatで取得していじる形に変更、あとfactoryを引数に。
-    class TransformTreeArray{
-      constructor(n=0, factory = () => new TransformTree()){
-        this.factory = factory;
-        this.tfs = [];
-        for(let i=0; i<n; i++){ this.addTF(); }
-      }
-      addTF(){
-        this.tfs.push(this.factory());
-        return this;
-      }
-      getTF(i){
-        return this.tfs[i];
-      }
-      link(i, j){
-        this.tfs[i].addChild(this.tfs[j]);
-        return this;
-      }
-      setMain(i, func){
-        this.tfs[i].setMain(func);
-        return this;
-      }
-      setMainAll(func){
-        for(const tf of this.tfs){ tf.setMain(func); }
-        return this;
-      }
-      mat(i, type){
-        return this.tfs[i][type];
-      }
-      reset(){
-        for(const tf of this.tfs){ tf.reset(); }
-        return this;
-      }
-      execute(i){
-        this.tfs[i].execute();
-        return this;
-      }
-      executeAll(){
-        for(const tf of this.tfs){ tf.execute(); }
-        return this;
+    // @treeは必ずつける。んで...
+    // <transform>だけですね。今のところ。
+    // 用意した順に適用される。t,r,sでtranslation,rotation,scaleのエイリアスとする。
+    // おそらくscaleはほぼ使わないだろうからrotationに合わせて1,0,0,0デフォでいいだろ
+    // linkもできるんだろうか
+    TransformTree.TREE_DESIGN = {
+      layout:{
+        tree:{
+          transform:{
+            type:'enum',
+            keys:['index', 'type', 'x', 'y', 'z', 'angle'],
+            values:[0, 't', 1, 0, 0, 0]
+          },
+          link:{
+            type:'link'
+          }
+        }
       }
     }
 
@@ -14401,127 +14633,6 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       }
     }
 
-    // SVG翻訳機構作っておくか
-    // Aも追加しよう。ざっくりいうと、arcToと似てて、middleとlastとradiusで5つ指定する。
-    // いずれ3Dもできるように書き直すよ。名前もparseSVGとかする。改名する。
-    function parseData(options = {}){
-      const {data="M 0 0", bezierDetail2 = 8, bezierDetail3 = 5, arcDetail = 8,  parseScale = 1, lineSegmentLength = 1} = options;
-      const cmdData = data.split(" ");
-      const result = [];
-      let subData = [];
-      for(let i=0; i<cmdData.length; i++){
-        switch(cmdData[i]){
-          case "M":
-            if (subData.length>0) result.push(subData.slice());
-            subData.length = 0;
-            subData.push(new Vecta(
-              Number(cmdData[i+1]), Number(cmdData[i+2])
-            ).mult(parseScale));
-            i+=2; break;
-          case "L":
-            const p = subData[subData.length-1];
-            const q = new Vecta(
-              Number(cmdData[i+1]), Number(cmdData[i+2])
-            ).mult(parseScale);
-            const lineLength = q.dist(p);
-            for(let lengthSum=0; lengthSum<lineLength; lengthSum += lineSegmentLength){
-              subData.push(p.lerp(q, lengthSum/lineLength, true));
-            }
-            subData.push(q);
-            i+=2; break;
-          case "Q":
-            const p0 = subData[subData.length-1];
-            const a0 = Number(cmdData[i+1])*parseScale;
-            const b0 = Number(cmdData[i+2])*parseScale;
-            const c0 = Number(cmdData[i+3])*parseScale;
-            const d0 = Number(cmdData[i+4])*parseScale;
-            for(let k=1; k<=bezierDetail2; k++){
-              const t = k/bezierDetail2;
-              subData.push(new Vecta(
-                (1-t)*(1-t)*p0.x + 2*t*(1-t)*a0 + t*t*c0,
-                (1-t)*(1-t)*p0.y + 2*t*(1-t)*b0 + t*t*d0
-              ));
-            }
-            i+=4; break;
-          case "C":
-            const p1 = subData[subData.length-1];
-            const a1 = Number(cmdData[i+1])*parseScale;
-            const b1 = Number(cmdData[i+2])*parseScale;
-            const c1 = Number(cmdData[i+3])*parseScale;
-            const d1 = Number(cmdData[i+4])*parseScale;
-            const e1 = Number(cmdData[i+5])*parseScale;
-            const f1 = Number(cmdData[i+6])*parseScale;
-            for(let k=1; k<=bezierDetail3; k++){
-              const t = k/bezierDetail3;
-              subData.push(new Vecta(
-                (1-t)*(1-t)*(1-t)*p1.x + 3*t*(1-t)*(1-t)*a1 + 3*t*t*(1-t)*c1 + t*t*t*e1,
-                (1-t)*(1-t)*(1-t)*p1.y + 3*t*(1-t)*(1-t)*b1 + 3*t*t*(1-t)*d1 + t*t*t*f1
-              ));
-            }
-            i+=6; break;
-          case "A":
-            // arcToのような円弧
-            const initialPoint = subData[subData.length-1];
-            const a2 = Number(cmdData[i+1])*parseScale;
-            const b2 = Number(cmdData[i+2])*parseScale;
-            const c2 = Number(cmdData[i+3])*parseScale;
-            const d2 = Number(cmdData[i+4])*parseScale;
-            const expectRadius = Number(cmdData[i+5])*parseScale;
-            const middlePoint = Vecta.create(a2, b2);
-            const endPoint = Vecta.create(c2, d2);
-            const radius = Math.min(expectRadius, initialPoint.dist(middlePoint), middlePoint.dist(endPoint));
-            const dir01 = middlePoint.sub(initialPoint, true).normalize();
-            const dir12 = endPoint.sub(middlePoint, true).normalize();
-            const angle = dir01.angleTo(dir12);
-            const middle0 = middlePoint.addScalar(dir01, -radius, true);
-            const middle1 = middlePoint.addScalar(dir12, radius, true);
-            // p2 -> middle0 -> middle1 -> r2の順に訪問する。
-            const u = dir01.mult((
-              Math.abs(angle) < Number.EPSILON ? 2*radius/arcDetail : 2*radius*Math.sin(angle*0.5/arcDetail)/Math.tan(angle*0.5)
-            ), true);
-            u.rotate(angle*0.5/arcDetail);
-            // ここからだが、MCSと違ってp2 -> middle0は直線で、detailが要るんで、Lとみなす。
-            const preLength = initialPoint.dist(middle0);
-            for(let lengthSum=0; lengthSum<preLength; lengthSum += lineSegmentLength){
-              subData.push(initialPoint.lerp(middle0, lengthSum/preLength, true));
-            }
-            subData.push(middle0);
-            // 円弧
-            const curPoint = middle0.copy();
-            for(let k=1; k<arcDetail; k++){
-              curPoint.add(u);
-              subData.push(curPoint.copy());
-              u.rotate(angle/arcDetail);
-            }
-            subData.push(middle1);
-            // 直線
-            const postLength = middle1.dist(endPoint);
-            for(let lengthSum=0; lengthSum<postLength; lengthSum += lineSegmentLength){
-              subData.push(middle1.lerp(endPoint, lengthSum/postLength, true));
-            }
-            subData.push(endPoint);
-            i+=5; break;
-          case "Z":
-            // 最初の点を追加するんだけど、subData[0]を直接ぶち込むと
-            // 頭とおしりが同じベクトルになってしまうので、
-            // copy()を取らないといけないんですね
-            // Lでつなぎます。
-            const p2 = subData[subData.length-1];
-            const q2 = subData[0].copy();
-            const lineLength2 = q2.dist(p2);
-            for(let lengthSum=0; lengthSum<lineLength2; lengthSum += lineSegmentLength){
-              subData.push(p2.lerp(q2, lengthSum/lineLength2, true));
-            }
-            subData.push(q2);
-            //result.push(subData.slice());
-            break;
-        }
-      }
-      // Mが出てこない場合はパス終了
-      result.push(subData.slice());
-      return result;
-    }
-
     // 実験機能。特にバグが無いならparseDataに取って替えられます。
     // 3次元にも対応できるSVG翻訳機です。
     // dataは別でいいだろ。必須なんだから別にすべきだろ。
@@ -14667,8 +14778,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         bezierDetail2 = 8, bezierDetail3 = 5, lineSegmentLengthRatio = 1/64,
         minLengthRatio = 1/50, mergeThresholdRatio = 1e-9, showDetail = false
       } = params;
-      const svgContours = parseData({
-        data:svgData, parseScale:scaleFactor,
+      const svgContours = parseSVG(svgData, {
+        parseScale:scaleFactor,
         bezierDetail2:bezierDetail2, bezierDetail3:bezierDetail3,
         lineSegmentLength:scaleFactor*lineSegmentLengthRatio
       });
@@ -14801,8 +14912,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
           // 多分無視するのが一番いい
           // getPathsはスペースも含めて位置を調整してくれるのでそこは問題ない
           if(cmdText==="Z") continue;
-          const letterContours = parseData({
-            data:cmdText,
+          const letterContours = parseSVG(cmdText, {
             bezierDetail2:bezierDetail2, bezierDetail3:bezierDetail3,
             lineSegmentLength:lineSegmentLengthRatio*textScale
           });
@@ -16759,22 +16869,6 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       getTexture(id = 0){
         return this.textures[id];
       }
-      /*
-      static createBuffer(gl, data, options = {}){
-        // おそらく廃止...
-        // VBOもIBOもUBOも作る関数あるし。
-
-        // バッファ作成用関数
-        // dataは数でもいいし、型付配列とかでもいい。
-        // いずれoptionにすべきだなぁこれ...あとWebGPU版も欲しいかも？
-        const {target = gl.ARRAY_BUFFER, usage = gl.STATIC_DRAW} = options;
-
-        const buf = gl.createBuffer();
-        gl.bindBuffer(target, buf);
-        gl.bufferData(target, data, usage);
-        gl.bindBuffer(target, null);
-        return buf;
-      }*/
       static calcFrames(data, acc, animation, fps){
         // channelのinputをすべて出してminのminとmaxのmaxで以下略
         let inputMin = Infinity;
@@ -16941,7 +17035,6 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       }
       setInitialDescriptors(code = ""){
         // 同じように書いて、デスクリプタの初期状態をいじる。なおwriteModeやdeclaration系はあっても無視される。
-        //const result = parseSourceCode(code);
         const result = ShaderPrototype.parse(code);
         // 記述があったもののみ上書きされる仕組み。
         for(const key of Object.keys(result.vs)){
@@ -16958,41 +17051,25 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         const {showResult = false} = options;
         // 初期化は定義されているもののみに対して行う
         // <>定義のみで中身が空っぽならば初期化だけされる感じ。今後追加バージョンも用意するかも（attribute_aとか_wとか）
-        //const result = parseSourceCode(code);
         // 汎用パーサーで書き換えてみる
         const result = ShaderPrototype.parse(code);
-        //const result = parseDesignDescription(code, SHADER_DESIGN);
         if(showResult){ console.log(result); }
 
-        // initフラグならば初期化する。あとはwriteModeに従って上書きか追記。
-        // たとえば初期化してから追記してもいいしそのまま追記でもいい。
-        const modifyText = (currentText, subText, mode) => {
-          switch(mode){
-            case "write": return subText; // writeならばsubTextで上書き
-            case "add": return currentText + subText; // addならば元の文章に追記
-            case "none": return currentText; // noneならばそのまま
-          }
-          // デフォルト
-          return subText;
-        }
+        // フラグは用いないことになった。
 
         // descriptors
         for(const key of Object.keys(this.descriptors.vs)){
           const descriptor = result.vs[key];
           if(descriptor !== undefined){
-            const flag = descriptor.flag;
-            // いずれここは追加記述も出来るようになるかも？
-            if(flag.init){ this.initDescriptors('vs', key); }
-            this.descriptors.vs[key] = modifyText(this.descriptors.vs[key], descriptor.content, flag.writeMode);
+            // 上書きしか使ってないので上書きでいいっす。
+            this.descriptors.vs[key] = descriptor.content;
           }
         }
         for(const key of Object.keys(this.descriptors.fs)){
           const descriptor = result.fs[key];
           if(descriptor !== undefined){
-            const flag = descriptor.flag;
-            // いずれここは追加記述も出来るようになるかも？
-            if(flag.init){ this.initDescriptors('fs', key); }
-            this.descriptors.fs[key] = modifyText(this.descriptors.fs[key], descriptor.content, flag.writeMode);
+            // 上書きでいいっしょ
+            this.descriptors.fs[key] = descriptor.content;
           }
         }
 
@@ -17003,42 +17080,36 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
 
         // varyings
         if(commonVarying !== undefined){
-          if(commonVarying.flag.init){ this.variables.varyings = {}; }
           for(const varying of commonVarying.content){
             this.variables.varyings[varying.name] = varying.type;
           }
         }
         // precisions (vs)
         if(vsPrecision !== undefined){
-          if(vsPrecision.flag.init){ this.variables.precisions.vs = {}; }
           for(const precision of vsPrecision.content){
             this.variables.precisions.vs[precision.type] = precision.precision;
           }
         }
         // attributes
         if(vsAttribute !== undefined){
-          if(vsAttribute.flag.init){ this.variables.attributes = {}; }
           for(const attribute of vsAttribute.content){
             this.variables.attributes[attribute.name] = {location:attribute.location, type:attribute.type};
           }
         }
         // uniforms (vs)
         if(vsUniform !== undefined){
-          if(vsUniform.flag.init){ this.variables.uniforms.vs = {}; }
           for(const uniform of vsUniform.content){
             this.variables.uniforms.vs[uniform.name] = uniform.type;
           }
         }
         // precisions (fs)
         if(fsPrecision !== undefined){
-          if(fsPrecision.flag.init){ this.variables.precisions.fs = {float:'high'}; }
           for(const precision of fsPrecision.content){
             this.variables.precisions.fs[precision.type] = precision.precision;
           }
         }
         // uniforms (fs)
         if(fsUniform !== undefined){
-          if(fsUniform.flag.init){ this.variables.uniforms.fs = {}; }
           for(const uniform of fsUniform.content){
             this.variables.uniforms.fs[uniform.name] = uniform.type;
           }
@@ -17181,27 +17252,6 @@ void main(){
           post:{ type:'text' },
           output:{ type:'text' }
         }
-      },
-      flagDefinition:(flag = "") => {
-        // たとえばIWの場合は常に初期化する、常に上書きする。これがデフォルト。
-        // 「I」の場合は初期化するだけで、記述の変更は実行されない。
-        // attributeやuniformの場合はIだけ意味を持つ。元々あるのをどうするかという話。
-        // fsのfloatのprecisionはほぼ必須級なのでそこはそれ。最終的に使うかどうかは派生形次第。
-        const result = {init:true, writeMode:"write"};
-        // default.
-        if(flag === ""){ return result; }
-        // それ以外。
-        result.init = (flag.match(/I/) !== null || flag.match(/i/) !== null);
-        const hasW = (flag.match(/W/) !== null || flag.match(/w/) !== null);
-        const hasA = (flag.match(/A/) !== null || flag.match(/a/) !== null);
-        if(hasW){
-          result.writeMode = "write";
-        }else if(hasA){
-          result.writeMode = "add";
-        }else{
-          result.writeMode = "none";
-        }
-        return result;
       }
     };
 
@@ -18290,9 +18340,8 @@ ${decl.fs.varying}
 
 // ----------------------- PBRLight -----------------------//
 // 使うものだけ
-#define PI 3.14159265359
-#define PI2 6.28318530718
-#define EPSILON 1e-6
+// PI,PI2は被るといけないので排除。EPSILONも当たり障りのない名前にする。
+#define EPSILON_PBR 1e-6
 #define saturate(a) clamp( a, 0.0, 1.0 ) // 計算で使う
 
 #define DIRECTIONAL_LIGHT_COUNT_MAX ${this.directionalLightCount}
@@ -18452,7 +18501,7 @@ void getSpotDirectLightIrradiance(const in spotLight light, const in GeometricCo
 
 // Normalized Lambert
 vec3 DiffuseBRDF(vec3 diffuseColor) {
-  return diffuseColor / PI;
+  return diffuseColor / 3.14159265359;
 }
 
 vec3 F_Schlick(vec3 specularColor, vec3 H, vec3 V) {
@@ -18463,11 +18512,11 @@ float D_GGX(float a, float dotNH) {
   float a2 = a*a;
   float dotNH2 = dotNH*dotNH;
   float d = dotNH2 * (a2 - 1.0) + 1.0;
-  return a2 / (PI * d * d);
+  return a2 / (3.14159265359 * d * d);
 }
 
 float G_Smith_Schlick_GGX(float a, float dotNV, float dotNL) {
-  float k = a*a*0.5 + EPSILON;
+  float k = a*a*0.5 + EPSILON_PBR;
   float gl = dotNL / (dotNL * (1.0 - k) + k);
   float gv = dotNV / (dotNV * (1.0 - k) + k);
   return gl*gv;
@@ -18491,7 +18540,7 @@ vec3 SpecularBRDF(const in IncidentLight directLight, const in GeometricContext 
   float D = D_GGX(a, dotNH);
   float G = G_Smith_Schlick_GGX(a, dotNV, dotNL);
   vec3 F = F_Schlick(specularColor, V, H);
-  return (F*(G*D))/(4.0*dotNL*dotNV+EPSILON);
+  return (F*(G*D))/(4.0*dotNL*dotNV+EPSILON_PBR);
 }
 
 // RenderEquations(RE)
@@ -18501,7 +18550,7 @@ void RE_Direct(const in IncidentLight directLight, const in GeometricContext geo
   vec3 irradiance = dotNL * directLight.color;
 
   // punctual light
-  irradiance *= PI;
+  irradiance *= 3.14159265359;
 
   reflectedLight.directDiffuse += irradiance * DiffuseBRDF(material.diffuseColor);
   reflectedLight.directSpecular += irradiance * SpecularBRDF(directLight, geometry, material.specularColor, material.specularRoughness);
@@ -19396,9 +19445,10 @@ void main(){
 
     // 3D関連
     applications.CameraController = CameraController;
-    applications.WeightedVertice = WeightedVertice;
+    //applications.WeightedVertice = WeightedVertice;
     applications.TransformTree = TransformTree;
-    applications.TransformTreeArray = TransformTreeArray;
+    //applications.TransformTreeArray = TransformTreeArray;
+    //applications.TFTree = TFTree;
     applications.BoneTree = BoneTree;
     applications.createGltf = createGltf;
     applications.createGlb = createGlb;
@@ -19425,7 +19475,7 @@ void main(){
     applications.createFSS = createFSS; // 追加。座標系取得用の関数。
 
     // Text関連
-    applications.parseData = parseData;
+    //applications.parseData = parseData;
     applications.parseSVG = parseSVG;
     applications.parseCmdToText = parseCmdToText;
     applications.getSVGContours = getSVGContours;

@@ -4,11 +4,11 @@
 jsdelivr:
 
 ```
-https://cdn.jsdelivr.net/npm/fisce.js@1.4.0/src/index.min.js
+https://cdn.jsdelivr.net/npm/fisce.js@1.4.2/src/index.min.js
 ```
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.4.0/src/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fisce.js@1.4.2/src/index.min.js"></script>
 ```
 
 memo  
@@ -18,4 +18,7 @@ npm version patch/minor/major -m "コメント"
 npm publish  
 npm logout  
 
-リリース関連が長くなってきたので別フォルダに移動させました。
+リリース関連が長くなってきたので別フォルダに移動させました。  
+
+管理人が気紛れなので好き勝手やらかしてます。どうなっても良ければお使いください。  
+ひゃっほう！！！  
