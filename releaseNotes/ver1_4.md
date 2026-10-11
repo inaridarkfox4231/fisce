@@ -184,3 +184,53 @@ textureやframebufferを作れるようにしていきたいんですね。そ�
 
 ## 1.4.2
 1.4.1で見つかった不具合の改善、新しい関数（MT4のHingeとか）の導入、いくつかの機能の廃止（シェーダーの追記機能など）。
+
+### Geometry3DにlocalTransform,globalTransformを実装  
+たとえばGeometryBuilderのaddでこれを使っています。内容的には与えられた行列を右から左から掛けるものです。地味に無かったので。  
+### PBRのシェーダーソースからPI,PI2を排除  
+まあPI2なんでTAUと被らないんですがついでに。PIとPI2. 極力余計な定数を外部的に用意したくないので。  
+### Geometry3D以降のcreateVAOで引数がglのみの場合の挙動を実装  
+具体的には
+```js
+geom.createVAO(gl, `<vbo> p 3; n 3; \n <ibo> f;`,`<pointer> 0 p; 1 n; \n <ibo> f;`);
+```
+が実現する用に省略されます。まあテスト用に出したいだけの場合、これでいいじゃないかというわけです。粒度が欲しい場合に書き換えればいいというわけ。  
+### Hingeの導入  
+新しいトランスフォームです。とはいっても回転と平行移動の組み合わせです。  
+回転とスケールはいずれも原点中心（globalの場合はglobal原点、localの場合はlocal座標系の原点）なんですが、それをいじれるんです。それだけですが、極めて有用です。  
+localHinge,globalHinge,hinge(=localHinge,エイリアス)の3種が導入されます。位置と回転を指定します。つまり引数は2個です。  
+位置はベクトルや配列で、回転は引数を配列形式で用意します（[0,0,1,Math.PI/2]とかそんな感じ）。そうすると位置の周りに回転します。  
+localHingeは主に折り畳みアニメーションとかで活躍します。いちいち位置を指定するのが事実上困難だからです。  
+globalHingeはサイコロなど、立体の回転で使います。座標系がコロコロ変わるためローカルでは位置を特定できないからです。  
+なおcodeSnipetsにもHinge系を一通り用意しました。オーバーロードはvec3,vec3,floatとfloat7つ連続の2種類だけです。  
+### MT4にlerpを実装  
+活用事例があったので、一応。線形補間です。差が短い場合はlerpも有用だろうと。まあskinMeshでもやってるからね。  
+### cone,hemiSphere,Cylinderにradiusを導入  
+あった方が楽なので。たとえばCylinderで頭のcapの大きさの比率を変えずに伸び縮みすることすら困難なので導入しました。  
+radiusとheightで大体色々表現できますね。  
+### WBOWrapperのgetProperDataの配列ではない場合の挙動  
+たとえばベクトルや行列の場合、それのみの長さ1の配列として扱われます。ピンポイントで変えたい場合にいちいち[]で囲む必要がなくなります。  
+### glEnumにテクスチャ関連のエイリアスを追加  
+2d,cube,2d_array,3dとmirror,clampですね。外堀から埋めていきます。  
+### parseLinkDescriptionをfoxParseに導入  
+たとえば1-2-[3,4]-5から[[1,2],[2,3],[2,4],[3,4],[3,5],[4,5]]を作る。なお重複のテストとかは一切なし。単純に構築するだけ。  
+### TransformTreeとWeightedVerticesの廃止  
+廃止。代わりに新しいTransformTreeを導入。  
+### 新しいTransformTree  
+base,local,global. baseは個々のtransformの初期位相。localはbaseから変形して個別にtransformを形成する。globalはその時点での全体のtransform.  
+computeGlobalで梯子的に走査して全て構築できる。基本的にはHingeアニメーションとかで使う。  
+buildではcountと<transform>と<link>を指定する。<transform>では数字と種類(t/r/s)と引数。そうしてTransformTreeの配列が返る。あとはよしなに。  
+### parseDesignDescriptionからpathとflagを廃止  
+使わないし、変な機能があると拡張の妨げになる。一応macroをオプションとして導入。これはdictの逆で、パース前に置き換えを実行する。  
+一応TransformTreeで導入してある。  
+### parseSVGを導入。従来のparseDataは廃止  
+今後はparseSVGを使う。第一引数がデータ。  
+### GridSpaceを導入  
+2D/3Dのグリッド空間管理システム。不備がまだ多いが最低限の機能を果たすように用意した。buildではオフセットと簡易マップ、6bitまでのアイコン配置が使える。  
+0~9,A~Z,a~z,!,?の64種類。getとsetで取得、更新。hasであるかどうか調べられる。removeで排除、など。  
+### saveObjをGeometry3Dに導入  
+nameが第一引数、第二引数はオプションで、uv:trueとするとuvを考慮する。  
+### Sphereのdetailの2番目の下限を2に変更  
+正八面体が作れないので。  
+
+今回の更新は以上です。なおフレームバッファまで行ったら、それ以降の更新は行わない予定です。  
