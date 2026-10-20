@@ -6,7 +6,7 @@
  * @copyright 2026
  * @author fisce
  * @license ISC
- * @version 1.4.2
+ * @version 1.4.3
  */
 
 (function (global, factory) {
@@ -854,6 +854,36 @@
           count--;
         }
         return result;
+      }
+      randomProb(candidates = [], probs = []){
+        // candidatesが長さ0の場合は通常のランダム
+        if(candidates.length === 0){ return this.random(); }
+        // probが無い場合は等確率
+        if(probs.length === 0){ return this.random(candidates); }
+
+        const properProbs = [];
+        // 足りない部分は0埋め
+        for(let i=0; i<candidates.length; i++){
+          if(i < probs.length){
+            properProbs.push(probs[i]);
+          }else{
+            properProbs.push(0);
+          }
+        }
+
+        // ようやく長さが揃いました
+        const sum = properProbs.reduce((x,y)=>x+y, 0);
+        const r = this.random(sum);
+        let currentTotal = 0;
+        for(let i=0; i<candidates.length-1; i++){
+          // properProbs[i]が0の場合はスルーしよう。
+          if(properProbs[i] === 0){ continue; }
+          // 0でない場合にtotalを更新する
+          currentTotal += properProbs[i];
+          if(r < currentTotal){ return candidates[i]; }
+        }
+        // 理屈の上ではすべて0の場合は末尾が返るわけだが、この関数を使うのにそれは無いだろう。
+        return candidates.at(-1);
       }
       shuffle(a, immutable = false){
         // デフォルトは「変える」。
@@ -1903,120 +1933,7 @@
   // ローディング関連もここに集めよう。他のあれこれが必要なく独立しているものは全部ここ。
   const foxUtils = (function(){
     const {NaNErrorCatcher} = foxErrors;
-    const {firstFormattize} = foxParse;
     const utils = {};
-
-    // GridSpace.
-    // Map機能を援用したグリッドスペースジェネレータ
-    // 簡単なものです
-    class GridSpace{
-      constructor(){
-        this.map = new Map();
-        this.defaultValue = 0;
-      }
-      setDefaultValue(v){
-        this.defaultValue = v;
-        return this;
-      }
-      set(){
-        const args = [...arguments];
-        const parsed = GridSpace.parseSetArguments(args);
-        const {data, v} = parsed;
-        for(const [x,y,z] of data){
-    		const properX = (x === undefined ? 0 : Math.round(x));
-    		const properY = (y === undefined ? 0 : Math.round(y));
-    		const properZ = (z === undefined ? 0 : Math.round(z));
-          this.map.set(`${properX},${properY},${properZ}`, v);
-        }
-        return this;
-      }
-      get(x,y,z){
-        if(Array.isArray(x)){
-          return this.get(...x);
-        }
-        const v = this.map.get(`${x},${y},${z}`);
-        if(v === undefined){ return this.defaultValue; }
-        return v;
-      }
-      has(x,y,z){
-    	if(Array.isArray(x)){
-          return this.has(...x);
-        }
-    	  return this.map.has(`${x},${y},${z}`);
-    	}
-      remove(){
-        const args = [...arguments];
-        args.push(0);
-        const data = GridSpace.parseSetArguments(args).data;
-        for(const [x,y,z] of data){
-          this.map.delete(`${x},${y},${z}`);
-        }
-        return this;
-      }
-      show(){
-        for(const [key, value] of this.map.entries()){
-          console.log(`${key}: ${value}`);
-        }
-        return this;
-      }
-      static parseLetterCode(n){
-        // nは0,1,2,...,A,B,C,...,a,b,c,...,!,?及び.のコード。
-        if(n === 46){ return -1; }
-        if(n >= 48 && n <= 57){ return n-48; }
-        if(n >= 65 && n <= 90){ return n-65+10; }
-        if(n >= 97 && n <= 122){ return n-97+36; }
-        if(n === 33){ return 62; }
-        if(n === 63){ return 63; }
-        return -1;
-      }
-      static parseSetArguments(data){
-        if(typeof(data[0]) === 'number'){
-          if(!data.every(x => typeof(x) === 'number')){
-            console.error(`parseArguments: not number.`);
-            return {data:[[0,0,0]],v:0};
-          }
-          switch(data.length){
-            case 0: return {data:[[0,0,0]],v:0};
-            case 1: return {data:[[data[0],0,0]],v:0};
-            case 2: return {data:[[data[0],0,0]],v:data[1]};
-            case 3: return {data:[[data[0],data[1],0]],v:data[2]};
-            default:
-              return {data:[[data[0],data[1],data[2]]],v:data[3]};
-          }
-        }else if(Array.isArray(data[0])){
-          if(typeof(data[0][0]) === 'number' && typeof(data[1]) === 'number'){
-            return {data:[data[0]], v:data[1]};
-          }else if(Array.isArray(data[0][0]) && typeof(data[1]) === 'number'){
-            return {data:data[0], v:data[1]};
-          }
-        }
-        return {data:[[0,0,0]],v:0};
-      }
-      static build(layout, offsetX = 0, offsetY = 0, offsetZ = 0){
-        // .でブランクを表す。
-        if(!Array.isArray(layout)){
-          return this.build([layout], offsetX, offsetY, offsetZ);
-        }
-        if(typeof(layout[0]) !== 'string'){ return null; }
-        const result = new this();
-        for(let z=0; z<layout.length; z++){
-          const coordZ = offsetZ + z;
-          const formatted = firstFormattize(layout[z]).map(u => u.split('|')).flat(Infinity);
-          for(let y=0; y<formatted.length; y++){
-            const coordY = offsetY + (formatted.length - y - 1);
-            const s = formatted[y].trim().replaceAll(' ', '').replaceAll('　','');
-            for(let x=0; x<s.length; x++){
-              const coordX = offsetX + x;
-              const v = GridSpace.parseLetterCode(s.charCodeAt(x));
-              if(v >= 0){
-                result.set(coordX, coordY, coordZ, v);
-              }
-            }
-          }
-        }
-        return result;
-      }
-    }
 
     // Damper.
     // 減衰を表現するためのツール
@@ -5214,9 +5131,6 @@
       // いずれでもなければ安全のためlowにする
       return "low";
     }
-
-    // よくわからないおもちゃ
-    utils.GridSpace = GridSpace;
 
     // Damper. 減衰器。
     utils.Damper = Damper;
@@ -11868,6 +11782,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     return utils;
   })();
 
+// ------------------------------------------------------------------------------------------- //
+
   // ジオメトリ関連の道具箱
   const foxGeometryTools = (function(){
     const geometryTools = {};
@@ -11897,6 +11813,10 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
       }
       getValue(){
         return this.value;
+      }
+      lerp(a, ratio = 0){
+        // 対象のアトリビュートaとのlerpを実行して新しいアトリビュートを返す。
+        // aと同じ型でなければnullを返す。同じ型の場合は、種類により、いろいろ。
       }
       static create(){
         return new this(...arguments);
@@ -12040,6 +11960,10 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
           this.attrs[name].setValue(value);
         }
         return this;
+      }
+      lerp(v, ratio = 0){
+        // 自分とvで同じ名前、同じ型のアトリビュートだけ抜き出し適切に補間して値を決めそれを返す。
+        // ratioはvにいくら寄っているか。0寄りなら自分、1寄りならvですね。
       }
       set p(value){
         if(this.attrs.p === undefined){ console.error(`setter: attribute p not found.`); return; }
@@ -12803,6 +12727,15 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         });
         // 当然だが、他のあれこれが影響することはないので、これで処理は終わり。
         return this;
+      }
+      cut(){
+        // 自分のコピーを頂点とiboだけもつ形で生成し適切にattributeを付与し追加頂点の情報を付与してそれを返す
+      }
+      knife(){
+        // cutのジオメトリを元にしてこっちのジオメトリに頂点とiboを追加する
+      }
+      bisect(){
+        // cutのジオメトリを元にして2種類のジオメトリを生成する
       }
       async saveObj(name = 'geometry3d', options = {}){
         // uvがあるかどうかで分ける
@@ -13823,7 +13756,7 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
   const foxApplications = (function(){
     const applications = {};
 
-    const {parseDesignDescription, parseLinkDescription} = foxParse;
+    const {parseDesignDescription, parseLinkDescription, firstFormattize} = foxParse;
     const {TypeErrorCatcher} = foxErrors;
     const {glEnum, glTypedArray, ProgramWrapper, WBOWrapper, VBOWrapper, UBOWrapper, IBOWrapper, VAOWrapper} = webglUtils;
     const {
@@ -13835,6 +13768,208 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
     const {coulour3} = foxColor;
 
     const {Geometry, Geometry3D, GeometryBuilder} = foxGeometryTools;
+
+    // よく分からないおもちゃ
+    // GridSpace.
+    // Map機能を援用したグリッドスペースジェネレータ
+    // 簡単なものです
+    class GridSpace{
+      constructor(){
+        this.map = new Map();
+        this.defaultValue = 0;
+        this.modulo = [0,0,0];
+      }
+      setDefaultValue(v){
+        this.defaultValue = v;
+        return this;
+      }
+      setModulo(data){
+        // dataは配列のみ
+        for(let i=0; i<3; i++){
+          if(i < data.length){
+            this.modulo[i] = data[i];
+          }else{
+            this.modulo[i] = 0;
+          }
+        }
+        return this;
+      }
+      mod(x){
+        // mod(1,2,3)とかmod([4,5,6])とかmod(Vecta.create(7,8,9))とかそういうの
+        if(typeof(x) === 'number'){
+          const args = [...arguments];
+          return this.mod(args);
+        }
+        if(x instanceof Vecta){
+          return this.mod(x.array());
+        }
+        // 配列の配列である場合。
+        if(Array.isArray(x)){
+          // すべての成分が配列でなければならない
+          if(x.every(a => Array.isArray(a))){
+            return x.map(a => this.mod(a));
+          }
+        }
+        const result = [];
+        for(let i=0; i<3; i++){
+          const modulo = this.modulo[i];
+          if(i < x.length){
+            const n = Math.round(x[i]);
+            if(modulo === 0){
+              result.push(n);
+            }else if(n < 0){
+              result.push((modulo-((-n) % modulo)) % modulo);
+            }else{
+              result.push(n % modulo);
+            }
+          }else{
+            result.push(0);
+          }
+        }
+        return result;
+      }
+      set(){
+        const args = [...arguments];
+        const parsed = GridSpace.parseSetArguments(args);
+        const {data, v} = parsed;
+        const moduloData = this.mod(data);
+        for(const [x,y,z] of moduloData){
+          this.map.set(`${x},${y},${z}`, v);
+        }
+        return this;
+      }
+      get(x, y, z){
+        if(Array.isArray(x)){
+          return this.get(...x);
+        }else if(x instanceof Vecta){
+          return this.get(x.x, x.y, x.z);
+        }
+        const [px, py, pz] = this.mod(x, y, z);
+        const v = this.map.get(`${px},${py},${pz}`);
+        if(v === undefined){ return this.defaultValue; }
+        return v;
+      }
+      has(x, y, z){
+    	  if(Array.isArray(x)){
+          return this.has(...x);
+        }else if(x instanceof Vecta){
+          return this.has(x.x, x.y, x.z);
+        }
+        const [px, py, pz] = this.mod(x,y,z);
+    	  return this.map.has(`${px},${py},${pz}`);
+    	}
+      entries(){
+        // 文字列を配列に変換し、長さ3の配列と値の組である長さ2の配列の配列を返す。
+        const result = [];
+        for(const [key, value] of this.map.entries()){
+          const nums = key.split(',').map(x => Number(x));
+          result.push([nums, value]);
+        }
+        return result;
+      }
+      keys(v){
+        // keyの一覧を返す。vが指定されている場合、その値の物だけ選ぶ。
+        const result = [];
+        const targetValue = v;
+        for(const key of this.map.keys()){
+          const nums = key.split(',').map(x => Number(x));
+          if(targetValue !== undefined){
+            if(this.get(...nums) !== targetValue){ continue; }
+          }
+          result.push(nums);
+        }
+        return result;
+      }
+      remove(){
+        const args = [...arguments];
+        args.push(0);
+        const data = GridSpace.parseSetArguments(args).data;
+        const moduloData = this.mod(data);
+        for(const [x,y,z] of moduloData){
+          this.map.delete(`${x},${y},${z}`);
+        }
+        return this;
+      }
+      show(){
+        for(const [key, value] of this.map.entries()){
+          console.log(`${key}: ${value}`);
+        }
+        return this;
+      }
+      static parseLetterCode(n){
+        // nは0,1,2,...,A,B,C,...,a,b,c,...,!,?及び.のコード。
+        if(n === 46){ return -1; }
+        if(n >= 48 && n <= 57){ return n-48; }
+        if(n >= 65 && n <= 90){ return n-65+10; }
+        if(n >= 97 && n <= 122){ return n-97+36; }
+        if(n === 33){ return 62; }
+        if(n === 63){ return 63; }
+        return -1;
+      }
+      static parseSetArguments(data){
+        if(typeof(data[0]) === 'number'){
+          // 列挙
+          if(!data.every(x => typeof(x) === 'number')){
+            console.error(`parseArguments: not number.`);
+            return {data:[[0,0,0]],v:0};
+          }
+          switch(data.length){
+            case 0: return {data:[[0,0,0]],v:0};
+            case 1: return {data:[[data[0],0,0]],v:0};
+            case 2: return {data:[[data[0],0,0]],v:data[1]};
+            case 3: return {data:[[data[0],data[1],0]],v:data[2]};
+            default:
+              return {data:[[data[0],data[1],data[2]]],v:data[3]};
+          }
+        }else if(Array.isArray(data[0])){
+          // 配列、ないしは配列の配列。
+          if(typeof(data[0][0]) === 'number' && typeof(data[1]) === 'number'){
+            return {data:[data[0]], v:data[1]};
+          }else if(Array.isArray(data[0][0]) && typeof(data[1]) === 'number'){
+            return {data:data[0], v:data[1]};
+          }
+        }else if(data[0] instanceof Vecta){
+          // Vecta対応
+          if(typeof(data[1]) === 'number'){
+            return {data:[data[0].array()], v:data[1]};
+          }
+        }
+        return {data:[[0,0,0]],v:0};
+      }
+      static build(layout, options = {}){
+        // .でブランクを表す。
+        if(!Array.isArray(layout)){
+          return this.build([layout], options);
+        }
+        // 左上(0,0)にしたい場合はyAlignを'top'にする
+        const {offset = [0,0,0], yAlign = 'bottom', modulo = [0,0,0]} = options;
+        const offsetX = (offset[0] !== undefined ? offset[0] : 0);
+        const offsetY = (offset[1] !== undefined ? offset[1] : 0);
+        const offsetZ = (offset[2] !== undefined ? offset[2] : 0);
+
+        if(typeof(layout[0]) !== 'string'){ return null; }
+        const result = new this();
+        // ここで必要なら[8,0,0]とかが採用される
+        result.setModulo(modulo);
+        // 以下、値を入れていく
+        for(let z=0; z<layout.length; z++){
+          const coordZ = offsetZ + z;
+          const formatted = firstFormattize(layout[z]).map(u => u.split('|')).flat(Infinity);
+          for(let y=0; y<formatted.length; y++){
+            const s = formatted[y].trim().replaceAll(' ', '').replaceAll('　','');
+            for(let x=0; x<s.length; x++){
+              const coordX = offsetX + x;
+              const coordY = offsetY + (yAlign === 'bottom' ? (formatted.length - y - 1) : (yAlign === 'top' ? y : 0));
+              const v = GridSpace.parseLetterCode(s.charCodeAt(x));
+              if(v >= 0){
+                result.set(coordX, coordY, coordZ, v);
+              }
+            }
+          }
+        }
+        return result;
+      }
+    }
 
     // isActiveを追加。カメラが動いてるときだけ更新するなどの用途がある。
     // configも追加。操作性をいじるための機能。actionCoeffを変更できる。デフォルトは1. thresholdも0.01とかでいいかもだしな。
@@ -13858,6 +13993,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
 
         this.rotationMouseButton = 0; // マウスで操作する場合の回転に使うボタン（デフォルト左）
         this.translationMouseButton = 2; // マウスで操作する場合の平行移動に使うボタン（デフォルト右）
+
+        this.noRotation = false; // これをtrueにするとrotationでtranslationが実行され、rotationは実行されない。
 
         this.setParam(params);
 
@@ -13926,7 +14063,8 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
           "mouseScaleFactor", "mouseRotationFactor", "mouseTranslationFactor",
           "touchScaleFactor", "touchRotationFactor", "touchTranslationFactor",
           "topAxis", "upperBound", "lowerBound", "rotationMode",
-          "rotationMouseButton", "translationMouseButton"
+          "rotationMouseButton", "translationMouseButton",
+          "noRotation"
         ];
         for(const param of Object.keys(params)){
           if (paramList.indexOf(param) < 0) continue;
@@ -13950,12 +14088,20 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // 回転・平行移動
         if(this.pointers.length === 0) return;
         const btn = this.pointers[0].button;
-        if(btn === this.rotationMouseButton){
-          // 左の場合
-          this.dmp.action("rotationX", dx * this.mouseRotationFactor);
-          this.dmp.action("rotationY", dy * this.mouseRotationFactor);
-        }else if(btn === this.translationMouseButton){
-          // 右の場合
+
+        if(!this.noRotation){
+          if(btn === this.rotationMouseButton){
+            // 左の場合
+            this.dmp.action("rotationX", dx * this.mouseRotationFactor);
+            this.dmp.action("rotationY", dy * this.mouseRotationFactor);
+          }
+          if(btn === this.translationMouseButton){
+            // 右の場合
+            this.dmp.action("translationX", dx * this.mouseTranslationFactor);
+            this.dmp.action("translationY", dy * this.mouseTranslationFactor);
+          }
+        }else{
+          // noRotationの場合はいずれのボタンであっても平行移動のみ実行
           this.dmp.action("translationX", dx * this.mouseTranslationFactor);
           this.dmp.action("translationY", dy * this.mouseTranslationFactor);
         }
@@ -13970,8 +14116,14 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // Interactionサイドの実行内容を書く。
         // dx,dyが変位。
         // 回転
-        this.dmp.action("rotationX", dx * this.touchRotationFactor);
-        this.dmp.action("rotationY", dy * this.touchRotationFactor);
+        // noRotationの場合、こっちで平行移動。
+        if(!this.noRotation){
+          this.dmp.action("rotationX", dx * this.touchRotationFactor);
+          this.dmp.action("rotationY", dy * this.touchRotationFactor);
+        }else{
+          this.dmp.action("translationX", dx * this.touchTranslationFactor);
+          this.dmp.action("translationY", dy * this.touchTranslationFactor);
+        }
       }
       touchPinchInOutAction(diff, ratio, x, y, px, py){
         // Interactionサイドの実行内容を書く。
@@ -13983,8 +14135,11 @@ vec4 slerpQ(in vec4 q1, in vec4 q2, in float r){
         // Interactionサイドの実行内容を書く。
         // dx,dyは重心の変位。
         // 平行移動
-        this.dmp.action("translationX", dx * this.touchTranslationFactor);
-        this.dmp.action("translationY", dy * this.touchTranslationFactor);
+        // noRotationの場合はこれを封じる。不要だしな。マウスと違って分かれないので。
+        if(!this.noRotation){
+          this.dmp.action("translationX", dx * this.touchTranslationFactor);
+          this.dmp.action("translationY", dy * this.touchTranslationFactor);
+        }
       }
       config(name, params = {}){
         // nameの候補："rotationX", "rotationY", "scale", "translationX", "translationY"
@@ -19442,6 +19597,9 @@ void main(){
         return new this(...arguments);
       }
     }
+
+    // よくわからないおもちゃ
+    applications.GridSpace = GridSpace;
 
     // 3D関連
     applications.CameraController = CameraController;
